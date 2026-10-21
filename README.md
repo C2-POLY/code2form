@@ -13,8 +13,9 @@ they are. Written in Rust, it renders as you type.
 - **Geometry**: CSG with [Manifold](https://github.com/elalish/manifold)
   (through its Rust port), `text()` with real font shaping, `import()` of
   STL, OFF, AMF, 3MF, DXF and SVG, `surface()` from `.dat` and PNG.
-- **Export** to STL, checked with PrusaSlicer's own loader.
-- **Command line**: `c2f` prints the AST, the CSG tree or an STL, and
+- **Export** to STL and 3MF (in millimeters), checked with PrusaSlicer's
+  own loader.
+- **Command line**: `c2f` prints the AST, the CSG tree, an STL or a 3MF, and
   takes `-D name=value`, `-p presets.json` and `-P preset`.
 
 ## Compatibility
@@ -39,6 +40,7 @@ Rust 1.85 or later.
 ```sh
 cargo run --release -p code2form -- design.c2f   # the desktop app
 cargo run --release -p c2f-cli -- stl design.c2f > design.stl
+cargo run --release -p c2f-cli -- 3mf design.c2f > design.3mf
 ```
 
 On macOS, `scripts/bundle-macos.sh` builds `Code2Form.app`; `--install`
@@ -55,7 +57,7 @@ names.
 |---|---|
 | `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, AST dump |
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
-| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL |
+| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL and 3MF exports |
 | `crates/app` (`c2f-cli`) | The `c2f` command |
 | `crates/studio` (`code2form`) | The desktop app (egui) |
 

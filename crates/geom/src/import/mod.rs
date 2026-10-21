@@ -14,7 +14,7 @@ mod surface;
 mod svg;
 mod threemf;
 mod xml;
-mod zip;
+pub(crate) mod zip;
 
 use std::collections::HashMap;
 use std::path::Path;

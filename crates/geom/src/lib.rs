@@ -1,8 +1,9 @@
 //! Geometry: turns the CSG tree from `c2f-eval` into meshes, with the
 //! reference implementation's tessellation and Manifold's booleans, and
-//! into triangles a viewer can draw.
+//! into triangles a viewer can draw; it also writes solids as STL and 3MF.
 
 mod build;
+mod export;
 mod import;
 mod mesh;
 mod primitives;

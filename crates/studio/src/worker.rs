@@ -2,8 +2,8 @@
 //! with a large stack, so the UI never waits on a script.
 //!
 //! The geometry (`c2f_geom::Rendered`) stays on the worker thread; the UI
-//! gets plain triangles back, and asks the worker for STL exports of the
-//! model it shows.
+//! gets plain triangles back, and asks the worker for STL or 3MF exports
+//! of the model it shows.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -69,7 +69,30 @@ pub enum Reply {
 
 enum Request {
     Render { generation: u64, source: String, path: PathBuf, values: Vec<(String, Literal)> },
-    ExportStl { target: PathBuf },
+    Export { target: PathBuf, format: Format },
+}
+
+/// The file formats a solid exports to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Stl,
+    ThreeMf,
+}
+
+impl Format {
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::Stl => "STL",
+            Format::ThreeMf => "3MF",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Format::Stl => "stl",
+            Format::ThreeMf => "3mf",
+        }
+    }
 }
 
 pub struct Worker {
@@ -102,9 +125,10 @@ impl Worker {
         generation
     }
 
-    /// Writes the last good model to `target` as an ASCII STL.
-    pub fn export_stl(&self, target: PathBuf) {
-        let _ = self.requests.send(Request::ExportStl { target });
+    /// Writes the last good model to `target`, as an ASCII STL or a 3MF
+    /// package.
+    pub fn export(&self, target: PathBuf, format: Format) {
+        let _ = self.requests.send(Request::Export { target, format });
     }
 
     pub fn latest(&self) -> u64 {
@@ -127,7 +151,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         for request in std::iter::once(first).chain(requests.try_iter()) {
             match request {
                 Request::Render { generation, source, path, values } => render = Some((generation, source, path, values)),
-                Request::ExportStl { target } => exports.push(target),
+                Request::Export { target, format } => exports.push((target, format)),
             }
         }
         if let Some((generation, source, path, values)) = render {
@@ -145,8 +169,8 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
                 }
             }
         }
-        for target in exports {
-            let result = export_stl(shown.as_ref(), &target);
+        for (target, format) in exports {
+            let result = export(shown.as_ref(), &target, format);
             if replies.send(Reply::Exported { target, result }).is_err() {
                 return;
             }
@@ -229,12 +253,15 @@ fn pipeline(
     Ok(rendered)
 }
 
-fn export_stl(shown: Option<&Rendered>, target: &Path) -> Result<String, String> {
+fn export(shown: Option<&Rendered>, target: &Path, format: Format) -> Result<String, String> {
     let rendered = shown.ok_or("there is no model to export yet")?;
-    let stl = catch_unwind(AssertUnwindSafe(|| rendered.stl()))
-        .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))?
-        .ok_or("the model is empty or 2D, so there is nothing to export as STL")?;
-    std::fs::write(target, stl).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
+    let bytes = catch_unwind(AssertUnwindSafe(|| match format {
+        Format::Stl => rendered.stl().map(String::into_bytes),
+        Format::ThreeMf => rendered.three_mf(),
+    }))
+    .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))?
+    .ok_or_else(|| format!("the model is empty or 2D, so there is nothing to export as {}", format.name()))?;
+    std::fs::write(target, bytes).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
     Ok(format!("Exported {} triangles to {}", group_digits(rendered.stats.triangles), target.display()))
 }
 
@@ -305,20 +332,23 @@ mod tests {
         assert!(!scene.is_2d && scene.exportable && scene.stats.triangles > 0);
         assert_eq!(scene.solid.positions.len(), scene.solid.normals.len());
 
-        let target = std::env::temp_dir().join(format!("code2form-test-{}.stl", std::process::id()));
-        worker.export_stl(target.clone());
-        let start = Instant::now();
-        let result = loop {
-            if let Some(Reply::Exported { result, .. }) = worker.poll().into_iter().next() {
-                break result;
-            }
-            assert!(start.elapsed() < Duration::from_secs(30), "no export reply");
-            std::thread::sleep(Duration::from_millis(5));
-        };
-        assert!(result.is_ok(), "{result:?}");
-        let stl = std::fs::read_to_string(&target).unwrap();
-        let _ = std::fs::remove_file(&target);
-        assert!(stl.starts_with("solid") && stl.contains("facet normal"));
+        for (format, magic) in [(Format::Stl, &b"solid"[..]), (Format::ThreeMf, &b"PK\x03\x04"[..])] {
+            let name = format!("code2form-test-{}.{}", std::process::id(), format.extension());
+            let target = std::env::temp_dir().join(name);
+            worker.export(target.clone(), format);
+            let start = Instant::now();
+            let result = loop {
+                if let Some(Reply::Exported { result, .. }) = worker.poll().into_iter().next() {
+                    break result;
+                }
+                assert!(start.elapsed() < Duration::from_secs(30), "no export reply");
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            assert!(result.is_ok(), "{result:?}");
+            let bytes = std::fs::read(&target).unwrap();
+            let _ = std::fs::remove_file(&target);
+            assert!(bytes.starts_with(magic), "{}", format.name());
+        }
     }
 
     #[test]
