@@ -1,3 +1,4 @@
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -9,6 +10,7 @@ commands:
   csg     evaluate and print the CSG tree (`-o x.csg` layout)
           (echo output and warnings go to stderr)
   stl     evaluate, build the geometry and print it as an ASCII STL
+  3mf     the same, as a 3MF package (binary: redirect it to a file)
   check   parse only and report syntax errors
 
 options:
@@ -74,8 +76,12 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "csg", "stl"].contains(&options.command.as_str()) {
+    if !["ast", "check", "csg", "stl", "3mf"].contains(&options.command.as_str()) {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
+        return ExitCode::from(2);
+    }
+    if options.command == "3mf" && std::io::stdout().is_terminal() {
+        eprintln!("error: a 3MF package is binary; redirect it to a file: c2f 3mf {} > model.3mf", options.path);
         return ExitCode::from(2);
     }
     let path = Path::new(&options.path);
@@ -114,8 +120,9 @@ fn run() -> ExitCode {
             ExitCode::SUCCESS
         }
         "check" => ExitCode::SUCCESS,
-        "csg" => csg(&program, false),
-        _ => csg(&program, true),
+        "csg" => csg(&program, None),
+        "stl" => csg(&program, Some(Mesh::Stl)),
+        _ => csg(&program, Some(Mesh::ThreeMf)),
     }
 }
 
@@ -127,7 +134,15 @@ fn apply_parameter_set(program: &mut c2f_eval::Program, file: Option<&str>, name
     program.apply_parameter_set(set)
 }
 
-fn csg(program: &c2f_eval::Program, stl: bool) -> ExitCode {
+/// The mesh formats the CLI prints.
+#[derive(Clone, Copy)]
+enum Mesh {
+    Stl,
+    ThreeMf,
+}
+
+/// Prints the CSG tree, or with `mesh` the geometry in that format.
+fn csg(program: &c2f_eval::Program, mesh: Option<Mesh>) -> ExitCode {
     let output = c2f_eval::evaluate(program);
     for line in &output.echo {
         eprintln!("{line}");
@@ -135,14 +150,25 @@ fn csg(program: &c2f_eval::Program, stl: bool) -> ExitCode {
     for warning in &output.warnings {
         eprintln!("WARNING: {warning}");
     }
-    if stl {
+    if let Some(mesh) = mesh {
         let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")));
         for warning in &rendered.warnings {
             eprintln!("WARNING: {warning}");
         }
-        match rendered.stl() {
-            Some(text) => print!("{text}"),
-            None => eprintln!("WARNING: the model is empty or 2D; no STL written"),
+        let (bytes, name) = match mesh {
+            Mesh::Stl => (rendered.stl().map(String::into_bytes), "STL"),
+            Mesh::ThreeMf => (rendered.three_mf(), "3MF"),
+        };
+        match bytes {
+            Some(bytes) => {
+                // Flushed here: the flush at exit would drop a write error.
+                let mut out = std::io::stdout().lock();
+                if let Err(err) = out.write_all(&bytes).and_then(|()| out.flush()) {
+                    eprintln!("error: cannot write the {name}: {err}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            None => eprintln!("WARNING: the model is empty or 2D; no {name} written"),
         }
         let s = rendered.stats;
         eprintln!("{} triangles, {} vertices, volume {}", s.triangles, s.vertices, s.volume);

@@ -2,7 +2,7 @@
 //! central directory, stored and deflated entries.
 
 /// The archive's entries: name and uncompressed content.
-pub(super) fn entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub(crate) fn entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let u16_at = |i: usize| data.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
     let u32_at = |i: usize| data.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
     // The end of central directory record, searched from the end (it may

@@ -19,7 +19,7 @@ use crate::open_events;
 use crate::screenshot::Screenshot;
 use crate::theme;
 use crate::viewer::{self, Viewer};
-use crate::worker::{Reply, Worker, group_digits};
+use crate::worker::{Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
@@ -334,7 +334,7 @@ impl StudioApp {
         }
     }
 
-    fn export_stl(&mut self) {
+    fn export(&mut self, format: Format) {
         let exportable = self.model.as_ref().is_some_and(|m| m.exportable);
         if !exportable {
             self.console.log(Level::Warning, "Nothing to export: the model is empty or 2D");
@@ -345,15 +345,16 @@ impl StudioApp {
             .as_deref()
             .and_then(Path::file_stem)
             .map_or_else(|| "model".to_string(), |s| s.to_string_lossy().into_owned());
+        let (name, extension) = (format.name(), format.extension());
         let mut dialog = rfd::FileDialog::new()
-            .set_title("Export STL")
-            .add_filter("STL", &["stl"])
-            .set_file_name(format!("{stem}.stl"));
+            .set_title(format!("Export {name}"))
+            .add_filter(name, &[extension])
+            .set_file_name(format!("{stem}.{extension}"));
         if let Some(dir) = self.directory() {
             dialog = dialog.set_directory(dir);
         }
         if let Some(target) = dialog.save_file() {
-            self.worker.export_stl(target);
+            self.worker.export(target, format);
         }
     }
 
@@ -428,7 +429,7 @@ impl StudioApp {
             self.render_now();
         }
         if export {
-            self.export_stl();
+            self.export(Format::Stl);
         }
 
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
@@ -485,13 +486,20 @@ impl StudioApp {
                     self.render_now();
                 }
                 let exportable = self.model.as_ref().is_some_and(|m| m.exportable);
-                let export = ui
-                    .add_enabled(exportable, Button::new("Export STL…"))
-                    .on_hover_text(format!("Save the model as an ASCII STL ({})", ctx.format_shortcut(&EXPORT)))
-                    .on_disabled_hover_text("Render a 3D model first");
-                if export.clicked() {
-                    self.export_stl();
-                }
+                let export = ui.add_enabled_ui(exportable, |ui| {
+                    ui.menu_button("Export", |ui| {
+                        let stl = Button::new("STL…").shortcut_text(ctx.format_shortcut(&EXPORT));
+                        if ui.add(stl).on_hover_text("An ASCII STL").clicked() {
+                            self.export(Format::Stl);
+                            ui.close();
+                        }
+                        if ui.button("3MF…").on_hover_text("A 3MF package, in millimeters").clicked() {
+                            self.export(Format::ThreeMf);
+                            ui.close();
+                        }
+                    })
+                });
+                export.response.on_disabled_hover_text("Render a 3D model first");
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
