@@ -14,7 +14,7 @@ use c2f_geom::Stats;
 
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
-use crate::editor::Editor;
+use crate::editor::{Editor, FindRequest};
 use crate::open_events;
 use crate::screenshot::Screenshot;
 use crate::theme;
@@ -38,6 +38,10 @@ const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S)
 const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::S);
 const RENDER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F5);
 const EXPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F7);
+const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
+const FIND_REPLACE: KeyboardShortcut = KeyboardShortcut::new(Modifiers { alt: true, ..Modifiers::COMMAND }, Key::F);
+const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
+const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::G);
 
 /// Something that would lose unsaved edits, waiting for confirmation.
 #[derive(Clone)]
@@ -436,6 +440,16 @@ impl StudioApp {
         }
         if export {
             self.export(Format::Stl);
+        }
+
+        // Option+Cmd+F and Shift+Cmd+G first: their shorter forms match them.
+        let [replace, find, previous, next] =
+            ctx.input_mut(|i| [FIND_REPLACE, FIND, FIND_PREVIOUS, FIND_NEXT].map(|s| i.consume_shortcut(&s)));
+        if replace || find {
+            self.editor.find(FindRequest::Open { replace });
+        }
+        if previous || next {
+            self.editor.find(FindRequest::Step { forward: next });
         }
 
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
