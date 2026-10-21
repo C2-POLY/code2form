@@ -27,6 +27,8 @@ pub fn wake(ctx: &egui::Context) {
     let _ = WAKE.set(ctx.clone());
 }
 
+/// Only the macOS handler below receives files.
+#[cfg(target_os = "macos")]
 fn received(paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;

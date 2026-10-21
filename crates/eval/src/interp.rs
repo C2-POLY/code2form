@@ -153,10 +153,15 @@ impl<'p> Interp<'p> {
         let full = dir.join(file);
         let base = if self.base_dir.as_os_str().is_empty() { std::path::Path::new(".") } else { &self.base_dir };
         let main_dir = base.canonicalize().unwrap_or(base.to_path_buf());
+        // The relative name joins its parts with `/` on every system, as
+        // the goldens (measured on macOS) and .scad files write it.
         let shown = full
             .canonicalize()
             .ok()
-            .and_then(|f| f.strip_prefix(&main_dir).ok().map(|r| r.display().to_string()))
+            .and_then(|f| {
+                let relative = f.strip_prefix(&main_dir).ok()?;
+                Some(relative.iter().map(|part| part.to_string_lossy()).collect::<Vec<_>>().join("/"))
+            })
             .unwrap_or_else(|| full.display().to_string());
         (full, shown)
     }
