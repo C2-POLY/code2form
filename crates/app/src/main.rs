@@ -11,6 +11,8 @@ commands:
           (echo output and warnings go to stderr)
   stl     evaluate, build the geometry and print it as an ASCII STL
   3mf     the same, as a 3MF package (binary: redirect it to a file)
+  svg     evaluate, build the 2D geometry and print it as an SVG
+  dxf     the same, as a DXF drawing
   check   parse only and report syntax errors
 
 options:
@@ -76,7 +78,7 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "csg", "stl", "3mf"].contains(&options.command.as_str()) {
+    if !["ast", "check", "csg", "stl", "3mf", "svg", "dxf"].contains(&options.command.as_str()) {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
         return ExitCode::from(2);
     }
@@ -121,8 +123,10 @@ fn run() -> ExitCode {
         }
         "check" => ExitCode::SUCCESS,
         "csg" => csg(&program, None),
-        "stl" => csg(&program, Some(Mesh::Stl)),
-        _ => csg(&program, Some(Mesh::ThreeMf)),
+        "stl" => csg(&program, Some(Export::Stl)),
+        "svg" => csg(&program, Some(Export::Svg)),
+        "dxf" => csg(&program, Some(Export::Dxf)),
+        _ => csg(&program, Some(Export::ThreeMf)),
     }
 }
 
@@ -134,15 +138,18 @@ fn apply_parameter_set(program: &mut c2f_eval::Program, file: Option<&str>, name
     program.apply_parameter_set(set)
 }
 
-/// The mesh formats the CLI prints.
+/// The geometry formats the CLI prints: meshes for a solid, drawings for a
+/// 2D model.
 #[derive(Clone, Copy)]
-enum Mesh {
+enum Export {
     Stl,
     ThreeMf,
+    Svg,
+    Dxf,
 }
 
-/// Prints the CSG tree, or with `mesh` the geometry in that format.
-fn csg(program: &c2f_eval::Program, mesh: Option<Mesh>) -> ExitCode {
+/// Prints the CSG tree, or with `export` the geometry in that format.
+fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
     let output = c2f_eval::evaluate(program);
     for line in &output.echo {
         eprintln!("{line}");
@@ -150,14 +157,16 @@ fn csg(program: &c2f_eval::Program, mesh: Option<Mesh>) -> ExitCode {
     for warning in &output.warnings {
         eprintln!("WARNING: {warning}");
     }
-    if let Some(mesh) = mesh {
+    if let Some(export) = export {
         let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")));
         for warning in &rendered.warnings {
             eprintln!("WARNING: {warning}");
         }
-        let (bytes, name) = match mesh {
-            Mesh::Stl => (rendered.stl().map(String::into_bytes), "STL"),
-            Mesh::ThreeMf => (rendered.three_mf(), "3MF"),
+        let (bytes, name, other) = match export {
+            Export::Stl => (rendered.stl().map(String::into_bytes), "STL", "2D"),
+            Export::ThreeMf => (rendered.three_mf(), "3MF", "2D"),
+            Export::Svg => (rendered.svg().map(String::into_bytes), "SVG", "3D"),
+            Export::Dxf => (rendered.dxf().map(String::into_bytes), "DXF", "3D"),
         };
         match bytes {
             Some(bytes) => {
@@ -168,10 +177,14 @@ fn csg(program: &c2f_eval::Program, mesh: Option<Mesh>) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             }
-            None => eprintln!("WARNING: the model is empty or 2D; no {name} written"),
+            None => eprintln!("WARNING: the model is empty or {other}; no {name} written"),
         }
         let s = rendered.stats;
-        eprintln!("{} triangles, {} vertices, volume {}", s.triangles, s.vertices, s.volume);
+        if rendered.is_2d {
+            eprintln!("{} vertices, area {}", s.vertices, s.volume);
+        } else {
+            eprintln!("{} triangles, {} vertices, volume {}", s.triangles, s.vertices, s.volume);
+        }
     } else {
         print!("{}", output.csg());
     }

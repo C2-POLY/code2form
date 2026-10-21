@@ -66,7 +66,8 @@ impl Pending {
 struct ModelInfo {
     stats: Stats,
     is_2d: bool,
-    exportable: bool,
+    /// The formats it exports to.
+    formats: &'static [Format],
     empty: bool,
 }
 
@@ -227,7 +228,7 @@ impl StudioApp {
                             self.model = Some(ModelInfo {
                                 stats: scene.stats,
                                 is_2d: scene.is_2d,
-                                exportable: scene.exportable,
+                                formats: scene.formats,
                                 empty,
                             });
                             self.viewer.set_scene(scene, frame);
@@ -339,9 +340,14 @@ impl StudioApp {
     }
 
     fn export(&mut self, format: Format) {
-        let exportable = self.model.as_ref().is_some_and(|m| m.exportable);
-        if !exportable {
-            self.console.log(Level::Warning, "Nothing to export: the model is empty or 2D");
+        let formats = self.model.as_ref().map_or(&[][..], |m| m.formats);
+        if !formats.contains(&format) {
+            let why = match formats.first() {
+                None => "the model is empty".to_string(),
+                Some(other) if Format::FLAT.contains(other) => "the model is 2D; export it as SVG or DXF".to_string(),
+                Some(_) => "the model is 3D; export it as STL or 3MF".to_string(),
+            };
+            self.console.log(Level::Warning, format!("Nothing to export as {}: {why}", format.name()));
             return;
         }
         let stem = self
@@ -499,21 +505,34 @@ impl StudioApp {
                 if ui.add(render).on_hover_text(format!("Render now ({shortcut})")).clicked() {
                     self.render_now();
                 }
-                let exportable = self.model.as_ref().is_some_and(|m| m.exportable);
-                let export = ui.add_enabled_ui(exportable, |ui| {
+                let formats = self.model.as_ref().map_or(&[][..], |m| m.formats);
+                let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
                     ui.menu_button("Export", |ui| {
-                        let stl = Button::new("STL…").shortcut_text(ctx.format_shortcut(&EXPORT));
-                        if ui.add(stl).on_hover_text("An ASCII STL").clicked() {
-                            self.export(Format::Stl);
-                            ui.close();
-                        }
-                        if ui.button("3MF…").on_hover_text("A 3MF package, in millimeters").clicked() {
-                            self.export(Format::ThreeMf);
-                            ui.close();
+                        // Solids above the separator, 2D models below.
+                        let entries = [
+                            (Format::Stl, "An ASCII STL"),
+                            (Format::ThreeMf, "A 3MF package, in millimeters"),
+                            (Format::Svg, "An SVG drawing, in millimeters"),
+                            (Format::Dxf, "A DXF drawing of line segments"),
+                        ];
+                        for (format, hover) in entries {
+                            if format == Format::Svg {
+                                ui.separator();
+                            }
+                            let mut button = Button::new(format!("{}…", format.name()));
+                            if format == Format::Stl {
+                                button = button.shortcut_text(ctx.format_shortcut(&EXPORT));
+                            }
+                            let disabled = if Format::SOLID.contains(&format) { "For 3D models" } else { "For 2D models" };
+                            let response = ui.add_enabled(formats.contains(&format), button);
+                            if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
+                                self.export(format);
+                                ui.close();
+                            }
                         }
                     })
                 });
-                export.response.on_disabled_hover_text("Render a 3D model first");
+                export.response.on_disabled_hover_text("Render a non-empty model first");
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
