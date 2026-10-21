@@ -7,6 +7,7 @@ mod build;
 mod export;
 mod import;
 mod mesh;
+mod offset;
 mod primitives;
 mod text;
 

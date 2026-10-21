@@ -12,6 +12,7 @@ use c2f_eval::node::{FileSource, Matrix, Node, NodeKind, OffsetOp, Points, Segme
 
 use crate::import::{self, DxfParams, Imported};
 use crate::mesh::{RenderMesh, Rendered, Stats};
+use crate::offset;
 use crate::primitives::{self, TriMesh, fragments};
 
 /// The default preview colors of the reference implementation (its
@@ -186,9 +187,7 @@ impl Builder {
                 let parts = self.children(node, ctx);
                 let Some(section) = self.flat(parts, "offset") else { return Model::Empty };
                 Model::Flat(match *op {
-                    OffsetOp::Round { r } => {
-                        section.offset_with_params(r, 1, 2.0, frags(r.abs(), segments) as i32)
-                    }
+                    OffsetOp::Round { r } => offset::round(&section, r, frags(r.abs(), segments)),
                     // chamfer cuts corners square; otherwise they are mitered.
                     OffsetOp::Delta { delta, chamfer } => {
                         section.offset_with_params(delta, if chamfer { 0 } else { 2 }, 2.0, 0)
