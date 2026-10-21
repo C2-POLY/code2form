@@ -528,7 +528,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "c2f-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "c2f-eval",
  "c2f-geom",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "c2f-eval"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "c2f-lang",
  "serde_json",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "c2f-geom"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "c2f-eval",
  "c2f-lang",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "c2f-lang"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "calloop"
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "code2form"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
