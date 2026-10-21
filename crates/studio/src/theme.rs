@@ -21,6 +21,10 @@ pub const EDITOR: Color32 = rgb(0x1e, 0x21, 0x28);
 /// The editor's line-number gutter.
 pub const GUTTER: Color32 = rgb(0x1a, 0x1d, 0x23);
 pub const CURRENT_LINE: Color32 = rgb(0x25, 0x29, 0x32);
+/// Find matches in the editor, and the current one: `WARNING` amber mixed
+/// into `EDITOR`, faint and strong.
+pub const FIND_MATCH: Color32 = rgb(0x4a, 0x40, 0x31);
+pub const FIND_CURRENT: Color32 = rgb(0x8c, 0x6c, 0x3a);
 pub const RAISED: Color32 = rgb(0x26, 0x2a, 0x33);
 pub const HOVER: Color32 = rgb(0x30, 0x35, 0x40);
 pub const BORDER: Color32 = rgb(0x2c, 0x31, 0x3b);

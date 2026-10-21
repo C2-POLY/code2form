@@ -6,6 +6,7 @@ mod camera;
 mod console;
 mod customizer;
 mod editor;
+mod find;
 mod highlight;
 mod open_events;
 mod renderer;
