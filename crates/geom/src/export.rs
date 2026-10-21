@@ -1,5 +1,7 @@
 //! 3MF export: the solid as one mesh object, in millimeters, in a 3MF
-//! package (a ZIP archive of XML parts).
+//! package (a ZIP archive of XML parts). SVG and DXF exports: the outlines
+//! of a 2D model, laid out as the reference implementation (release
+//! 2021.01) writes them.
 
 use std::fmt::Write;
 
@@ -36,6 +38,86 @@ impl Rendered {
             ("3D/3dmodel.model", model.as_bytes()),
         ]))
     }
+
+    /// The 2D model as an SVG file, laid out as the reference writes it:
+    /// one path with a subpath per outline (holes run the other way, so the
+    /// default nonzero fill leaves them open), y pointing down, on a page of
+    /// whole millimeters around the bounds. `None` for an empty or 3D model.
+    ///
+    /// Numbers use Rust's debug notation, the shortest that reads back to
+    /// the same value, where the reference prints six significant digits.
+    pub fn svg(&self) -> Option<String> {
+        let (outlines, [lo_x, lo_y, hi_x, hi_y]) = flat_outlines(&self.model)?;
+        // The page's coordinates, where y points down.
+        let (min_x, min_y) = (lo_x.floor() as i64, (-hi_y).floor() as i64);
+        let (max_x, max_y) = (hi_x.ceil() as i64, (-lo_y).ceil() as i64);
+        let (width, height) = (max_x - min_x, max_y - min_y);
+        let mut out = String::with_capacity(48 * outlines.iter().map(Vec::len).sum::<usize>() + 512);
+        out.push_str(concat!(
+            "<?xml version=\"1.0\" standalone=\"no\"?>\n",
+            "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n",
+        ));
+        let _ = writeln!(
+            out,
+            "<svg width=\"{width}mm\" height=\"{height}mm\" viewBox=\"{min_x} {min_y} {width} {height}\" \
+             xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\">"
+        );
+        out.push_str("<title>Code2Form Model</title>\n<path d=\"\n");
+        for outline in &outlines {
+            for (i, [x, y]) in outline.iter().enumerate() {
+                let _ = write!(out, "{}{x:?},{:?}", if i == 0 { "M " } else { " L " }, unsigned_zero(-y));
+                // Six points to a line, as the reference wraps them.
+                if i % 6 == 5 {
+                    out.push('\n');
+                }
+            }
+            out.push_str(" z\n");
+        }
+        out.push_str("\" stroke=\"black\" fill=\"lightgray\" stroke-width=\"0.5\"/>\n</svg>\n");
+        Some(out)
+    }
+
+    /// The 2D model as a DXF drawing, laid out as the reference writes it:
+    /// a LINE on layer 0 for each edge of each outline, between the empty
+    /// BLOCKS and OBJECTS sections that some readers (Inkscape) need.
+    /// `None` for an empty or 3D model.
+    pub fn dxf(&self) -> Option<String> {
+        let (outlines, _) = flat_outlines(&self.model)?;
+        let mut out = String::with_capacity(96 * outlines.iter().map(Vec::len).sum::<usize>() + 256);
+        out.push_str("  0\nSECTION\n  2\nBLOCKS\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n");
+        for outline in &outlines {
+            for (i, [x1, y1]) in outline.iter().enumerate() {
+                let [x2, y2] = outline[(i + 1) % outline.len()];
+                let _ = write!(out, "  0\nLINE\n  8\n0\n 10\n{x1:?}\n 20\n{y1:?}\n 11\n{x2:?}\n 21\n{y2:?}\n");
+            }
+        }
+        out.push_str("  0\nENDSEC\n  0\nSECTION\n  2\nOBJECTS\n  0\nDICTIONARY\n  0\nENDSEC\n  0\nEOF\n");
+        Some(out)
+    }
+}
+
+/// The outlines of a non-empty 2D model, none of them empty, and their
+/// bounds as `[min x, min y, max x, max y]`.
+type Outlines = (Vec<Vec<[f64; 2]>>, [f64; 4]);
+
+fn flat_outlines(model: &Model) -> Option<Outlines> {
+    let Model::Flat(section) = model else { return None };
+    let outlines: Vec<Vec<[f64; 2]>> = section
+        .to_polygons()
+        .into_iter()
+        .filter(|outline| !outline.is_empty())
+        .map(|outline| outline.into_iter().map(|p| [unsigned_zero(p.x), unsigned_zero(p.y)]).collect())
+        .collect();
+    if outlines.is_empty() {
+        return None;
+    }
+    let b = section.bounds();
+    Some((outlines, [b.min.x, b.min.y, b.max.x, b.max.y]))
+}
+
+/// `v`, with `-0.0` made `0.0`, which prints without a minus sign.
+fn unsigned_zero(v: f64) -> f64 {
+    v + 0.0
 }
 
 /// The solid's vertices and triangles, each vertex once. Colors are vertex

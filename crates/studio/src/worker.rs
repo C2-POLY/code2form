@@ -2,8 +2,8 @@
 //! with a large stack, so the UI never waits on a script.
 //!
 //! The geometry (`c2f_geom::Rendered`) stays on the worker thread; the UI
-//! gets plain triangles back, and asks the worker for STL or 3MF exports
-//! of the model it shows.
+//! gets plain triangles back, and asks the worker for exports of the model
+//! it shows: STL or 3MF for a solid, SVG or DXF for a 2D model.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -28,8 +28,8 @@ pub struct Scene {
     pub backgrounds: RenderMesh,
     pub is_2d: bool,
     pub stats: Stats,
-    /// The model is a non-empty solid, so it can be exported as STL.
-    pub exportable: bool,
+    /// The formats the model exports to: none when it is empty.
+    pub formats: &'static [Format],
 }
 
 impl Scene {
@@ -72,18 +72,26 @@ enum Request {
     Export { target: PathBuf, format: Format },
 }
 
-/// The file formats a solid exports to.
+/// The file formats a model exports to: STL and 3MF for a solid, SVG and
+/// DXF for a 2D model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Stl,
     ThreeMf,
+    Svg,
+    Dxf,
 }
 
 impl Format {
+    pub const SOLID: &'static [Format] = &[Format::Stl, Format::ThreeMf];
+    pub const FLAT: &'static [Format] = &[Format::Svg, Format::Dxf];
+
     pub fn name(self) -> &'static str {
         match self {
             Format::Stl => "STL",
             Format::ThreeMf => "3MF",
+            Format::Svg => "SVG",
+            Format::Dxf => "DXF",
         }
     }
 
@@ -91,6 +99,17 @@ impl Format {
         match self {
             Format::Stl => "stl",
             Format::ThreeMf => "3mf",
+            Format::Svg => "svg",
+            Format::Dxf => "dxf",
+        }
+    }
+
+    /// The formats `model` exports to.
+    fn of(model: &Model, stats: &Stats) -> &'static [Format] {
+        match model {
+            Model::Solid(_) if stats.triangles > 0 => Format::SOLID,
+            Model::Flat(_) if stats.vertices > 0 => Format::FLAT,
+            _ => &[],
         }
     }
 }
@@ -125,8 +144,7 @@ impl Worker {
         generation
     }
 
-    /// Writes the last good model to `target`, as an ASCII STL or a 3MF
-    /// package.
+    /// Writes the last good model to `target` in `format`.
     pub fn export(&self, target: PathBuf, format: Format) {
         let _ = self.requests.send(Request::Export { target, format });
     }
@@ -206,7 +224,7 @@ fn render_source(
                 backgrounds: std::mem::take(&mut rendered.backgrounds),
                 is_2d: rendered.is_2d,
                 stats: rendered.stats,
-                exportable: matches!(rendered.model, Model::Solid(_)) && rendered.stats.triangles > 0,
+                formats: Format::of(&rendered.model, &rendered.stats),
             };
             (Ok(scene), Some(rendered))
         }
@@ -258,11 +276,17 @@ fn export(shown: Option<&Rendered>, target: &Path, format: Format) -> Result<Str
     let bytes = catch_unwind(AssertUnwindSafe(|| match format {
         Format::Stl => rendered.stl().map(String::into_bytes),
         Format::ThreeMf => rendered.three_mf(),
+        Format::Svg => rendered.svg().map(String::into_bytes),
+        Format::Dxf => rendered.dxf().map(String::into_bytes),
     }))
     .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))?
-    .ok_or_else(|| format!("the model is empty or 2D, so there is nothing to export as {}", format.name()))?;
+    .ok_or_else(|| {
+        let kind = if Format::SOLID.contains(&format) { "empty or 2D" } else { "empty or 3D" };
+        format!("the model is {kind}, so there is nothing to export as {}", format.name())
+    })?;
     std::fs::write(target, bytes).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
-    Ok(format!("Exported {} triangles to {}", group_digits(rendered.stats.triangles), target.display()))
+    let (count, what) = if rendered.is_2d { (rendered.stats.vertices, "vertices") } else { (rendered.stats.triangles, "triangles") };
+    Ok(format!("Exported {} {what} to {}", group_digits(count), target.display()))
 }
 
 fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
@@ -329,26 +353,54 @@ mod tests {
         assert_eq!(outcome.generation, last);
         assert!(outcome.console.iter().any(|l| l.level == Level::Echo && l.text.contains("hi")));
         let Ok(scene) = outcome.result else { panic!("the render failed") };
-        assert!(!scene.is_2d && scene.exportable && scene.stats.triangles > 0);
+        assert!(!scene.is_2d && scene.formats == Format::SOLID && scene.stats.triangles > 0);
         assert_eq!(scene.solid.positions.len(), scene.solid.normals.len());
 
         for (format, magic) in [(Format::Stl, &b"solid"[..]), (Format::ThreeMf, &b"PK\x03\x04"[..])] {
-            let name = format!("code2form-test-{}.{}", std::process::id(), format.extension());
-            let target = std::env::temp_dir().join(name);
-            worker.export(target.clone(), format);
-            let start = Instant::now();
-            let result = loop {
-                if let Some(Reply::Exported { result, .. }) = worker.poll().into_iter().next() {
-                    break result;
-                }
-                assert!(start.elapsed() < Duration::from_secs(30), "no export reply");
-                std::thread::sleep(Duration::from_millis(5));
-            };
+            let (result, bytes) = export_with(&worker, format);
             assert!(result.is_ok(), "{result:?}");
-            let bytes = std::fs::read(&target).unwrap();
-            let _ = std::fs::remove_file(&target);
             assert!(bytes.starts_with(magic), "{}", format.name());
         }
+    }
+
+    /// Exports the shown model in `format`: the reply, and the file written.
+    fn export_with(worker: &Worker, format: Format) -> (Result<String, String>, Vec<u8>) {
+        let name = format!("code2form-test-{}.{}", std::process::id(), format.extension());
+        let target = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_file(&target);
+        worker.export(target.clone(), format);
+        let start = Instant::now();
+        let result = loop {
+            if let Some(Reply::Exported { result, .. }) = worker.poll().into_iter().next() {
+                break result;
+            }
+            assert!(start.elapsed() < Duration::from_secs(30), "no export reply");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let bytes = std::fs::read(&target).unwrap_or_default();
+        let _ = std::fs::remove_file(&target);
+        (result, bytes)
+    }
+
+    #[test]
+    fn flat_models_export_as_drawings() {
+        let worker = Worker::spawn(egui::Context::default());
+        let generation = worker.render("square([20, 10]);".into(), path(), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
+            panic!("no render")
+        };
+        let Ok(scene) = outcome.result else { panic!("the render failed") };
+        assert!(scene.is_2d && scene.formats == Format::FLAT);
+
+        for (format, magic) in [(Format::Svg, &b"<?xml"[..]), (Format::Dxf, &b"  0\nSECTION\n"[..])] {
+            let (result, bytes) = export_with(&worker, format);
+            let message = result.unwrap();
+            assert!(message.starts_with("Exported 4 vertices to "), "{message}");
+            assert!(bytes.starts_with(magic), "{}", format.name());
+        }
+        let (result, bytes) = export_with(&worker, Format::Stl);
+        assert_eq!(result, Err("the model is empty or 2D, so there is nothing to export as STL".to_string()));
+        assert!(bytes.is_empty());
     }
 
     #[test]
