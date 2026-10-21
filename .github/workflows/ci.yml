@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Every push to main keeps its own result; only PR runs are superseded.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # The goldens in tests/oracle compare byte for byte: keep LF endings
+      # on Windows rather than letting Git convert them to CRLF.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - name: Install the Linux libraries egui and the file dialogs need
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      # The toolchain the workspace declares (rust-version), so a new
+      # stable clippy does not fail the build with lints nobody saw locally.
+      - uses: dtolnay/rust-toolchain@1.85
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The text() tests compare against outlines measured with the
+      # Liberation fonts 2.00.1 that the reference implementation (release
+      # 2021.01) bundles; the repository keeps that exact version.
+      - name: Point the font search at the repository's fonts
+        shell: bash
+        run: echo "OPENSCAD_FONT_PATH=$GITHUB_WORKSPACE/fonts" >> "$GITHUB_ENV"
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --no-fail-fast
