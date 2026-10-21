@@ -29,11 +29,11 @@ and echo output on all 86 files, and the same volumes on every model it
 can export but one (see below). Committed goldens in `tests/oracle` keep
 it so without the reference installed.
 
-Known differences: `offset(r = ...)` places its arc points slightly
-differently (Clipper 2 instead of 1), which moves volumes by up to 0.3%;
-fonts that keep their hinting at large sizes (Helvetica, Menlo) differ by
-a fraction of a percent of the text size; a few edge cases with NaN and
-infinite values.
+Known differences: the reference's `projection()` without `cut` returns
+holes that the operations after it fill, while Code2Form keeps them open
+(0.3% of the volume of `GEB.scad`); fonts that keep their hinting at
+large sizes (Helvetica, Menlo) differ by a fraction of a percent of the
+text size; a few edge cases with NaN and infinite values.
 
 ## Building
 
