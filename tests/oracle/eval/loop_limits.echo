@@ -1,0 +1,9 @@
+ECHO: 999999
+ECHO: [1, 2]
+ECHO: [1, 2]
+ECHO: 1.001e+6
+ECHO: 0
+ECHO: [1]
+ECHO: "a"
+ECHO: "b"
+ECHO: false

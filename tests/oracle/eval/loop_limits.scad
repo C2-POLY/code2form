@@ -1,0 +1,13 @@
+echo(len([for(i=[0:999998]) i]));
+echo([1, for(i=[0:999999]) i, 2]);
+echo([1, each [0:999999], 2]);
+echo(len([for (i=[0:999], j=[0:1000]) 0]));
+echo(len([for (i=0; i<1; i=i+1) each [0:999999]]));
+for (i = [0:9999]) cube();
+for (i = [0:9998]) if (i == 9998) cube(2);
+for (i = [0:1], j = [0:9999]) sphere();
+intersection_for (i = [0:9999]) cube();
+for () cube();
+echo([for () 1]);
+for (c = "ab") echo(c);
+for (b = false) echo(b);

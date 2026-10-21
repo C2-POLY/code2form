@@ -1,0 +1,14 @@
+module m() {
+}
+//Parameter([1 : 2])
+p = 1;
+//Parameter([1])
+q = 2;
+//Group("")
+//Description("{")
+//Parameter([1])
+w = 4;
+s = "{";
+t = 2;
+u = 3;
+v = 5;

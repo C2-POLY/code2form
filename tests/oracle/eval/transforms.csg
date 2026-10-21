@@ -1,0 +1,188 @@
+multmatrix([[1, 0, 0, 1], [0, 1, 0, 2], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[2, 0, 0, 0], [0, 2, 0, 0], [0, 0, 2, 0], [0, 0, 0, 1]]) {
+	square(size = [1, 1], center = false);
+}
+multmatrix([[2, 0, 0, 0], [0, 3, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	square(size = [1, 1], center = false);
+}
+multmatrix([[0, -1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 2, 0, 0], [3, 4, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0.939693, 0.0593912, 0.336824, 0], [0, 0.984808, -0.173648, 0], [-0.34202, 0.163176, 0.925417, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0.707107, 0, 0.707107, 0], [0, 1, 0, 0], [-0.707107, 0, 0.707107, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0, -0.866025, 0.5, 0], [0.5, 0.433013, 0.75, 0], [-0.866025, 0.25, 0.433013, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[-0.5, -0.866025, 0, 0], [0.866025, -0.5, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, -1.74533e-22, 0, 0], [1.74533e-22, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+cube(size = [1, 1, 1], center = false);
+cube(size = [1, 1, 1], center = false);
+cube(size = [1, 1, 1], center = false);
+cube(size = [1, 1, 1], center = false);
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0.998021, -0.0517197, 0.0357597, 0], [0.0523041, 0.998509, -0.0156023, 0], [-0.0348995, 0.0174418, 0.999239, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 2, 3, 4], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0.850194, -0.413636, 0.325692, 0], [0.45973, 0.884765, -0.0764197, 0], [-0.256551, 0.214702, 0.942382, 0], [0, 0, 0, 1]]) {
+	multmatrix([[-0.932688, 0.3587, 0.0377784, 0], [-0.339471, -0.908397, 0.24408, 0], [0.121869, 0.214826, 0.969019, 0], [0, 0, 0, 1]]) {
+		multmatrix([[1, 0, 0, 0.1], [0, 1, 0, 0.2], [0, 0, 1, 0.3], [0, 0, 0, 1]]) {
+			multmatrix([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 0.5, 0], [0, 0, 0, 1]]) {
+				cube(size = [1, 1, 1], center = false);
+			}
+		}
+	}
+}
+resize(newsize = [1,2,0], auto = [0,0,0], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+resize(newsize = [1,0,3], auto = [1,1,1], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+resize(newsize = [1,2,3], auto = [1,0,1], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+resize(newsize = [0,0,0], auto = [0,0,0], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+resize(newsize = [1.5,2.25,1e+07], auto = [0,0,0], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+resize(newsize = [1e-06,1,2], auto = [0,0,0], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+resize(newsize = [0.0001,1e-05,1.23457e+08], auto = [0,0,0], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([1, 0, 0, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([-1, -1, -1, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0, 1, 0, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0, 1, 0, 0.501961]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0, 1, 0, 0.533333]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0.5, 0.5, 1, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([1, 0, 0, 0.2]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([1, 0, 0, 0.1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0, 0.501961, 0, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([-1, -1, -1, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([-1, -1, -1, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0, 0, 0, 0]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([2, -1, 0.5, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([-1, -1, -1, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0.4, 0.2, 0.6, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0.501961, 0.501961, 0.501961, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+

@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["crates/lang", "crates/eval", "crates/geom", "crates/app", "crates/studio"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+c2f-lang = { path = "crates/lang" }
+c2f-eval = { path = "crates/eval" }
+c2f-geom = { path = "crates/geom" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

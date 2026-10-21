@@ -1,0 +1,12 @@
+sphere($fn = 0, $fa = nan, $fs = nan, r = 1);
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = nan, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+circle($fn = 0, $fa = 12, $fs = nan, r = 1);
+rotate_extrude(angle = 360, convexity = 2, $fn = 0, $fa = nan, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+offset(r = 1, $fn = 0, $fa = 12, $fs = nan) {
+	square(size = [1, 1], center = false);
+}
+

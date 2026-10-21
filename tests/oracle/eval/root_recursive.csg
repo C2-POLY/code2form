@@ -1,0 +1,306 @@
+union() {
+	group() {
+		group() {
+			union() {
+				group() {
+					group() {
+						union() {
+							group() {
+								group() {
+									union() {
+										group() {
+											group() {
+												union() {
+													group() {
+														group() {
+															union() {
+																group() {
+																	group() {
+																		union() {
+																			group() {
+																				group() {
+																					union() {
+																						group() {
+																							group() {
+																								union() {
+																									group() {
+																										group() {
+																											union() {
+																												group() {
+																													group() {
+																														union() {
+																															group() {
+																																group() {
+																																	union() {
+																																		group() {
+																																			group() {
+																																				union() {
+																																					group() {
+																																						group() {
+																																							union() {
+																																								group() {
+																																									group() {
+																																										union() {
+																																											group() {
+																																												group() {
+																																													union() {
+																																														group() {
+																																															group() {
+																																																union() {
+																																																	group() {
+																																																		group() {
+																																																			union() {
+																																																				group() {
+																																																					group() {
+																																																						union() {
+																																																							group() {
+																																																								group() {
+																																																									union() {
+																																																										group() {
+																																																											group() {
+																																																												union() {
+																																																													group() {
+																																																														group() {
+																																																															union() {
+																																																																group() {
+																																																																	group() {
+																																																																		union() {
+																																																																			group() {
+																																																																				group() {
+																																																																					union() {
+																																																																						group() {
+																																																																							group() {
+																																																																								union() {
+																																																																									group() {
+																																																																										group() {
+																																																																											union() {
+																																																																												group() {
+																																																																													group() {
+																																																																														union() {
+																																																																															group() {
+																																																																																group() {
+																																																																																	union() {
+																																																																																		group() {
+																																																																																			group() {
+																																																																																				union() {
+																																																																																					group() {
+																																																																																						group() {
+																																																																																							union() {
+																																																																																								group() {
+																																																																																									group() {
+																																																																																										union() {
+																																																																																											group() {
+																																																																																												group() {
+																																																																																													union() {
+																																																																																														group() {
+																																																																																															group() {
+																																																																																																union() {
+																																																																																																	group() {
+																																																																																																		group() {
+																																																																																																			union() {
+																																																																																																				group() {
+																																																																																																					group() {
+																																																																																																						union() {
+																																																																																																							group() {
+																																																																																																								group() {
+																																																																																																									union() {
+																																																																																																										group() {
+																																																																																																											group() {
+																																																																																																												union() {
+																																																																																																													group() {
+																																																																																																														group() {
+																																																																																																															union() {
+																																																																																																																group() {
+																																																																																																																	group() {
+																																																																																																																		union() {
+																																																																																																																			group() {
+																																																																																																																				group() {
+																																																																																																																					union() {
+																																																																																																																						group() {
+																																																																																																																							group() {
+																																																																																																																								union() {
+																																																																																																																									group() {
+																																																																																																																										group() {
+																																																																																																																											union() {
+																																																																																																																												group() {
+																																																																																																																													group() {
+																																																																																																																														union() {
+																																																																																																																															group() {
+																																																																																																																																group() {
+																																																																																																																																	union() {
+																																																																																																																																		group() {
+																																																																																																																																			group() {
+																																																																																																																																				union() {
+																																																																																																																																					group() {
+																																																																																																																																						group() {
+																																																																																																																																							union() {
+																																																																																																																																								group() {
+																																																																																																																																									group() {
+																																																																																																																																										union() {
+																																																																																																																																											group() {
+																																																																																																																																												group() {
+																																																																																																																																													union() {
+																																																																																																																																														group() {
+																																																																																																																																															group() {
+																																																																																																																																																union() {
+																																																																																																																																																	group() {
+																																																																																																																																																		group() {
+																																																																																																																																																			union() {
+																																																																																																																																																				group() {
+																																																																																																																																																					group() {
+																																																																																																																																																						union() {
+																																																																																																																																																							group() {
+																																																																																																																																																								cube(size = [1, 1, 1], center = false);
+																																																																																																																																																							}
+																																																																																																																																																						}
+																																																																																																																																																					}
+																																																																																																																																																				}
+																																																																																																																																																			}
+																																																																																																																																																		}
+																																																																																																																																																	}
+																																																																																																																																																}
+																																																																																																																																															}
+																																																																																																																																														}
+																																																																																																																																													}
+																																																																																																																																												}
+																																																																																																																																											}
+																																																																																																																																										}
+																																																																																																																																									}
+																																																																																																																																								}
+																																																																																																																																							}
+																																																																																																																																						}
+																																																																																																																																					}
+																																																																																																																																				}
+																																																																																																																																			}
+																																																																																																																																		}
+																																																																																																																																	}
+																																																																																																																																}
+																																																																																																																															}
+																																																																																																																														}
+																																																																																																																													}
+																																																																																																																												}
+																																																																																																																											}
+																																																																																																																										}
+																																																																																																																									}
+																																																																																																																								}
+																																																																																																																							}
+																																																																																																																						}
+																																																																																																																					}
+																																																																																																																				}
+																																																																																																																			}
+																																																																																																																		}
+																																																																																																																	}
+																																																																																																																}
+																																																																																																															}
+																																																																																																														}
+																																																																																																													}
+																																																																																																												}
+																																																																																																											}
+																																																																																																										}
+																																																																																																									}
+																																																																																																								}
+																																																																																																							}
+																																																																																																						}
+																																																																																																					}
+																																																																																																				}
+																																																																																																			}
+																																																																																																		}
+																																																																																																	}
+																																																																																																}
+																																																																																															}
+																																																																																														}
+																																																																																													}
+																																																																																												}
+																																																																																											}
+																																																																																										}
+																																																																																									}
+																																																																																								}
+																																																																																							}
+																																																																																						}
+																																																																																					}
+																																																																																				}
+																																																																																			}
+																																																																																		}
+																																																																																	}
+																																																																																}
+																																																																															}
+																																																																														}
+																																																																													}
+																																																																												}
+																																																																											}
+																																																																										}
+																																																																									}
+																																																																								}
+																																																																							}
+																																																																						}
+																																																																					}
+																																																																				}
+																																																																			}
+																																																																		}
+																																																																	}
+																																																																}
+																																																															}
+																																																														}
+																																																													}
+																																																												}
+																																																											}
+																																																										}
+																																																									}
+																																																								}
+																																																							}
+																																																						}
+																																																					}
+																																																				}
+																																																			}
+																																																		}
+																																																	}
+																																																}
+																																															}
+																																														}
+																																													}
+																																												}
+																																											}
+																																										}
+																																									}
+																																								}
+																																							}
+																																						}
+																																					}
+																																				}
+																																			}
+																																		}
+																																	}
+																																}
+																															}
+																														}
+																													}
+																												}
+																											}
+																										}
+																									}
+																								}
+																							}
+																						}
+																					}
+																				}
+																			}
+																		}
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+

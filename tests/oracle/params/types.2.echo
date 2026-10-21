@@ -1,0 +1,2 @@
+ECHO: b = true, n = 100, s = ""quoted"", v = [1, 2, 3], f = 1.5, w = "12", m = [1, "a"], neg = -2, u = undef
+ECHO: true, true, true, true, true, true, true, true

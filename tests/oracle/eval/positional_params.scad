@@ -1,0 +1,11 @@
+projection(true, 3) cube();
+offset(undef, 3) square();
+surface("x.dat", true, true);
+text("a", 10, "Liberation Sans", "center", "top", 2);
+linear_extrude(4, 5, 6) square();
+linear_extrude(height = 2, 9) square();
+rotate_extrude("f.dxf", "L", [1, 2], 3) square();
+import_stl("x.stl", 5);
+import_dxf("x.dxf", "L", 3, [1, 2], 2);
+dxf_linear_extrude("f.dxf", "L", 3, [1,2], 2, true, 10, 5);
+dxf_rotate_extrude("f.dxf", "L", [1,2], 3);

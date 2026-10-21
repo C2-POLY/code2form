@@ -1,0 +1,2 @@
+ECHO: b = false, n = 5, s = "12", v = ["a", "b"], f = 1.5, w = "", m = [1, "a"], neg = -2, u = undef
+ECHO: true, true, true, true, true, true, true, true

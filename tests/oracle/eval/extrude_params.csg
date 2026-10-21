@@ -1,0 +1,22 @@
+rotate_extrude(angle = 360, convexity = 2, $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [-0, -0], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [-0, 3], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+

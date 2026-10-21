@@ -1,0 +1,14 @@
+a = -x + !y * 2 ^ 3 ^ 2;
+t = a ? b : c ? d : e;
+u = p.x + v[2][0] + f(1)(2);
+w = [1, 2, [3]]; r = [0:2]; r2 = [0:0.5:2]; em = [];
+fl = function(x, y = 2) x + y;
+le = let (a = 1, b = 2) a + b;
+as = assert(true, "msg") echo("hi") a;
+e2 = assert(true);
+e3 = echo(1);
+cmp = a == b || a != b && a < b || a <= b && a > b || a >= b;
+m = a % b - -c;
+k = a.b(1); l = (a+b)[0]; m2 = [1:2][0]; n = function() function(y) y; o = a ? b : let(c=1) c;
+cc = (f)(3); dd = [1] [0]; ee = [1,2].x;
+x = undef; y = true; z = false;

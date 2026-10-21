@@ -1,0 +1,21 @@
+ECHO: "a
+b	"q"\", ["x
+y"], "a["b
+c"]"
+ECHO: true, false, undef, true, false, true, undef, undef, true, true, [[2]], [[0.5, 1]], [2, 1], undef, [-1, [-2]], [2, undef]
+ECHO: 2, 1, "b", undef, undef, undef, undef, undef
+ECHO: [1, undef], [2, 3]
+ECHO: 10
+ECHO: [1, 2], [6]
+ECHO: [[1, 2], [3, 4]], [7, 10], undef, [2, [4, 6]], undef, undef
+ECHO: ["a", "b"], [1, "ab"], [], undef, undef, 2
+ECHO: [[0, 3]], [0, 1, 2], [0, 1], [1], [], [0]
+ECHO: 10, 20, 10
+ECHO: undef, -2, undef, undef, undef, undef, undef, nan, undef
+ECHO: "0.333333", "1e-10", "0", "0.1", 0, 0
+ECHO: "", "", "", "", undef, 97, undef, "", "A"
+ECHO: false, true, false, false, false
+ECHO: 180, nan, inf, 0, 0, 0, inf, nan, 1, 0, -1
+ECHO: "mm", undef, undef, undef, 1
+ECHO: "mm", "q", undef, undef, 2
+ECHO: 2.02101e+7, [1.59284, 1.84427, 1.85795], [5], [], [0.997185], 2

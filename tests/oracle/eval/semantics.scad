@@ -1,0 +1,18 @@
+echo("a\nb\t\"q\"\\", ["x\ny"], str("a", ["b\nc"]));
+echo([1,2]<[1,3], [2]<[1,5], [1]>"a", "ab"<"b", true<false, false<true, undef<1, 1<undef, [1]==[1.0], "a"=="a", [[1]]*2, [[1,2]]/2, 2/[1,2], [1,2]/[1,2], -[1,[2]], [1,"a"]+[1,2]);
+echo([1,2,3][1.7], [1,2,3][-0.5], "abc"[1.5], [0:2].x, [1,2][true], [1,2]["a"], undef[0], 5[0]);
+function d(a, b = a * 2) = [a, b];
+echo(d(1), d(b=3, a=2));
+x = 10; function cl() = function() x; x2 = cl(); echo(x2());
+echo(let(a=1, b=a+1) [a, b], [let(a=2, b=a*3) b]);
+echo([[1,2],[3,4]]*[[1,0],[0,1]], [1,2]*[[1,2],[3,4]], [1,2,3]*[1,2], 2*[1,[2,3]], [1,2]+1, 1+[1,2]);
+echo(concat("a", "b"), concat([1], "ab"), concat(), len([0:3]), len(undef), len([[1],[2]]));
+echo(search("a","abcabc",0), search("abc","abcabc"), search([1,2],[1,2,3]), search(3,[[1,2],[3,4]],0,0), search("x","abc"), search([[1,2]], [[1,2],[3,4]]));
+echo(lookup(0, [[1,10],[2,20]]), lookup(5, [[1,10],[2,20]]), lookup(1, [[1,10],[2,20],[1,30]]));
+echo(norm([1,2,"a"]), cross([1,2],[3,4]), max(), min([]), max(1,"a"), max([1,2],[3]), abs("a"), sqrt(-1), floor(undef));
+echo(str(1/3), str(1e-10), str(-0), str(0.1), 1e-300*1e-300, -1e-300*1e-300);
+echo(chr(0x41), chr(-1), chr(1114112), chr([]), ord(""), ord("ab"), ord(5), chr("a"), chr(65.7));
+echo(is_num(0/0), is_num(1/0), is_list("a"), is_string(["a"]), is_function(undef));
+echo(atan2(0,-1), asin(2), tan(90), cos(90), sin(180), cos(270), exp(710), pow(-8, 1/3), round(0.5), sign(0), floor(-0.5));
+module mm() echo(parent_module(0), parent_module(1), parent_module(2), parent_module(5), $parent_modules); translate() mm(); module q() mm(); color() q();
+echo(version_num(), rands(1, 2, 3, 0), rands(5,5,1), rands(0,1,0,1), rands(0,1,-1,1), len(rands(0,1,2.7,1)));

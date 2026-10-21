@@ -1,0 +1,12 @@
+translate([sqrt(-1), 0, 0]) cube(1);
+rotate([0, 0, acos(2)]) cube(1);
+mirror([0/0, 1, 0]) cube(1);
+cube([2, 5, undef]);
+scale([2, undef, 3]) cube(1);
+rotate([10, undef, 30]) cube(1);
+linear_extrude(height=1/0) square(1);
+rotate(a=30, v=[1,undef,0]) cube(1);
+scale([0/0,1,1]) cube(1);
+linear_extrude(height=1, twist=0/0) square(1);
+square([3, undef]); square([undef, 2]); translate([1, 2]) cube(); scale([2, 3]) cube(); mirror([0, 1]) cube();
+rotate([undef, 20]) cube(); rotate([5]) cube(); rotate(45, [1, 1]) cube(); rotate(1/0) cube();

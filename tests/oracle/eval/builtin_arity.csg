@@ -1,0 +1,13 @@
+group() {
+	group();
+}
+resize(newsize = [1,2,3], auto = [1,0,1], convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+group() {
+	group();
+}
+

@@ -1,0 +1,22 @@
+echo(len([1, 2], 3), sin(30, 1), abs(-1, 2), norm([3, 4], 5), is_undef(1, 2), is_num(), version_num(1), log(2, 8, 9));
+module c() echo(parent_module(), parent_module("x"), parent_module(-0.5));
+module p() c();
+p();
+echo(sign(1,2), cos(0,1), atan2(1), pow(2), cross([1,0,0]), lookup(1), ord("a","b"), is_bool(), is_string(), is_list(), is_function());
+pts = [[0,5],[3,1],[3,2],[-1,9]];
+echo(max(pts), min(pts));
+echo(max(["abc", "abd", "ab"]), min(["b", "a", "c"]));
+echo(max([1, "a"]), max(["a", 1]), max([true, 2]), max([true, false]), min([[]]));
+echo(log(1,2,3), search(1,1), search(1,[1],0,5), search(undef,[undef]), is_undef());
+resize([1,2,3], auto=[1,0,1]) cube(1);
+echo(str("a\x00b")); x = "q\x00r"; echo(ord(x[1]));
+echo($vpr, $vpt, $vpd, $vpf);
+rotate($vpr) cube(1);
+$h = function(x) x + 100;
+echo($h(1));
+module with_fn(k) { $f = function(x) x*k; children(); }
+with_fn(3) echo($f(2));
+g = $h; echo(g(1));
+echo(($h)(1));
+r = [0:2:10]; echo(r.begin, r.step, r.end, r.x, [1,2].begin);
+echo(max(5), min(3, 1, 2), max([]), max("abc"), max(1, "a"));

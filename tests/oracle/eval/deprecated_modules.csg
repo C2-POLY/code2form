@@ -1,0 +1,35 @@
+group() {
+	cube(size = [2, 2, 2], center = false);
+}
+group() {
+	sphere($fn = 0, $fa = 12, $fs = 2, r = 1);
+}
+import(file = "nofile.stl", layer = "", origin = [0, 0], scale = 1, convexity = 1, $fn = 0, $fa = 12, $fs = 2, timestamp = 0);
+import(file = "nofile.dxf", layer = "", origin = [0, 0], scale = 1, convexity = 1, $fn = 0, $fa = 12, $fs = 2, timestamp = 0);
+linear_extrude(file = "nofile.dxf", layer = "", origin = [0, 0], timestamp = 0, height = 2, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2);
+group();
+group() {
+	cube(size = [3, 3, 3], center = false);
+}
+import(file = "nofile.off", layer = "", origin = [0, 0], scale = 1, convexity = 1, $fn = 0, $fa = 12, $fs = 2, timestamp = 0);
+rotate_extrude(file = "nofile.dxf", layer = "", origin = [0, 0], scale = 1, timestamp = 0, angle = 360, convexity = 2, $fn = 0, $fa = 12, $fs = 2);
+difference() {
+	cylinder($fn = 0, $fa = 12, $fs = 2, h = 5, r1 = 10, r2 = 10, center = false);
+	cylinder($fn = 0, $fa = 12, $fs = 2, h = 6, r1 = 8, r2 = 8, center = false);
+}
+union() {
+	sphere($fn = 0, $fa = 12, $fs = 2, r = 5);
+}
+group() {
+	circle($fn = 0, $fa = 12, $fs = 2, r = 2);
+}
+intersection() {
+	circle($fn = 0, $fa = 12, $fs = 2, r = 2);
+}
+hull() {
+	circle($fn = 11, $fa = 12, $fs = 2, r = 2);
+}
+union();
+difference();
+render(convexity = 1);
+

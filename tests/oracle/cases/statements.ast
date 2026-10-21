@@ -1,0 +1,44 @@
+function foo(x, y = 1) = (x + y);
+module bar(a, b = [1, 2]) {
+	cube(a);
+	sphere(b);
+}
+module e() {
+}
+translate([1, 2, 3]) cube(1);
+sphere(2);
+if(a) cube(1);
+else if(b) sphere(1);
+else cylinder();
+for(i = [1, 2]) {
+	cube(i);
+	sphere(i);
+}
+cube();
+intersection_for(i = [1 : 2]) cube(i);
+let(q = 1) cube(q);
+translate([1, 0, 0]);
+rotate(1);
+if(a) {
+	cube();
+	sphere();
+}
+else {
+	cube();
+	sphere();
+}
+if(b);
+else cube();
+if(c) cube();
+if(d) cube();
+else;translate([1, 2]) rotate(1) {
+	cube();
+	sphere();
+	cylinder();
+}
+translate();
+echo("x");
+assert(true);
+each(1) cube();
+for(i = [1], j = [2]) cube([i, j]);
+color("red", 0.5) render(convexity = 2) linear_extrude(height = 10, twist = 90, $fn = 40) circle(r = 2);

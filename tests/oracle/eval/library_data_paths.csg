@@ -1,0 +1,4 @@
+group() {
+	import(file = "libs/data/example009.dxf", layer = "body", origin = [0, 0], scale = 1, convexity = 1, $fn = 0, $fa = 12, $fs = 2, timestamp = 1792585404);
+}
+

@@ -1,0 +1,15 @@
+function a(n) = n == 0 ? 0 : a(n - 1);
+function b(n) = n != 0 ? b(n - 1) : 0;
+function c(n) = n == 0 ? 0 : n < 0 ? -1 : (n % 2 == 0 ? c(n - 1) : c(n - 1));
+function d(n) = let(m = n - 1) n == 0 ? 0 : d(m);
+function e(n) = n == 0 ? 0 : let(m = n - 1) m < 0 ? -1 : e(m);
+function f(n) = assert(n >= 0) n == 0 ? 0 : let(k = 1) assert(k == 1) f(n - 1);
+g = function(n) n == 0 ? 0 : g(n - 1);
+function j(n) = (n == 0 ? 0 : ((j)(n - 1)));
+function k(n) = n == 0 ? 0 : k(n = n - 1);
+N = 100000;
+echo(a(N), b(N), c(N), d(N), e(N), f(N), g(N), j(N), k(N));
+function t(n, acc = 0) = n == 0 ? acc : t(n - 1, acc + 1);
+echo(t(1000000));
+function sg(n) = n == 0 ? 0 : sg2(n - 1); function sg2(n) = n == 0 ? 0 : sg2(n - 1);
+echo(sg(300000));

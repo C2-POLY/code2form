@@ -1,0 +1,2 @@
+ECHO: "one"
+ECHO: "one", 2

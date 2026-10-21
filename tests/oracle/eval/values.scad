@@ -1,0 +1,18 @@
+echo(1, 2.5, "s", true, undef, [1, "a", [2]], [0:2], [0:0.5:2], a=1, b="x");
+echo(1/0, -1/0, 0/0, 1e20, 123456789, 0.1+0.2, -0);
+echo(str(1, "a", [1, 2], true, undef, 1.5, [0:1:3]));
+f = function(x) x * 2;
+echo(f, f(3));
+function g(x) = x + 1;
+g = function(x) x * 100;
+echo(g(1));
+echo(len([1,2,3]), len("abc"), len(1), concat([1],[2,3],4), lookup(1.5, [[1,10],[2,20]]));
+echo(min(3,1,2), max([3,1,2]), norm([3,4]), cross([1,0,0],[0,1,0]), abs(-2), sign(-3), floor(1.5), ceil(1.2), round(2.5), round(-2.5));
+echo(sin(30), cos(60), tan(45), asin(1), acos(0), atan(1), atan2(1,1), sqrt(2), pow(2,10), exp(1), ln(10), log(100), log(2,8));
+echo(chr(65), chr([65,66]), ord("a"), search("a", "banana"), search(3, [1,3,5,3], 0), is_num(1), is_string("a"), is_list([]), is_undef(undef), is_bool(true), is_function(f));
+echo([1,2]+[3,4], [1,2]*2, [1,2]*[3,4], [[1,2],[3,4]]*[1,1], "a"+"b", [1,2]-[1], 5 % 3, -5 % 3, 2^0.5, [1,2]==[1,2], "a"<"b", [1]<[2]);
+echo([for (i=[0:2]) i*i], [for (i=[5:1]) i], [for (i=[0:-1:-3]) i], [for (c="abc") c], [for (x=5) x], [for (x=undef) x]);
+echo([1,2,3][1], "abc"[1], [1,2,3].y, [1,2,3][5], [1,2][-1], [0:2:6][1]);
+echo(version(), version_num());
+echo(a == undef, undef == undef, 1 == true, "1" == 1, !0, ![], !"", !"a");
+echo(rands(0,1,2,42));

@@ -1,0 +1,38 @@
+function inner(v) = [for(x = v) ((x - (2 * wall)))];
+module rounded_square(size, r) {
+	offset(r = r) offset(delta = -r) square(size, center = true);
+}
+module shell(size) {
+	difference() {
+		linear_extrude(size.z) rounded_square([size.x, size.y], 3);
+		translate([0, 0, wall]) linear_extrude(size.z) rounded_square(inner([size.x, size.y]), 1);
+	}
+}
+//Group("Box")
+//Description("Outer width in mm")
+//Parameter([20 : 200])
+width = 60;
+//Group("Box")
+//Description("Outer depth in mm")
+//Parameter([20 : 200])
+depth = 40;
+//Group("Box")
+//Parameter([10 : 100])
+height = 25;
+//Group("Box")
+//Parameter([1 : 0.5 : 5])
+wall = 2;
+//Group("Lid")
+//Parameter("")
+lid = true;
+//Group("Lid")
+//Parameter(["rounded", ["square", "Square corners"]])
+style = "rounded";
+//Group("Hidden")
+//Parameter("")
+$fn = 48;
+//Group("Hidden")
+//Parameter("")
+eps = 0.01;
+shell([width, depth, height]);
+if(lid) translate([(width + 5), 0, 0]) linear_extrude(wall) rounded_square([width, depth], 3);

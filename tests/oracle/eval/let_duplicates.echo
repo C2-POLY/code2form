@@ -1,0 +1,4 @@
+ECHO: 1
+ECHO: [1, 2]
+ECHO: 1, 1
+ECHO: 0

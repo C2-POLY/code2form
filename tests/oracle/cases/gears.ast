@@ -1,0 +1,16 @@
+function polar(r, a) = [(r * cos(a)), (r * sin(a))];
+function tooth_profile(n = 8) = [for(i = [0 : n]) (polar((pitch_r + (((i % 2) == 0) ? module_size : -module_size)), ((i * 360) / (teeth * n)))), each ([[0, 0]])];
+function sum(v, i = 0) = ((i >= len(v)) ? 0 : (v[i] + sum(v, (i + 1))));
+function fib(n) = ((n < 2) ? n : (fib((n - 1)) + fib((n - 2))));
+module gear() {
+	for(k = [0 : (teeth - 1)]) rotate(((k * 360) / teeth)) polygon(tooth_profile());
+	circle(r = (pitch_r - module_size));
+}
+//Parameter("")
+teeth = 17;
+//Parameter("")
+module_size = 1.5;
+pitch_r = ((teeth * module_size) / 2);
+linear_extrude(height = 5, center = true, convexity = 4) gear();
+cylinder(h = 20, r = 2, center = true);
+echo(total = sum([1, 2, 3]), f10 = fib(10), str("teeth: ", teeth));

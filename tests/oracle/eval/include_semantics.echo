@@ -1,0 +1,6 @@
+ECHO: "self body"
+ECHO: 6
+ECHO: "a sees", "sub b"
+ECHO: "sub lib"
+ECHO: "module sees", "sub b"
+ECHO: "after missing"

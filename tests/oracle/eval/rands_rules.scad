@@ -1,0 +1,17 @@
+echo(rands(0,1,2,2), rands(0,1,2,2.7), rands(0,1,2,-1), rands(0,1,2,-2));
+echo(rands(0,1,2,1e20), rands(0,1,2,4294967296), rands(0,1,2,2147483647), rands(0,1,3,1/3));
+echo(rands(0,1,1,1/0), rands(0,1,1,-1/0), rands(0,1,1,0/0), rands(0,1,1,-0), rands(0,1,1,0.5), rands(0,1,1,-0.5));
+echo(rands(0,1,1,1e10), rands(0,1,1,1e300), rands(0,1,1,9007199254740993));
+echo(rands(1,0,3,7), rands(10,20,3,1), rands(20,10,3,1), rands(5,5,3,1), rands(0,0,2,0));
+echo(rands(0,1,2.9,1), rands(0,1,-2.9,1), rands(0,1,0.9,1), rands(0,1,-0.5,1));
+echo(rands(0,1,"3"), rands(0,1,2,undef), rands("0",1,2,1), rands(0,1,[2],1), rands(0,1,2,[1]), rands(0,1,true,1));
+echo(rands(0,1), rands(0,1,2,3,4), rands());
+echo(rands(seed=1, num_values=2, max_value=1, min_value=0), rands(min_value=0, max_value=1, value_count=2, seed_value=1));
+echo(rands(0,1,1/0,1), rands(0,1,-1/0,1), rands(0,1,0/0,1));
+echo(rands(1/0,0,2,1), rands(0,1/0,2,1), rands(0/0,1,2,1), rands(-1/0,1/0,2,1));
+echo(rands(0,1,1,7));
+echo(rands(0,1,1));
+echo(rands(5,5,1));
+echo(rands(0,1,1));
+echo(rands(0,1,0,7), rands(0,1,1));
+echo(rands(0,1,"x",7), rands(0,1,1));

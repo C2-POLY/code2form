@@ -1,0 +1,12 @@
+cylinder(h = 20 * pow(0.75, 4), r = 1);
+cube([6.328125, 3.140625, 1/512]);
+cube([1e-5, 1e6, 1]);
+circle(r = 1234565);
+circle(r = -0);
+sphere(r=0.5^20);
+color([0.1015625, 0.5, 1e-5]) square([6.328125, 1e7]);
+offset(delta=-0) square(1);
+linear_extrude(height=6.328125, twist=3.140625, scale=[6.328125, 1e-5]) square(1);
+text("a", size=6.328125, spacing=1e-5);
+translate([6.328125, 1e-5, 0]) cube();
+$fs = 0.001; linear_extrude(1) circle(1); rotate_extrude() circle(1); offset(r=1) circle(1); text("a");

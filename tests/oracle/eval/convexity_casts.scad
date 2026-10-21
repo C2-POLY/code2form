@@ -1,0 +1,12 @@
+projection(convexity = -5) cube();
+render(convexity = 3e9) cube();
+minkowski(convexity = 3e9) cube();
+polyhedron([[0,0,0],[1,0,0],[0,1,0],[0,0,1]], [[0,1,2]], convexity = 3e9);
+linear_extrude(height = 1, convexity = 3e9, slices = 3e9, twist = 10) square();
+resize([1,1,1], convexity = 3e9) cube();
+render(convexity = 1/0) cube();
+minkowski(convexity = -1/0) cube();
+projection(convexity = 1e15) cube();
+polygon([[0,0],[1,0],[0,1]], convexity = 3e9);
+import("x.stl", convexity = 3e9);
+rotate_extrude(convexity = 3e9) square();

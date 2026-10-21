@@ -1,0 +1,26 @@
+group();
+group();
+group();
+group();
+group();
+group();
+group();
+group();
+group();
+group() {
+	group() {
+		cube(size = [3, 3, 3], center = false);
+		group() {
+			group() {
+				cube(size = [2, 2, 2], center = false);
+				group() {
+					group() {
+						cube(size = [1, 1, 1], center = false);
+						group();
+					}
+				}
+			}
+		}
+	}
+}
+

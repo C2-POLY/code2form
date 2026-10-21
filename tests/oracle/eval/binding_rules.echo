@@ -1,0 +1,34 @@
+ECHO: 20
+ECHO: "ring", 7
+ECHO: 1
+ECHO: "mx", 1, 5
+ECHO: [0, 0, 0]
+ECHO: [1, 1, 1]
+ECHO: 5
+ECHO: 7
+ECHO: [2, 2, 2]
+ECHO: [3, 3, 3]
+ECHO: [[1, 1], [1, 1], [1, 1], [1, 1]]
+ECHO: ["c", "c", "c"]
+ECHO: [2, 2, 2]
+ECHO: [0, 1, 2]
+ECHO: "default a"
+ECHO: 5
+ECHO: "pdef"
+ECHO: "m2", 7
+ECHO: [1, 1, 1]
+ECHO: [0, 0, 1, 1]
+ECHO: [1, 1, 2, 4, 8, 16, 32]
+ECHO: [[0, 0], [1, 1], [2, 3], [3, 6], [4, 10]]
+ECHO: [[0, undef], [1, 10], [2, 20]]
+ECHO: [[0, 0], [1, 0], [2, 1]]
+ECHO: "assign"
+ECHO: "arg"
+ECHO: "body"
+ECHO: "child", 1
+ECHO: "child", 1
+ECHO: "assign k"
+ECHO: "k"
+ECHO: "x"
+ECHO: "assign echo"
+ECHO: "assign assert"

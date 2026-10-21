@@ -1,0 +1,20 @@
+ECHO: "lib a"
+ECHO: "lib a"
+ECHO: "main"
+ECHO: "lib a"
+ECHO: "lm", 1, 50
+ECHO: "lib a"
+ECHO: "lm", 1, 50
+ECHO: "lib a"
+ECHO: "lib a"
+ECHO: [1, 50], [1, 50]
+ECHO: "lib a"
+ECHO: "lm", 1, 10
+ECHO: "lib a"
+ECHO: "lm", 1, 50
+ECHO: "lib a"
+ECHO: "lc", 50
+ECHO: 10, 10
+ECHO: "lib a"
+ECHO: 5
+ECHO: [1, 50]

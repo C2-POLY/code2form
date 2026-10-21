@@ -1,0 +1,5 @@
+ECHO: 0, 0, 0, "end"
+ECHO: 500
+ECHO: 9, 1, 5, 42
+ECHO: 1, 1
+ECHO: 5

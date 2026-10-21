@@ -1,0 +1,10 @@
+//Parameter("")
+s = "he\"llo\n\t\\ A é 😀";
+//Parameter("")
+s2 = "a\rbcdqax80";
+//Parameter("")
+s3 = "tab\there";
+//Parameter("")
+s4 = "multiline";
+//Parameter("")
+s5 = "it's";

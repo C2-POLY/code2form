@@ -1,0 +1,16 @@
+//Parameter("")
+1e = 3;
+//Parameter("")
+1abc = 2;
+//Parameter("")
+$fn = 3;
+//Parameter("")
+$x1 = 2;
+g = 0x10;
+//Parameter("")
+_u = 1;
+//Parameter("")
+use_me = 2;
+//Parameter("")
+include_x = 3;
+echo(1e, 1abc, $x1);

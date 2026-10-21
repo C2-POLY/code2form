@@ -1,0 +1,16 @@
+[package]
+name = "c2f-cli"
+description = "Code2Form on the command line: c2f"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "c2f"
+path = "src/main.rs"
+
+[dependencies]
+c2f-lang.workspace = true
+c2f-eval.workspace = true
+c2f-geom.workspace = true

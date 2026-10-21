@@ -1,0 +1,23 @@
+ECHO: "in expr"
+ECHO: 1, "x"
+ECHO: b = 2
+ECHO: "a"
+ECHO: "b"
+ECHO: true
+ECHO: 1
+ECHO: 2
+ECHO: 0
+ECHO: -1
+ECHO: -2
+ECHO: 0
+ECHO: 0.1
+ECHO: 0.2
+ECHO: 0.3
+ECHO: 0.4
+ECHO: 0.5
+ECHO: undef
+ECHO: 5
+ECHO: 7
+ECHO: 
+ECHO: a = undef
+ECHO: 1, a = 2, 3

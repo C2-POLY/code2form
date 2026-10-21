@@ -1,0 +1,8 @@
+group() {
+	group() {
+		group() {
+			cube(size = [2, 2, 2], center = false);
+		}
+	}
+}
+

@@ -1,0 +1,59 @@
+//Parameter("")
+n1 = 100000;
+//Parameter("")
+n2 = 1e+6;
+//Parameter("")
+n3 = 0.0001;
+//Parameter("")
+n4 = 0.00001;
+//Parameter("")
+n5 = 123457;
+//Parameter("")
+n6 = 1e+21;
+//Parameter("")
+n7 = 1;
+//Parameter("")
+n8 = 0.3;
+//Parameter("")
+n9 = 1e+100;
+//Parameter("")
+n10 = 1.23457e+11;
+//Parameter("")
+n11 = 3.14159;
+//Parameter("")
+n12 = 1;
+//Parameter("")
+n13 = 0.5;
+//Parameter("")
+n14 = 100;
+//Parameter("")
+n15 = 5000;
+//Parameter("")
+n16 = -5;
+//Parameter("")
+n17 = [-1, 2];
+n19 = (1e+300 * 1e+300);
+//Parameter("")
+n20 = 0.000123457;
+//Parameter("")
+n21 = 1e+6;
+//Parameter("")
+n22 = 0.00001;
+//Parameter("")
+n23 = 0.000012;
+//Parameter("")
+n24 = 1e-6;
+//Parameter("")
+n25 = 1.5e-6;
+//Parameter("")
+n26 = -1e-6;
+//Parameter("")
+n27 = -0;
+n28 = (1 / 0);
+n29 = (0.1 + 0.2);
+//Parameter("")
+n30 = 2.5e-300;
+//Parameter("")
+n31 = 65536;
+//Parameter("")
+n32 = 1.23457e+6;

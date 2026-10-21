@@ -1,0 +1,18 @@
+function f(n) = let(f = function(x) x + 1000) n == 0 ? 0 : f(n - 1);
+g = function(n) n == 0 ? 0 : let(g = function(x) x + 1000) g(n - 1);
+A = function(n) n + 1000;
+L = function(n) n == 0 ? 0 : A(n - 1);
+M = function(n) n == 0 ? "end" : Q(n - 1);
+echo(f(5), g(5), let(A = L) A(5), let(Q = M) Q(3));
+function nf(n) = n == 0 ? 0 : 1 + nf(n - 1);
+echo(nf(500));
+function fd(n, a = 7) = n == 0 ? a : n == 3 ? fd(n - 1) : fd(n - 1, a + 1);
+function dd(n, $x = 0) = n == 0 ? $x : dd(n - 1, $x = n);
+function de(n, $x = 0) = n == 0 ? $y : de(n - 1, $x = n);
+function lz(n) = n == 0 ? q : let(q = n) lz(n - 1);
+$y = 5;
+q = 42;
+echo(fd(5), dd(10), de(3), lz(3));
+function carry(n) = n == 0 ? $z : let($z = n) carry(n - 1);
+echo(carry(3), dd(200000));
+function k(x) = y; echo(k(1, y = 5));

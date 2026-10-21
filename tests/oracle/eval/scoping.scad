@@ -1,0 +1,17 @@
+x = 1; module m() { echo(x); x = 2; echo(x); } m(); echo(y); y = 5; z = w; w = 2; echo(z);
+module args(a, b=2) echo(a, b); args(1); args(b=3, a=4); args(1, 2, 3); args(c=1); args($fn=4); args(a=1, 2);
+function d(a, b = a * 2) = [a, b];
+echo(d(1), d(b=3, a=2));
+cx = 10; function cl() = function() cx; f2 = cl(); echo(f2());
+function g(x) = x + 1; g = function(x) x * 100; echo(g(1));
+a1 = 1; b1 = a1; a1 = 3; echo(a1, b1);
+function fact(n) = n <= 1 ? 1 : n * fact(n - 1); echo(fact(10), fact(20));
+function tsum(n, acc = 0) = n == 0 ? acc : tsum(n - 1, acc + n); echo(tsum(100000));
+function sp() = $fn; module usesp() echo(sp()); usesp($fn = 12); usesp();
+adder = function(n) function(x) x + n; add5 = adder(5); echo(add5(1), adder(2)(3));
+echo([for (i = [1:3]) let(sq = i * i) if (sq % 2 == 1) sq]);
+echo([for (i = 0, j = 10; i < 4; i = i + 1, j = j - 1) [i, j]]);
+echo([each [1, 2], each "ab", each [0:2], for (v = [[1,2],[3]]) each v]);
+module rec(n) { if (n > 0) { cube(n); rec(n - 1); } } rec(3);
+function apply(f, v) = [for (x = v) f(x)]; echo(apply(function(x) x * 2, [1, 2, 3]));
+echo(let(a = 1) let(b = a + 1) [a, b]);

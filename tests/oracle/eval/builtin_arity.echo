@@ -1,0 +1,16 @@
+ECHO: undef, undef, undef, undef, undef, undef, undef, undef
+ECHO: "p", undef, "c"
+ECHO: undef, undef, undef, undef, undef, undef, undef, undef, undef, undef, undef
+ECHO: [3, 2], [-1, 9]
+ECHO: "abd", "a"
+ECHO: 1, "a", true, true, []
+ECHO: undef, [], [], undef, undef
+ECHO: "a b"
+ECHO: 32
+ECHO: [0, 0, 0], [0, 0, 0], 500, 22.5
+ECHO: undef
+ECHO: undef
+ECHO: 101
+ECHO: undef
+ECHO: 0, 2, 10, undef, undef
+ECHO: 5, 1, undef, undef, undef

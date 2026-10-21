@@ -1,0 +1,21 @@
+[package]
+name = "c2f-geom"
+description = "Geometry kernel: meshes, polygons, boolean operations and exports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+c2f-eval.workspace = true
+manifold-rust = "0.18"
+# Already used by manifold-rust: even-odd unions, and text() unites glyphs
+# on Clipper's integer grid.
+clipper2-rust = "1.2"
+# Inflate for PNG images (surface) and ZIP packages (3MF, zipped AMF).
+miniz_oxide = "0.8"
+ttf-parser = "0.25"
+rustybuzz = "0.20"
+
+[dev-dependencies]
+c2f-lang.workspace = true

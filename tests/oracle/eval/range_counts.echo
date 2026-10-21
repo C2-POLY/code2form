@@ -1,0 +1,26 @@
+ECHO: [0, 0.1, 0.2, 0.3], [0.3, 0.2, 0.1, -5.55112e-17], [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+ECHO: [0, 1, 2, 3], [0, 1, 2]
+ECHO: [], [], [1], [0], [], [5]
+ECHO: -inf, [], [], [1e+300, 2e+300], 11
+ECHO: true, true
+ECHO: [1 : 0 : 1], [0 : 0.333333 : 1], [0 : 1 : 2], [0 : 1 : nan], [1e+300 : 1e+300 : 2e+300]
+ECHO: [0 : 0 : 5], [], [], 0
+ECHO: [0, 1], [0, 1, 2, 3], [10, 9, 8, 7]
+ECHO: [0], [0]
+ECHO: [-1e+308], [-inf], [inf]
+ECHO: 0, 2, 10, undef, undef, 2, undef
+ECHO: true, false, true, false, true, false, true, false
+ECHO: true, false, true, false, true, false
+ECHO: true, false, false, true, true, true, false
+ECHO: undef, undef, undef, undef, "t", [[0 : 2 : 10]], [0, 2, 4, 6, 8, 10]
+ECHO: undef, undef, undef, undef, undef, undef, undef
+ECHO: "B"
+ECHO: "E"
+ECHO: "S"
+ECHO: [0 : 1 : 2]
+ECHO: "B2"
+ECHO: undef
+ECHO: "B4"
+ECHO: "E4"
+ECHO: [0 : 1 : 1]
+ECHO: 1, 2, 3

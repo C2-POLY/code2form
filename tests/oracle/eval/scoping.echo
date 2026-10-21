@@ -1,0 +1,24 @@
+ECHO: 2
+ECHO: 2
+ECHO: 5
+ECHO: undef
+ECHO: 1, 2
+ECHO: 4, 3
+ECHO: 1, 2
+ECHO: undef, 2
+ECHO: undef, 2
+ECHO: 2, 2
+ECHO: [1, undef], [2, 3]
+ECHO: 10
+ECHO: 100
+ECHO: 3, 3
+ECHO: 3.6288e+6, 2.4329e+18
+ECHO: 5.00005e+9
+ECHO: 12
+ECHO: 0
+ECHO: 6, 5
+ECHO: [1, 9]
+ECHO: [[0, 10], [1, 9], [2, 8], [3, 7]]
+ECHO: [1, 2, "a", "b", 0, 1, 2, 1, 2, 3]
+ECHO: [2, 4, 6]
+ECHO: [1, 2]

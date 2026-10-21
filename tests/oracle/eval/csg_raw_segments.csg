@@ -1,0 +1,6 @@
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 0, $fs = 2) {
+	circle($fn = 0, $fa = 0.01, $fs = 2, r = 1);
+}
+text(text = "a", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "Latn", halign = "left", valign = "baseline", $fn = 0, $fa = 0, $fs = 2);
+import(file = "x.stl", layer = "", origin = [0, 0], scale = 1, convexity = 1, $fn = 0, $fa = 0, $fs = 2, timestamp = 0);
+

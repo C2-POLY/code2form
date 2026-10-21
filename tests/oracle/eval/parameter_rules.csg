@@ -1,0 +1,83 @@
+text(text = "123", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = " ", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "é", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "Latn", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "Ωmega", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "日本", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "Hani", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "1a", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "Latn", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "-", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "مرحبا", size = 10, spacing = 1, font = "", direction = "rtl", language = "en", script = "Arab", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "a", size = 10, spacing = 1, font = "", direction = "rtl", language = "en", script = "Arab", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "a", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "Lati", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "a", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "x", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "a", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "Latn", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+text(text = "a", size = 10, spacing = 1, font = "", direction = "ltr", language = "en", script = "Latn", halign = "left", valign = "weird", $fn = 0, $fa = 12, $fs = 2);
+sphere($fn = 0, $fa = 0.01, $fs = 0.01, r = 1);
+sphere($fn = -3, $fa = 0.01, $fs = 0.01, r = 1);
+sphere($fn = 2.5, $fa = 12, $fs = 2, r = 1);
+sphere($fn = 0, $fa = 0.01, $fs = 0.01, r = 1);
+render(convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+render(convexity = -2) {
+	cube(size = [1, 1, 1], center = false);
+}
+render(convexity = 2) {
+	cube(size = [1, 1, 1], center = false);
+}
+render(convexity = 1) {
+	cube(size = [1, 1, 1], center = false);
+}
+polyhedron(points = [[0, 0, 0]], faces = [[0]], convexity = 1);
+linear_extrude(height = 1, center = false, convexity = 1, twist = -5, slices = 2, scale = [0, 0]) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 1, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+rotate_extrude(file = "-500", layer = "", origin = [0, 0], scale = 1, timestamp = 0, angle = 360, convexity = 2, $fn = 0, $fa = 12, $fs = 2);
+rotate_extrude(angle = 45, convexity = 2, $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+projection(cut = false, convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+minkowski(convexity = 4294967295) {
+	cube(size = [1, 1, 1], center = false);
+}
+offset(delta = 1, chamfer = false, $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+offset(delta = 2, chamfer = false, $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+offset(r = 1, $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+color([1, 0, 0, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([-1, -1, -1, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([1, 1, 1, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([0.5, 0, 0.2, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([1, 0, 0, 0.9]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([1, 0, 0, 1]) {
+	cube(size = [1, 1, 1], center = false);
+}
+color([-1, -1, -1, 0.5]) {
+	cube(size = [1, 1, 1], center = false);
+}
+

@@ -1,0 +1,20 @@
+projection(cut = true, convexity = 0) {
+	cube(size = [1, 1, 1], center = false);
+}
+offset(r = 1, $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+surface(file = "x.dat", center = true, invert = false, timestamp = 0);
+text(text = "a", size = 10, spacing = 1, font = "Liberation Sans", direction = "ltr", language = "en", script = "Latn", halign = "left", valign = "baseline", $fn = 0, $fa = 12, $fs = 2);
+linear_extrude(height = 6, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+linear_extrude(height = 2, center = false, convexity = 1, scale = [1, 1], $fn = 0, $fa = 12, $fs = 2) {
+	square(size = [1, 1], center = false);
+}
+rotate_extrude(file = "f.dxf", layer = "L", origin = [1, 2], scale = 3, timestamp = 0, angle = 360, convexity = 2, $fn = 0, $fa = 12, $fs = 2);
+import(file = "x.stl", layer = "5", origin = [0, 0], scale = 1, convexity = 1, $fn = 0, $fa = 12, $fs = 2, timestamp = 0);
+import(file = "x.dxf", layer = "L", origin = [1, 2], scale = 2, convexity = 3, $fn = 0, $fa = 12, $fs = 2, timestamp = 0);
+linear_extrude(file = "f.dxf", layer = "L", origin = [1, 2], timestamp = 0, height = 3, center = true, convexity = 1, twist = 10, slices = 5, scale = [2, 2]);
+rotate_extrude(file = "f.dxf", layer = "L", origin = [1, 2], scale = 3, timestamp = 0, angle = 360, convexity = 2, $fn = 0, $fa = 12, $fs = 2);
+

@@ -1,0 +1,13 @@
+multmatrix([[0.5, 0, 0, 0], [0, 0.5, 0, 0], [0, 0, 0.5, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[0.5, 0, 0, 0], [0, 0.5, 0, 0], [0, 0, 0.5, 0], [0.5, 1, 1.5, 1]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+multmatrix([[inf, nan, nan, nan], [nan, inf, nan, nan], [nan, nan, inf, nan], [nan, nan, nan, nan]]) {
+	cube(size = [1, 1, 1], center = false);
+}
+

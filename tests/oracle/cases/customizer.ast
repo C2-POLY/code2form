@@ -1,0 +1,175 @@
+//Group("Inline")
+//Parameter([1 : 9])
+a0 = 5;
+nl = (1 + 2);
+//Group(" G1 ")
+//Parameter("")
+gap = 2;
+//Group("")
+//Parameter("")
+bd = 3;
+//Group("")
+//Parameter("")
+b2 = 4;
+//Group("")
+//Parameter("")
+b3 = 5;
+//Group("")
+//Parameter([10])
+b4 = 6;
+//Group("")
+//Parameter("")
+b5 = 7;
+//Group("Group Two")
+//Parameter("")
+c1 = 1;
+//Group("")
+//Parameter("")
+c2 = 2;
+//Group("")
+//Description("spaced desc   ")
+//Parameter("")
+c3 = 3;
+//Group("")
+//Parameter("quoted")
+c4 = 4;
+//Group("")
+//Parameter(["foo", "bar"])
+c5 = "s";
+//Group("")
+//Parameter("")
+c6 = 5;
+//Group("")
+//Parameter([-5 : 5])
+c7 = 1;
+//Group("")
+//Parameter([0 : 10])
+c8 = [1, 2];
+//Group("")
+//Parameter("")
+x = 1;
+//Group("")
+//Parameter("")
+y = 2;
+//Group("")
+//Description("d2")
+//Parameter("")
+z = 9;
+//Group("")
+//Parameter("")
+c9 = 1;
+//Group("")
+//Parameter("")
+c10 = 2;
+//Group("Inline")
+//Parameter(10)
+d1 = 1;
+//Group("Inline")
+//Parameter("")
+d2 = 1;
+//Group("Inline")
+//Parameter("")
+d3 = 1;
+//Group("Inline")
+//Parameter("")
+d4 = 1;
+//Group("Inline")
+//Parameter([[10, "Small"], [20, "Large"]])
+d5 = 1;
+//Group("Inline")
+//Parameter([0.5 : 0.1 : 2.5])
+d6 = 1;
+//Group("Inline")
+//Parameter([["a", "b"]])
+d7 = 1;
+//Group("Inline")
+//Parameter(-3)
+d8 = 1;
+//Group("Inline")
+//Parameter([1, "x", "y z"])
+d9 = 1;
+//Group("Inline")
+//Parameter([3 : 4])
+e1 = 1;
+//Group("Inline")
+//Parameter([3 : 4])
+e2 = 1;
+//Group("Inline")
+//Parameter([3 : 4])
+e3 = 1;
+//Group("Inline")
+//Parameter("")
+e4 = 1;
+//Group("Inline")
+//Parameter([1 : 2])
+e5 = 1;
+//Group("Inline")
+//Parameter(["true", "false"])
+e6 = true;
+//Group("Inline")
+//Parameter("")
+e7 = 1;
+//Group("Inline")
+//Parameter([["a", "A"], ["b", "B"]])
+e8 = 1;
+//Group("Inline")
+//Parameter([100 : 2])
+e9 = 1;
+//Group("Inline")
+//Parameter(["abc"])
+f1 = 1;
+//Group("Inline")
+//Parameter("hello world")
+f2 = 1;
+//Group("Inline")
+//Parameter(1.5)
+f3 = 1;
+//Group("Inline")
+//Parameter([["x", "X"]])
+f4 = 1;
+//Group("Inline")
+//Parameter([0.5 : 1])
+f5 = 1;
+//Group("Inline")
+//Parameter("")
+f6 = 1;
+//Group("Inline")
+//Parameter("")
+f7 = 1;
+//Group("Inline")
+//Parameter("")
+f8 = 1;
+//Group("Inline")
+//Parameter([1 : 2])
+f9 = 1;
+//Group("Inline")
+//Parameter("")
+g1 = 1;
+//Group("Inline")
+//Parameter("")
+g2 = undef;
+g3 = [1, a];
+g4 = [1 : a];
+g5 = -x;
+//Group("Inline")
+//Parameter("")
+g6 = !true;
+//Group("Inline")
+//Parameter("")
+g7 = 1;
+//Group("Inline")
+//Parameter("")
+g8 = --1;
+g9 = [for(i = [1]) (i)];
+//Group("Inline")
+//Parameter("")
+h1 = [];
+//Group("Inline")
+//Parameter("")
+h2 = [[1, [2]]];
+//Group("Inline")
+//Parameter(["x"])
+s2 = "a;b";
+//Group("Inline")
+//Parameter("")
+w2 = 1;
