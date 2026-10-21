@@ -15,11 +15,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The fonts below, at the exact version the reference implementation
-  # (release 2021.01) bundles: the text() tests compare against outlines
-  # measured with them. Pinned to the commit of the reference's 2021.01
-  # tag and checked against their SHA-256.
-  FONTS_URL: https://raw.githubusercontent.com/openscad/openscad/41f58fe57c03457a3a8b4dc541ef5654ec3e8c78/fonts/Liberation-2.00.1/ttf
 
 jobs:
   test:
@@ -53,37 +48,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Fetch the Liberation fonts 2.00.1
+      # The text() tests compare against outlines measured with the
+      # Liberation fonts 2.00.1 that the reference implementation (release
+      # 2021.01) bundles; the repository keeps that exact version.
+      - name: Point the font search at the repository's fonts
         shell: bash
-        run: |
-          set -euo pipefail
-          dir="$RUNNER_TEMP/liberation-2.00.1"
-          mkdir -p "$dir"
-          cd "$dir"
-          while read -r sum name; do
-            curl -sSfL --retry 3 -o "$name" "$FONTS_URL/$name"
-            echo "$sum  $name" >> fonts.sha256
-          done <<'EOF'
-          51024fd54bd726167996a9ed45ceb2ccae93be89a848045dd6b715856cb1561d LiberationMono-Bold.ttf
-          a0d13334ec3450aa57da0f0dcb356dc18775417e3662a23af88c94c4ea557e42 LiberationMono-BoldItalic.ttf
-          7be4134e2499920a4d7013e0da9ed2d5bdaccf84825791368761c5cbbf5db48c LiberationMono-Italic.ttf
-          a9b21391536aec1c8fad37f2d5f24750e7f2d63cd86bccbb2463b6e17005f52e LiberationMono-Regular.ttf
-          d723d5a272970aedf296ef6fc628180df6074bce7769701ea9e0d222c052668c LiberationSans-Bold.ttf
-          24b7cf0d06040c9a1b16efc528dc2966a407288938dfa169ee7fe584140a3393 LiberationSans-BoldItalic.ttf
-          e27e6da1f5bbba630d635b8cc2916f84f195735865ea539687df962ae5a98e72 LiberationSans-Italic.ttf
-          e5b0af421ea2bfbc1ac8d251d647268087ae82786234c57f757d1f0b90fa8b49 LiberationSans-Regular.ttf
-          7a68170c1129e294639770c83f79033baaa59e384d561e979bbfc5ce11fc9854 LiberationSerif-Bold.ttf
-          78c2810297cd3d9adead7a2bc242b67a095576ae020f19373a8825e504f5c52d LiberationSerif-BoldItalic.ttf
-          ac0d2e385900315fbe12e0a175b5e22c8e8340f500d8b1e9b0e99c5ac065a1eb LiberationSerif-Italic.ttf
-          26cd653d3312cee66f1d4f2c1065ba2ad324abd411b298f771bf7057e213d723 LiberationSerif-Regular.ttf
-          EOF
-          if command -v sha256sum >/dev/null; then
-            sha256sum -c fonts.sha256
-          else
-            shasum -a 256 -c fonts.sha256
-          fi
-          rm fonts.sha256
-          echo "OPENSCAD_FONT_PATH=$dir" >> "$GITHUB_ENV"
+        run: echo "OPENSCAD_FONT_PATH=$GITHUB_WORKSPACE/fonts" >> "$GITHUB_ENV"
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

@@ -74,9 +74,9 @@ scripts/oracle.sh                            # regenerate the goldens from the r
 The live comparisons and the goldens need the reference release 2021.01,
 installed in `/Applications` or wherever `C2F_REFERENCE` points (its
 executable). The `text()` tests need the Liberation fonts 2.00.1 that
-release bundles, read from its app or from the font path variable
-`crates/geom/src/text/fonts.rs` reads; CI fetches them and sets that
-variable on macOS, Windows and Linux.
+release bundles: `fonts/` keeps that exact version, which CI points the
+font path variable `crates/geom/src/text/fonts.rs` reads at, on macOS,
+Windows and Linux.
 
 ## Licence
 
@@ -85,8 +85,9 @@ or the [MIT licence](LICENSE-MIT), at your option. Unless you state
 otherwise, any contribution you submit for inclusion is licensed the same
 way, without any additional terms.
 
-The macOS app bundles the Liberation fonts (SIL Open Font License 1.1)
-and the MCAD library (LGPL 2.1), each with its licence; they are copied
-from the reference app when the app is built and are not part of this
+The Liberation fonts 2.00.1 in `fonts/` are under the SIL Open Font
+License 1.1 (`fonts/Liberation-2.00.1/LICENSE`). The macOS app bundles
+them and the MCAD library (LGPL 2.1), each with its licence; the app
+build copies them from the reference app, and MCAD is not part of this
 repository. Some test designs and data in `tests/oracle` come from the
 reference release's examples, dedicated to the public domain (CC0).
