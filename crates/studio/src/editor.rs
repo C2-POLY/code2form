@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, CornerRadius, FontId, Frame, Galley, Id, Key, Margin, Modifiers, Pos2,
+    self, Align, Align2, Button, Color32, CornerRadius, FontId, Frame, Galley, Id, Key, Layout, Margin, Modifiers, Pos2,
     Rect, RichText, Shape, Stroke, TextBuffer, TextEdit, Vec2,
 };
 
@@ -269,19 +269,25 @@ impl Editor {
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(10, 6));
         let bar = frame.show(ui, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
-            let field_width = (ui.available_width() - 196.0).max(80.0);
+            // The buttons and the count are laid out first, from the right;
+            // each field then takes what is left of the row and never more,
+            // since a wider row would widen the resizable editor panel,
+            // whose next frame would widen the field again.
             let font = theme::code_font();
             let mut searched = false;
-            ui.horizontal(|ui| {
-                let query = TextEdit::singleline(&mut self.find.query)
-                    .id(query_id)
-                    .font(font.clone())
-                    .hint_text("Find")
-                    .desired_width(field_width);
-                searched |= ui.add(query).changed();
-                let case = ui.toggle_value(&mut self.find.case_sensitive, RichText::new("Aa").size(12.5));
-                searched |= case.on_hover_text("Match case").changed();
-                ui.add_space(4.0);
+            ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), 22.0), Layout::right_to_left(Align::Center), |ui| {
+                if ui.add(small_button("×")).on_hover_text("Close (Esc)").clicked() {
+                    actions.push(FindAction::Close);
+                }
+                let any = !self.find.matches.is_empty() && !self.find.query.is_empty();
+                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text("Next match (⌘G)");
+                if next.clicked() {
+                    actions.push(FindAction::Step { forward: true });
+                }
+                let previous = ui.add_enabled(any, small_button("⏶")).on_hover_text("Previous match (⇧⌘G)");
+                if previous.clicked() {
+                    actions.push(FindAction::Step { forward: false });
+                }
                 let count = if self.find.query.is_empty() {
                     String::new()
                 } else {
@@ -290,34 +296,31 @@ impl Editor {
                 };
                 let color = if self.find.matches.is_empty() { theme::ERROR } else { theme::TEXT_DIM };
                 ui.add_sized([68.0, 20.0], egui::Label::new(RichText::new(count).size(12.0).color(color)));
-                let any = !self.find.matches.is_empty() && !self.find.query.is_empty();
-                let previous = ui.add_enabled(any, small_button("⏶")).on_hover_text("Previous match (⇧⌘G)");
-                if previous.clicked() {
-                    actions.push(FindAction::Step { forward: false });
-                }
-                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text("Next match (⌘G)");
-                if next.clicked() {
-                    actions.push(FindAction::Step { forward: true });
-                }
-                if ui.add(small_button("×")).on_hover_text("Close (Esc)").clicked() {
-                    actions.push(FindAction::Close);
-                }
+                ui.add_space(4.0);
+                let case = ui.toggle_value(&mut self.find.case_sensitive, RichText::new("Aa").size(12.5));
+                searched |= case.on_hover_text("Match case").changed();
+                let query = TextEdit::singleline(&mut self.find.query)
+                    .id(query_id)
+                    .font(font.clone())
+                    .hint_text("Find")
+                    .desired_width(field_width(ui));
+                searched |= ui.add(query).changed();
             });
             if self.find.replace {
-                ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), 22.0), Layout::right_to_left(Align::Center), |ui| {
+                    let any = self.find.current.is_some() && !self.find.query.is_empty();
+                    if ui.add_enabled(any, Button::new("Replace All")).on_hover_text("Replace every match").clicked() {
+                        actions.push(FindAction::ReplaceAll);
+                    }
+                    if ui.add_enabled(any, Button::new("Replace")).on_hover_text("Replace this match").clicked() {
+                        actions.push(FindAction::Replace);
+                    }
                     let replacement = TextEdit::singleline(&mut self.find.replacement)
                         .id(replacement_id)
                         .font(font)
                         .hint_text("Replace")
-                        .desired_width(field_width);
+                        .desired_width(field_width(ui));
                     ui.add(replacement);
-                    let any = self.find.current.is_some() && !self.find.query.is_empty();
-                    if ui.add_enabled(any, Button::new("Replace")).on_hover_text("Replace this match").clicked() {
-                        actions.push(FindAction::Replace);
-                    }
-                    if ui.add_enabled(any, Button::new("Replace All")).on_hover_text("Replace every match").clicked() {
-                        actions.push(FindAction::ReplaceAll);
-                    }
                 });
             }
             searched
@@ -517,6 +520,12 @@ fn match_selection(text: &str, m: Range<usize>) -> CCursorRange {
 }
 
 /// A compact button for the find bar's arrows and close.
+/// The text width a single-line field can ask for and still fit, frame
+/// included, in what is left of the row.
+fn field_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() - 2.0 * ui.spacing().button_padding.x - 2.0).max(40.0)
+}
+
 fn small_button(label: &str) -> Button<'_> {
     Button::new(RichText::new(label).size(12.0)).min_size(Vec2::new(24.0, 22.0)).frame(false)
 }
@@ -679,6 +688,37 @@ mod tests {
 
     fn count(editor: &Editor) -> String {
         find::count_label(editor.find.matches.len(), editor.find.current)
+    }
+
+    #[test]
+    fn find_bar_keeps_the_resizable_panel_width() {
+        // The app shows the editor in a resizable side panel, which grows
+        // to fit a row wider than it: the bar must never be that row.
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut editor = Editor::new();
+        let mut text = "cube(10); sphere(5);".to_string();
+        let mut widths = Vec::new();
+        for n in 0..12 {
+            if n == 1 {
+                editor.find(FindRequest::Open { replace: true });
+            }
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                let panel = egui::SidePanel::left("editor")
+                    .frame(Frame::new().fill(theme::EDITOR))
+                    .resizable(true)
+                    .default_width(320.0)
+                    .width_range(260.0..=900.0)
+                    .show(ctx, |ui| editor.show(ui, &mut text));
+                widths.push(panel.response.rect.width());
+            });
+        }
+        assert!(editor.find.open && editor.find.replace);
+        assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.5), "the panel width moved: {widths:?}");
     }
 
     #[test]
