@@ -1,5 +1,7 @@
 # Code2Form
 
+[![CI](https://github.com/C2-POLY/code2form/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/C2-POLY/code2form/actions/workflows/ci.yml)
+
 Parametric 3D design as code, with a live preview. Designs are short
 programs saved as `.c2f` files, and Code2Form also opens `.scad` files as
 they are. Written in Rust, it renders as you type.
@@ -71,7 +73,10 @@ scripts/oracle.sh                            # regenerate the goldens from the r
 
 The live comparisons and the goldens need the reference release 2021.01,
 installed in `/Applications` or wherever `C2F_REFERENCE` points (its
-executable).
+executable). The `text()` tests need the Liberation fonts 2.00.1 that
+release bundles, read from its app or from the font path variable
+`crates/geom/src/text/fonts.rs` reads; CI fetches them and sets that
+variable on macOS, Windows and Linux.
 
 ## Licence
 
