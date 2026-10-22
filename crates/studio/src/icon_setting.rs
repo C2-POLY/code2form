@@ -1,34 +1,9 @@
-//! The app icon the user picked in the settings: kept between launches in
-//! a small text file, shown in the Dock and the Finder on macOS, and as
-//! the window icon elsewhere.
-
-use std::path::{Path, PathBuf};
+//! The app icon the user picked in the settings: shown in the Dock and
+//! the Finder on macOS, and as the window icon elsewhere.
 
 use eframe::egui;
 
 use crate::app_icon::{self, Layout, Tint};
-
-/// The per-user settings folder, except in screenshot runs, which neither
-/// read nor change the choice.
-pub fn store() -> Option<PathBuf> {
-    if std::env::var_os("CODE2FORM_SCREENSHOT").is_some() {
-        return None;
-    }
-    Some(crate::recent::settings_dir()?.join("app-icon.txt"))
-}
-
-/// The tint kept in `store`; Graphite when there is none or it is unknown.
-pub fn load(store: Option<&Path>) -> Tint {
-    store.and_then(|s| std::fs::read_to_string(s).ok()).and_then(|id| Tint::from_id(&id)).unwrap_or_default()
-}
-
-pub fn save(store: Option<&Path>, tint: Tint) -> std::io::Result<()> {
-    let Some(store) = store else { return Ok(()) };
-    if let Some(dir) = store.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(store, format!("{}\n", tint.id()))
-}
 
 /// The icon for eframe to show from the first frame: the Dock's on macOS,
 /// the window's elsewhere.
@@ -136,28 +111,5 @@ mod mac {
             NSWorkspaceIconCreationOptions(0),
         );
         if done { Ok(()) } else { Err(format!("cannot change the icon of {bundle}")) }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn survives_a_save_and_load() {
-        let dir = std::env::temp_dir().join(format!("code2form-icon-store-{}", std::process::id()));
-        let store = dir.join("settings").join("app-icon.txt");
-        assert_eq!(load(Some(&store)), Tint::Graphite, "no file yet");
-        save(Some(&store), Tint::Teal).unwrap();
-        assert_eq!(load(Some(&store)), Tint::Teal);
-        std::fs::write(&store, "plaid\n").unwrap();
-        assert_eq!(load(Some(&store)), Tint::Graphite, "an unknown tint");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn no_store_keeps_the_default() {
-        assert_eq!(load(None), Tint::Graphite);
-        save(None, Tint::Red).unwrap();
     }
 }

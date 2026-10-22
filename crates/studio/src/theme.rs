@@ -1,5 +1,7 @@
 //! The dark theme: colors, spacing and text sizes.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, Theme, Vec2, Visuals,
 };
@@ -28,6 +30,8 @@ pub const FIND_CURRENT: Color32 = rgb(0x8c, 0x6c, 0x3a);
 pub const RAISED: Color32 = rgb(0x26, 0x2a, 0x33);
 pub const HOVER: Color32 = rgb(0x30, 0x35, 0x40);
 pub const BORDER: Color32 = rgb(0x2c, 0x31, 0x3b);
+/// Controls hovered over a raised surface.
+pub const BORDER_STRONG: Color32 = rgb(0x3d, 0x44, 0x52);
 
 pub const TEXT: Color32 = rgb(0xd8, 0xdc, 0xe4);
 pub const TEXT_DIM: Color32 = rgb(0x8b, 0x94, 0xa5);
@@ -48,9 +52,20 @@ pub const CODE_SPECIAL: Color32 = rgb(0xff, 0x7a, 0x93);
 pub const CODE_OPERATOR: Color32 = rgb(0x9a, 0xa4, 0xb5);
 pub const CODE_DEFINITION: Color32 = rgb(0xf5, 0xd0, 0x6c);
 
+/// The size of `code_font`, set from the settings.
+static CODE_SIZE: AtomicU32 = AtomicU32::new(13.5f32.to_bits());
+
 /// The editor and console font.
 pub fn code_font() -> FontId {
-    FontId::new(13.5, FontFamily::Monospace)
+    FontId::new(f32::from_bits(CODE_SIZE.load(Ordering::Relaxed)), FontFamily::Monospace)
+}
+
+/// Sets the editor's and the console's text size, in points.
+pub fn set_code_size(ctx: &egui::Context, size: f32) {
+    CODE_SIZE.store(size.to_bits(), Ordering::Relaxed);
+    ctx.style_mut_of(Theme::Dark, |style| {
+        style.text_styles.insert(TextStyle::Monospace, code_font());
+    });
 }
 
 pub fn apply(ctx: &egui::Context) {
@@ -113,7 +128,7 @@ fn visuals() -> Visuals {
 
     w.hovered.bg_fill = HOVER;
     w.hovered.weak_bg_fill = HOVER;
-    w.hovered.bg_stroke = Stroke::new(1.0, rgb(0x3d, 0x44, 0x52));
+    w.hovered.bg_stroke = Stroke::new(1.0, BORDER_STRONG);
     w.hovered.fg_stroke = Stroke::new(1.5, Color32::WHITE);
     w.hovered.corner_radius = radius;
     w.hovered.expansion = 0.0;

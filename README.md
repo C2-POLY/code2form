@@ -9,9 +9,12 @@ they are. Written in Rust, it renders as you type.
 - **Editor and live 3D view**: syntax highlighting, errors marked on their
   line, re-render 400 ms after the last keystroke, orbit, pan and zoom,
   and a turntable that turns the view around the model;
-  Open Recent lists the last ten files opened or saved; Settings (⌘,)
-  offers the app icon in ten tints, graphite by default, shown in the
-  Dock and the Finder.
+  Open Recent lists the last ten files opened or saved.
+- **Settings** (⌘,): the app icon in ten tints (graphite by default,
+  shown in the Dock and the Finder), the code's size, whether to render
+  as you type and after what pause, and folders searched for libraries
+  and for `text()`'s fonts before the default ones. The grid, the axes
+  and the layer height are kept as left.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text
   fields, grouped by `/* [Group] */`; presets are saved next to the design

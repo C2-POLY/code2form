@@ -3,8 +3,8 @@
 //! implementation's fontconfig does for the fonts it bundles and the
 //! system's.
 //!
-//! The bundled directory is searched first, then the system font
-//! directories. Families compare ignoring case and spaces. A `style=`
+//! The folders the app's settings name are searched first, then the
+//! bundled directory, then the system font directories. Families compare ignoring case and spaces. A `style=`
 //! must name a face's style exactly (ignoring case); otherwise, and when
 //! it names none, the face closest in slant and then weight to the
 //! request (regular upright by default) wins, as fontconfig's matching
@@ -90,14 +90,44 @@ pub fn load(name: &str, warnings: &mut Vec<String>) -> Option<Font> {
             }
         }
     };
-    let data = read_cached(&entry.path)?;
-    Some(Font { data, index: entry.index })
+    let (path, index) = entry;
+    let data = read_cached(&path)?;
+    Some(Font { data, index })
 }
 
-/// The best face of `family`, searching the bundled fonts before the
-/// system's.
-fn select(request: &Request, family: &str) -> Option<&'static Entry> {
-    best(bundled(), request, family).or_else(|| best(system(), request, family))
+/// The best face of `family` (its file and index), searching the settings'
+/// folders, then the bundled fonts, then the system's.
+fn select(request: &Request, family: &str) -> Option<(PathBuf, u32)> {
+    let chosen = chosen();
+    let entry = best(&chosen, request, family)
+        .or_else(|| best(bundled(), request, family))
+        .or_else(|| best(system(), request, family))?;
+    Some((entry.path.clone(), entry.index))
+}
+
+/// The folders to search before all others, from the app's settings, and
+/// the faces found in them since they were last set.
+struct Chosen {
+    folders: Vec<PathBuf>,
+    entries: Option<Arc<Vec<Entry>>>,
+}
+
+static CHOSEN: Mutex<Chosen> = Mutex::new(Chosen { folders: Vec::new(), entries: None });
+
+/// Searches `folders` (recursively) before the bundled and system fonts.
+/// Text rendered from then on uses them; the folders are scanned once, on
+/// the first text that needs a font.
+pub fn set_folders(folders: Vec<PathBuf>) {
+    let mut chosen = CHOSEN.lock().unwrap_or_else(|e| e.into_inner());
+    if chosen.folders != folders {
+        *chosen = Chosen { folders, entries: None };
+    }
+}
+
+fn chosen() -> Arc<Vec<Entry>> {
+    let mut chosen = CHOSEN.lock().unwrap_or_else(|e| e.into_inner());
+    let Chosen { folders, entries } = &mut *chosen;
+    Arc::clone(entries.get_or_insert_with(|| Arc::new(scan(folders))))
 }
 
 fn best<'a>(entries: &'a [Entry], request: &Request, family: &str) -> Option<&'a Entry> {
@@ -368,6 +398,18 @@ fn read_cached(path: &Path) -> Option<Arc<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chosen_folders_are_scanned_again_when_they_change() {
+        let dir = std::env::temp_dir().join(format!("c2f-font-folders-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("not-a-font.ttf"), b"nothing here").unwrap();
+        set_folders(vec![dir.clone()]);
+        assert!(chosen().is_empty(), "a file that is no font has no faces");
+        set_folders(Vec::new());
+        assert!(CHOSEN.lock().unwrap().entries.is_none(), "the old scan is dropped");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn names_parse_like_fontconfig() {
