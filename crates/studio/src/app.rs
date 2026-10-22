@@ -5,16 +5,18 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, Frame, Id, Key, KeyboardShortcut, Layout, Margin, Modifiers, RichText,
-    Sense, Stroke, Vec2,
+    self, Align, Button, Color32, CornerRadius, Frame, Id, Key, KeyboardShortcut, Layout, Margin, Modifiers, Rect,
+    RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use eframe::glow;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::app_icon::{self, Tint};
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
+use crate::icon_setting;
 use crate::open_events;
 use crate::pause_edit;
 use crate::recent::RecentFiles;
@@ -44,6 +46,11 @@ const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F)
 const FIND_REPLACE: KeyboardShortcut = KeyboardShortcut::new(Modifiers { alt: true, ..Modifiers::COMMAND }, Key::F);
 const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
 const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::G);
+const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+
+/// The app icons in the settings, in points, and how many in a row.
+const ICON_CHOICE: f32 = 56.0;
+const ICONS_PER_ROW: usize = 5;
 
 /// Something that would lose unsaved edits, waiting for confirmation.
 #[derive(Clone)]
@@ -105,6 +112,14 @@ pub struct StudioApp {
     /// parameters.
     customizer_open: Option<bool>,
     recent: RecentFiles,
+    /// The app icon picked in the settings, and where the choice is kept.
+    icon: Tint,
+    icon_store: Option<PathBuf>,
+    settings_open: bool,
+    /// The icons the settings offer, drawn when first shown.
+    icon_choices: Vec<TextureHandle>,
+    /// The icon at the toolbar's left, in the tint picked.
+    logo: TextureHandle,
     confirm: Option<Pending>,
     allow_close: bool,
     title: String,
@@ -112,7 +127,7 @@ pub struct StudioApp {
 }
 
 impl StudioApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>, icon: Tint) -> Self {
         theme::apply(&cc.egui_ctx);
         open_events::wake(&cc.egui_ctx);
         // Launched by opening a file in the Finder.
@@ -139,6 +154,11 @@ impl StudioApp {
             customizer: Customizer::default(),
             customizer_open: None,
             recent: RecentFiles::load(crate::recent::store()),
+            icon,
+            icon_store: icon_setting::store(),
+            settings_open: false,
+            icon_choices: Vec::new(),
+            logo: logo_texture(&cc.egui_ctx, icon),
             confirm: None,
             allow_close: false,
             title: String::new(),
@@ -153,6 +173,9 @@ impl StudioApp {
                 app.render_now();
             }
             None => app.render_now(),
+        }
+        if let Err(err) = icon_setting::restore(icon) {
+            app.console.log(Level::Warning, format!("Cannot give the app its {} icon: {err}", icon.name()));
         }
         app.editor.focus(&cc.egui_ctx);
         app
@@ -449,10 +472,13 @@ impl StudioApp {
     // ---- Input ----
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        let [save_as, save, open, new, render, export] = ctx.input_mut(|i| {
+        let [save_as, save, open, new, render, export, settings] = ctx.input_mut(|i| {
             // Shift+Cmd+S first: Cmd+S also matches it.
-            [SAVE_AS, SAVE, OPEN, NEW, RENDER, EXPORT].map(|s| i.consume_shortcut(&s))
+            [SAVE_AS, SAVE, OPEN, NEW, RENDER, EXPORT, SETTINGS].map(|s| i.consume_shortcut(&s))
         });
+        if settings {
+            self.settings_open = true;
+        }
         if save_as {
             self.save_as();
         } else if save {
@@ -507,7 +533,7 @@ impl StudioApp {
         egui::TopBottomPanel::top("toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                logo(ui);
+                ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
                 ui.label(RichText::new("Code2Form").strong().color(theme::TEXT).size(14.5));
                 ui.add_space(10.0);
                 toolbar_separator(ui);
@@ -566,6 +592,10 @@ impl StudioApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    if tool_button(ui, "Settings…", "Settings", Some(SETTINGS)).clicked() {
+                        self.settings_open = true;
+                    }
+                    toolbar_separator(ui);
                     let mut shown = self.customizer_shown();
                     let toggle = ui.toggle_value(&mut shown, "Customizer");
                     if toggle.on_hover_text("Show the parameters the file declares").changed() {
@@ -840,6 +870,69 @@ impl StudioApp {
         }
     }
 
+    fn settings_dialog(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        if self.icon_choices.is_empty() {
+            let pixels = (ICON_CHOICE * ctx.pixels_per_point()).ceil() as usize;
+            self.icon_choices = Tint::ALL.iter().map(|&tint| icon_texture(ctx, tint, pixels)).collect();
+        }
+        let mut chosen = None;
+        let mut done = false;
+        let modal = egui::Modal::new(Id::new("settings")).show(ctx, |ui| {
+            ui.label(RichText::new("Settings").heading().color(theme::TEXT));
+            ui.add_space(12.0);
+            ui.label(RichText::new("App icon").strong().color(theme::TEXT));
+            let shown_in = if cfg!(target_os = "macos") { "the Dock and the Finder" } else { "the window's title bar" };
+            ui.label(RichText::new(format!("Shown in {shown_in}.")).color(theme::TEXT_DIM));
+            ui.add_space(10.0);
+            for (row, tints) in Tint::ALL.chunks(ICONS_PER_ROW).enumerate() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    for (column, &tint) in tints.iter().enumerate() {
+                        let texture = &self.icon_choices[row * ICONS_PER_ROW + column];
+                        if icon_choice(ui, texture, tint, tint == self.icon).clicked() {
+                            chosen = Some(tint);
+                        }
+                    }
+                });
+            }
+            ui.add_space(14.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let button = Button::new(RichText::new("Done").color(Color32::WHITE).strong()).fill(theme::ACCENT);
+                if ui.add(button).clicked() {
+                    done = true;
+                }
+            });
+        });
+        if let Some(tint) = chosen {
+            self.choose_icon(ctx, tint);
+        }
+        if done || modal.should_close() {
+            self.settings_open = false;
+        }
+    }
+
+    /// Shows `tint` from now on and keeps the choice.
+    fn choose_icon(&mut self, ctx: &egui::Context, tint: Tint) {
+        if tint == self.icon {
+            return;
+        }
+        self.icon = tint;
+        self.logo = logo_texture(ctx, tint);
+        if let Err(err) = icon_setting::save(self.icon_store.as_deref(), tint) {
+            self.console.log(Level::Warning, format!("Cannot save the app icon: {err}"));
+        }
+        match icon_setting::apply(ctx, tint) {
+            Ok(()) => self.console.log(Level::Info, format!("App icon: {}", tint.name())),
+            Err(err) => {
+                let message = format!("The Dock shows the {} icon while the app runs, but {err}", tint.name());
+                self.console.log(Level::Warning, message);
+            }
+        }
+    }
+
     fn confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(action) = self.confirm.clone() else { return };
         #[derive(Clone, Copy)]
@@ -915,6 +1008,7 @@ impl eframe::App for StudioApp {
         self.editor_panel(ctx);
         self.customizer_panel(ctx);
         self.view_panel(ctx);
+        self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
 
         if let Some(deadline) = self.render_deadline {
@@ -947,12 +1041,40 @@ impl eframe::App for StudioApp {
     }
 }
 
-fn logo(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+/// The app icon in `tint`, `pixels` square, for the settings.
+fn icon_texture(ctx: &egui::Context, tint: Tint, pixels: usize) -> TextureHandle {
+    let image = app_icon::render(tint, pixels, app_icon::Layout::Full);
+    let image = egui::ColorImage::from_rgba_premultiplied([pixels, pixels], &image.premultiplied);
+    ctx.load_texture(format!("app-icon-{}-{pixels}", tint.id()), image, TextureOptions::LINEAR)
+}
+
+/// The icon at the toolbar's left: 18 points, drawn for sharp screens.
+fn logo_texture(ctx: &egui::Context, tint: Tint) -> TextureHandle {
+    icon_texture(ctx, tint, (18.0 * ctx.pixels_per_point().max(2.0)).ceil() as usize)
+}
+
+/// One icon the settings offer, with its name, ringed when picked.
+fn icon_choice(ui: &mut egui::Ui, texture: &TextureHandle, tint: Tint, selected: bool) -> egui::Response {
+    let size = Vec2::new(ICON_CHOICE + 16.0, ICON_CHOICE + 30.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, tint.name()));
+    let center = rect.center_top() + Vec2::new(0.0, 8.0 + ICON_CHOICE / 2.0);
+    let icon = Rect::from_center_size(center, Vec2::splat(ICON_CHOICE));
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(5), theme::ACCENT);
-    let inner = rect.shrink(5.0);
-    painter.rect_filled(inner, CornerRadius::same(1), Color32::from_rgb(0xe8, 0xf0, 0xff));
+    if selected || response.hovered() {
+        let (color, width): (Color32, f32) = if selected { (theme::ACCENT, 2.5) } else { (theme::BORDER, 1.5) };
+        painter.rect_stroke(icon.expand(4.0), CornerRadius::same(17), Stroke::new(width, color), StrokeKind::Outside);
+    }
+    egui::Image::new(texture).paint_at(ui, icon);
+    let color = if selected { theme::TEXT } else { theme::TEXT_DIM };
+    painter.text(
+        rect.center_bottom() - Vec2::new(0.0, 2.0),
+        egui::Align2::CENTER_BOTTOM,
+        tint.name(),
+        egui::FontId::proportional(11.5),
+        color,
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn toolbar_separator(ui: &mut egui::Ui) {
