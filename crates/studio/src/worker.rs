@@ -27,6 +27,7 @@ use crate::console::{Level, Line};
 pub const STACK: usize = 1 << 30;
 
 /// What the viewer draws, in plain data.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     pub solid: RenderMesh,
     pub highlights: RenderMesh,
@@ -82,6 +83,8 @@ pub struct RenderOutcome {
     /// render again when one changes: the circuit its `// @circuit` names
     /// and that circuit's parts.
     pub watch: Vec<PathBuf>,
+    /// The design read `$t`: it is animated.
+    pub animated: bool,
 }
 
 pub enum Reply {
@@ -93,7 +96,7 @@ pub enum Reply {
 }
 
 enum Request {
-    Render { generation: u64, source: String, path: PathBuf, values: Vec<(String, Literal)> },
+    Render { generation: u64, source: String, path: PathBuf, values: Vec<(String, Literal)>, t: f64 },
     Export { target: PathBuf, format: Format, options: ExportOptions },
     Libraries(Vec<PathBuf>),
 }
@@ -180,11 +183,12 @@ impl Worker {
     }
 
     /// Queues a render of `source`, located at `path` for its imports, with
-    /// customizer `values` for its parameters, and returns its generation.
-    pub fn render(&self, source: String, path: PathBuf, values: Vec<(String, Literal)>) -> u64 {
+    /// customizer `values` for its parameters and `$t` at `t`, and returns
+    /// its generation.
+    pub fn render(&self, source: String, path: PathBuf, values: Vec<(String, Literal)>, t: f64) -> u64 {
         let generation = self.latest.load(Ordering::Acquire) + 1;
         self.latest.store(generation, Ordering::Release);
-        let _ = self.requests.send(Request::Render { generation, source, path, values });
+        let _ = self.requests.send(Request::Render { generation, source, path, values, t });
         generation
     }
 
@@ -220,14 +224,16 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         let mut exports = Vec::new();
         for request in std::iter::once(first).chain(requests.try_iter()) {
             match request {
-                Request::Render { generation, source, path, values } => render = Some((generation, source, path, values)),
+                Request::Render { generation, source, path, values, t } => {
+                    render = Some((generation, source, path, values, t))
+                }
                 Request::Export { target, format, options } => exports.push((target, format, options)),
                 Request::Libraries(folders) => {
                     library_paths = folders.into_iter().chain(defaults.iter().cloned()).collect()
                 }
             }
         }
-        if let Some((generation, source, path, values)) = render {
+        if let Some((generation, source, path, values, t)) = render {
             if generation == latest.load(Ordering::Acquire) && circuit::is_circuit(&path) {
                 let current = || generation == latest.load(Ordering::Acquire);
                 let read = |circuit: Arc<c2f_circuit::Circuit>| {
@@ -246,7 +252,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
                     ctx.request_repaint();
                 }
             } else if generation == latest.load(Ordering::Acquire) {
-                let (outcome, rendered) = render_source(generation, &source, &path, &values, &library_paths);
+                let (outcome, rendered) = render_source(generation, &source, &path, &values, t, &library_paths);
                 // A newer request arrived meanwhile: this result is stale.
                 if generation == latest.load(Ordering::Acquire) {
                     if rendered.is_some() {
@@ -274,14 +280,17 @@ fn render_source(
     source: &str,
     path: &Path,
     values: &[(String, Literal)],
+    t: f64,
     library_paths: &[PathBuf],
 ) -> (RenderOutcome, Option<Shown>) {
     let start = Instant::now();
     let mut console = Vec::new();
     let mut parameters = None;
     let mut annotation_error = None;
+    let mut animated = false;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        pipeline(source, path, values, library_paths, &mut console, &mut parameters, &mut annotation_error)
+        let report = Report { console: &mut console, parameters: &mut parameters, annotation_error: &mut annotation_error, animated: &mut animated };
+        pipeline(source, path, values, t, library_paths, report)
     }))
     .unwrap_or_else(
         |panic| {
@@ -309,7 +318,8 @@ fn render_source(
         Err(line) => (Err(line), None),
     };
     let watch = circuit_files(source, path, library_paths);
-    (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters, annotation_error, watch }, shown)
+    let elapsed = start.elapsed();
+    (RenderOutcome { generation, elapsed, console, result, parameters, annotation_error, watch, animated }, shown)
 }
 
 /// The circuit a design names in `// @circuit`, and its part files.
@@ -374,16 +384,17 @@ fn render_circuit(
         Err(None)
     });
     let watch = Vec::new();
-    RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters: None, annotation_error, watch }
+    RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters: None, annotation_error, watch, animated: false }
 }
 
 /// Renders a part of a circuit, its parameters set in `source`, as a
 /// design of its own.
 pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> PartRender {
     let mut console = Vec::new();
-    let (mut parameters, mut annotation_error) = (None, None);
+    let (mut parameters, mut annotation_error, mut animated) = (None, None, false);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        pipeline(source, path, &[], library_paths, &mut console, &mut parameters, &mut annotation_error)
+        let report = Report { console: &mut console, parameters: &mut parameters, annotation_error: &mut annotation_error, animated: &mut animated };
+        pipeline(source, path, &[], 0.0, library_paths, report)
     }))
     .unwrap_or_else(|panic| {
         console.push(Line::new(Level::Error, format!("internal error in {}: {}", path.display(), panic_message(&*panic))));
@@ -461,15 +472,28 @@ pub fn render_enclosure(
     }
 }
 
+/// What a render reports besides its model.
+struct Report<'a> {
+    console: &'a mut Vec<Line>,
+    /// The customizer parameters of the file; `None` when it did not parse.
+    parameters: &'a mut Option<Vec<Parameter>>,
+    /// The line of the first badly written electronics annotation.
+    annotation_error: &'a mut Option<usize>,
+    /// The program read `$t`.
+    animated: &'a mut bool,
+}
+
+/// Renders `source` at `path`, its parameters set to `values` and `$t` to
+/// `t`.
 fn pipeline(
     source: &str,
     path: &Path,
     values: &[(String, Literal)],
+    t: f64,
     library_paths: &[PathBuf],
-    console: &mut Vec<Line>,
-    parameters: &mut Option<Vec<Parameter>>,
-    annotation_error: &mut Option<usize>,
+    report: Report,
 ) -> Result<(Rendered, c2f_eval::Program), Option<usize>> {
+    let Report { console, parameters, annotation_error, animated } = report;
     let mut program = match c2f_eval::Program::load(source, path, library_paths) {
         Ok(program) => program,
         Err(err) => {
@@ -492,7 +516,9 @@ fn pipeline(
         program.set_parameter(name, value);
     }
     *parameters = Some(found);
+    program.t = t;
     let output = c2f_eval::evaluate(&program);
+    *animated = output.animated;
     console.extend(output.echo.into_iter().map(|text| Line::new(Level::Echo, text)));
     console.extend(output.warnings.into_iter().map(|text| Line::new(Level::Warning, text)));
     if let Some(error) = output.error {
@@ -597,9 +623,9 @@ mod tests {
     #[test]
     fn only_the_newest_render_is_reported_and_kept_for_export() {
         let worker = Worker::spawn(egui::Context::default());
-        worker.render("cube(1);".into(), path(), Vec::new());
-        worker.render("cube(2);".into(), path(), Vec::new());
-        let last = worker.render("echo(\"hi\"); sphere(3);".into(), path(), Vec::new());
+        worker.render("cube(1);".into(), path(), Vec::new(), 0.0);
+        worker.render("cube(2);".into(), path(), Vec::new(), 0.0);
+        let last = worker.render("echo(\"hi\"); sphere(3);".into(), path(), Vec::new(), 0.0);
         let replies = wait_for(&worker, last);
         let generations: Vec<u64> = replies
             .iter()
@@ -653,7 +679,7 @@ mod tests {
     #[test]
     fn flat_models_export_as_drawings() {
         let worker = Worker::spawn(egui::Context::default());
-        let generation = worker.render("square([20, 10]);".into(), path(), Vec::new());
+        let generation = worker.render("square([20, 10]);".into(), path(), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
             panic!("no render")
         };
@@ -675,9 +701,21 @@ mod tests {
     }
 
     #[test]
+    fn renders_at_a_time_tell_whether_the_design_reads_it() {
+        let worker = Worker::spawn(egui::Context::default());
+        let generation = worker.render("echo($t); cube(1);".into(), path(), Vec::new(), 0.25);
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!("no render") };
+        assert!(outcome.animated);
+        assert!(outcome.console.iter().any(|l| l.level == Level::Echo && l.text == "ECHO: 0.25"));
+        let generation = worker.render("cube(1);".into(), path(), Vec::new(), 0.25);
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!("no render") };
+        assert!(!outcome.animated);
+    }
+
+    #[test]
     fn syntax_errors_point_at_their_line() {
         let worker = Worker::spawn(egui::Context::default());
-        let generation = worker.render("cube(1);\n\ncube(2;\n".into(), path(), Vec::new());
+        let generation = worker.render("cube(1);\n\ncube(2;\n".into(), path(), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
             panic!("no render")
         };
@@ -688,7 +726,7 @@ mod tests {
     #[test]
     fn annotation_errors_are_marked_but_the_model_renders() {
         let worker = Worker::spawn(egui::Context::default());
-        let generation = worker.render("cube(1);\n// @pin A [0, 0]\n".into(), path(), Vec::new());
+        let generation = worker.render("cube(1);\n// @pin A [0, 0]\n".into(), path(), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
             panic!("no render")
         };
@@ -702,7 +740,7 @@ mod tests {
         let worker = Worker::spawn(egui::Context::default());
         let source = "size = 2; // [1:10]\ncube(size);\n";
         let values = vec![("size".to_string(), Literal::Number(5.0))];
-        let generation = worker.render(source.into(), path(), values);
+        let generation = worker.render(source.into(), path(), values, 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
             panic!("no render")
         };
@@ -714,7 +752,7 @@ mod tests {
 
         // Once `size` is no longer a parameter, the value is not applied.
         let values = vec![("size".to_string(), Literal::Number(5.0))];
-        let generation = worker.render("size = 1 + 1;\ncube(size);\n".into(), path(), values);
+        let generation = worker.render("size = 1 + 1;\ncube(size);\n".into(), path(), values, 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
             panic!("no render")
         };
@@ -729,7 +767,7 @@ mod tests {
         std::fs::write(dir.join("part.c2f"), "// @pin A [0, 0, 1] up\necho(\"part\");\ncube(1);\n").unwrap();
         let source = "[parts.a]\npart = \"part.c2f\"\n\n[parts.b]\npart = \"part.c2f\"\nat = [5, 0, 0]\n";
         let worker = Worker::spawn(egui::Context::default());
-        let generation = worker.render(source.into(), dir.join("test.c2fc"), Vec::new());
+        let generation = worker.render(source.into(), dir.join("test.c2fc"), Vec::new(), 0.0);
         let replies = wait_for(&worker, generation);
         let circuit = replies.iter().position(|r| matches!(r, Reply::Circuit { generation: g, .. } if *g == generation));
         let rendered = replies.iter().position(|r| matches!(r, Reply::Rendered(o) if o.generation == generation));
@@ -744,7 +782,7 @@ mod tests {
         assert!(scene.formats.is_empty(), "a circuit is not exported");
 
         // An error in the circuit marks its line.
-        let generation = worker.render("[parts.a]\npart = \"none.c2f\"\n".into(), dir.join("test.c2fc"), Vec::new());
+        let generation = worker.render("[parts.a]\npart = \"none.c2f\"\n".into(), dir.join("test.c2fc"), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
         assert!(matches!(outcome.result, Err(Some(1))));
         assert!(outcome.console.iter().any(|l| l.level == Level::Error && l.text.contains("none.c2f")));
@@ -753,7 +791,7 @@ mod tests {
         std::fs::write(dir.join("supply.c2f"), "// @pin OUT [0, 0, 1] up power_out 5V\ncube(1);\n").unwrap();
         std::fs::write(dir.join("chip.c2f"), "// @pin IN [0, 0, 1] up io 3.3V\ncube(1);\n").unwrap();
         let source = "[parts.s]\npart = \"supply.c2f\"\n[parts.c]\npart = \"chip.c2f\"\nat = [5, 0, 0]\n\n[[wires]]\nfrom = \"s.OUT\"\nto = \"c.IN\"\n";
-        let generation = worker.render(source.into(), dir.join("test.c2fc"), Vec::new());
+        let generation = worker.render(source.into(), dir.join("test.c2fc"), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
         assert!(outcome.result.is_ok(), "the parts still render");
         assert!(outcome.console.iter().any(|l| l.level == Level::Error && l.text.contains("c.IN")), "{:?}", outcome.console.iter().map(|l| &l.text).collect::<Vec<_>>());
@@ -769,10 +807,10 @@ mod tests {
         std::fs::write(dir.join("test.c2fc"), "[parts.a]\npart = \"part.c2f\"\n").unwrap();
         let worker = Worker::spawn(egui::Context::default());
         let source = "// @circuit test.c2fc\ncube(5);\n";
-        let generation = worker.render(source.into(), dir.join("box.c2f"), Vec::new());
+        let generation = worker.render(source.into(), dir.join("box.c2f"), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
         assert_eq!(outcome.watch, [dir.join("test.c2fc"), dir.join("part.c2f")]);
-        let generation = worker.render("cube(5);".into(), dir.join("box.c2f"), Vec::new());
+        let generation = worker.render("cube(5);".into(), dir.join("box.c2f"), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
         assert!(outcome.watch.is_empty());
         let _ = std::fs::remove_dir_all(dir);
@@ -785,14 +823,14 @@ mod tests {
         std::fs::write(dir.join("c2f_test_part.scad"), "module part() cube(3);\n").unwrap();
         let source = "use <c2f_test_part.scad>\npart();\n";
         let worker = Worker::spawn(egui::Context::default());
-        let generation = worker.render(source.into(), path(), Vec::new());
+        let generation = worker.render(source.into(), path(), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
             panic!("no render")
         };
         assert!(outcome.result.is_ok_and(|scene| scene.is_empty()), "not found without the folder");
 
         worker.set_libraries(vec![dir.clone()]);
-        let generation = worker.render(source.into(), path(), Vec::new());
+        let generation = worker.render(source.into(), path(), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
             panic!("no render")
         };

@@ -20,6 +20,9 @@ pub struct Program {
     pub circuit: Option<c2f_circuit::Circuit>,
     /// Where the circuit's parts and their libraries were looked for.
     pub(crate) library_paths: Vec<PathBuf>,
+    /// `$t`, the animation's time, from 0 to 1: 0 unless set, as in the
+    /// reference. An assignment to `$t` in the program wins.
+    pub t: f64,
 }
 
 pub struct SourceFile {
@@ -79,6 +82,7 @@ impl Program {
             circuit_path: None,
             circuit: None,
             library_paths: library_paths.to_vec(),
+            t: 0.0,
         })
     }
 }

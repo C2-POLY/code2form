@@ -18,6 +18,13 @@ they are. Written in Rust, it renders as you type.
   and for `text()`'s fonts before the default ones, a light or a dark
   theme (or the system's, as it changes), and the keys of each shortcut.
   The grid, the axes and the layer height are kept as left.
+- **Animation**: a design that reads `$t`, the animation time from 0 to
+  1 as in the reference implementation, gets a bar under the view to
+  play it: play and pause, the time's slider, frames a second and steps
+  from 0 to 1. Each frame renders once and stays in memory, so the second
+  time round plays at full speed; an edit renders the frames again.
+  `c2f -D '$t=0.25'` and the MCP tools' `parameters` (`{"$t": 0.25}`)
+  set the time.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text
   fields, grouped by `/* [Group] */`; presets are saved next to the design

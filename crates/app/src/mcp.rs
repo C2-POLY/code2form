@@ -171,7 +171,8 @@ fn schema(properties: Value, required: &[&str]) -> Value {
         "parameters": {
             "type": "object",
             "description": "Customizer parameter values to use instead of the file's, by name, as JSON values \
-                            (`{\"width\": 30, \"label\": \"A\", \"size\": [10, 20]}`); the `parameters` tool lists them.",
+                            (`{\"width\": 30, \"label\": \"A\", \"size\": [10, 20]}`); the `parameters` tool lists them. \
+                            `$t` sets the animation's time, from 0 to 1 (`{\"$t\": 0.25}`), which is 0 otherwise.",
         },
     });
     model_schema(merge(parameters, properties), required)
@@ -374,6 +375,10 @@ fn set_parameters(program: &mut c2f_eval::Program, src: &str, values: &Value) ->
     let values = values.as_object().ok_or("`parameters` must be an object of names and values")?;
     let parameters = program.parameters(src);
     for (name, value) in values {
+        if name == "$t" {
+            program.t = value.as_f64().filter(|t| t.is_finite()).ok_or("`$t` must be a number, the time from 0 to 1")?;
+            continue;
+        }
         let parameter = parameters
             .iter()
             .find(|p| p.name == *name)

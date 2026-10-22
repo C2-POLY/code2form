@@ -223,6 +223,16 @@ fn image_is_a_png_of_the_model() {
 }
 
 #[test]
+fn parameters_set_the_time() {
+    let mut server = Server::start();
+    let (is_error, report) = server.report("render", json!({ "code": "echo($t);", "parameters": { "$t": 0.25 } }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["echo"], json!(["ECHO: 0.25"]));
+    let (is_error, _) = server.call("render", json!({ "code": "cube(1);", "parameters": { "$t": "soon" } }));
+    assert!(is_error);
+}
+
+#[test]
 fn export_writes_files() {
     let mut server = Server::start();
     let dir = temp_dir("export");

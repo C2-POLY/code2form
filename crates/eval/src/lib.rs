@@ -30,6 +30,9 @@ pub struct Output {
     pub error: Option<String>,
     /// The pauses `pause()` asks of a 3D print, in the order it was called.
     pub pauses: Vec<Pause>,
+    /// Whether the program read `$t`, the animation's time: whether it
+    /// may change from one frame to the next.
+    pub animated: bool,
 }
 
 /// A pause in a 3D print, made once the print is done up to height `z`
@@ -87,5 +90,12 @@ pub(crate) fn evaluate_here(program: &Program) -> Output {
         Ok(nodes) => (interp.root.take().map_or(nodes, |root| vec![root]), None),
         Err(interp::Abort(message)) => (Vec::new(), Some(message)),
     };
-    Output { nodes, echo: std::mem::take(&mut interp.echo), warnings, error, pauses: std::mem::take(&mut interp.pauses) }
+    Output {
+        nodes,
+        echo: std::mem::take(&mut interp.echo),
+        warnings,
+        error,
+        pauses: std::mem::take(&mut interp.pauses),
+        animated: interp.reads_t,
+    }
 }

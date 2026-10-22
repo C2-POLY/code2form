@@ -14,6 +14,7 @@ use c2f_circuit::End;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::animation::{self, Animation, Step};
 use crate::catalogue::{self, Catalogue};
 use crate::circuit;
 use crate::app_icon::{self, Tint};
@@ -241,6 +242,8 @@ struct Tab {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    /// Playing the design along `$t`, when it reads it.
+    animation: Animation,
 }
 
 impl Tab {
@@ -277,6 +280,7 @@ impl Tab {
             console: Console::default(),
             customizer: Customizer::default(),
             customizer_open: None,
+            animation: Animation::default(),
         }
     }
 
@@ -622,7 +626,9 @@ impl StudioApp {
         doc.editor.set_circuit(doc.is_circuit());
         doc.sent_source = Some(doc.text.clone());
         doc.sent_values = doc.customizer.values();
-        doc.sent = self.worker.render(doc.text.clone(), doc.source_path(), doc.sent_values.clone());
+        let t = doc.animation.t();
+        doc.sent = self.worker.render(doc.text.clone(), doc.source_path(), doc.sent_values.clone(), t);
+        doc.animation.sent(doc.sent);
         self.owners.claim(doc.sent, doc.id);
     }
 
@@ -698,6 +704,13 @@ impl StudioApp {
                     self.doc.customizer.set_parameters(parameters);
                 }
                 self.doc.console.set_render_output(outcome.console);
+                let source = (self.doc.sent_source.clone().unwrap_or_default(), self.doc.sent_values.clone());
+                let scene = outcome.result.as_ref().ok();
+                self.doc.animation.rendered(outcome.generation, outcome.animated, &source, scene);
+                let play = self.screenshot.as_ref().is_some_and(|s| s.select.as_deref() == Some("play"));
+                if play && shown && self.doc.animation.animated && self.doc.animation.cached() == 1 {
+                    self.doc.animation.play();
+                }
                 match outcome.result {
                     Ok(scene) => {
                         self.doc.failed = false;
@@ -1046,6 +1059,62 @@ impl StudioApp {
             self.report_mount_problem();
             self.go_to_wire(0);
         }
+    }
+
+    // ---- Animation ----
+
+    /// What the code and the values are now: the frames rendered from
+    /// something else are out of date.
+    fn animation_source(&self) -> (String, Vec<(String, Literal)>) {
+        (self.doc.text.clone(), self.doc.customizer.values())
+    }
+
+    /// Moves the animation on when a frame is due.
+    fn animate(&mut self, ctx: &egui::Context) {
+        if !self.doc.animation.playing {
+            return;
+        }
+        let source = self.animation_source();
+        let step = self.doc.animation.tick(Instant::now(), self.doc.busy(), &source);
+        self.take_step(ctx, step);
+    }
+
+    fn take_step(&mut self, ctx: &egui::Context, step: Option<Step>) {
+        match step {
+            Some(Step::Wait(wait)) => ctx.request_repaint_after(wait),
+            Some(Step::Show(scene)) => {
+                self.doc.viewer.set_scene(*scene, false);
+                ctx.request_repaint();
+            }
+            Some(Step::Render) => self.render_now(),
+            // A reply wakes the window.
+            None => {}
+        }
+    }
+
+    /// Takes what was done in the animation bar.
+    fn animation_input(&mut self, ctx: &egui::Context, input: BarInput) {
+        let source = self.animation_source();
+        let animation = &mut self.doc.animation;
+        animation.set_fps(input.fps);
+        let mut step = None;
+        // The worker drops a render asked for before a newer one.
+        if input.steps != animation.steps {
+            animation.set_steps(input.steps);
+            step = Some(animation.seek(animation.frame, &source));
+        } else if input.frame != animation.frame {
+            animation.stop();
+            step = Some(animation.seek(input.frame, &source));
+        }
+        if input.toggle {
+            if animation.playing {
+                animation.stop();
+            } else {
+                animation.play();
+            }
+            ctx.request_repaint();
+        }
+        self.take_step(ctx, step);
     }
 
     /// Selects something of the circuit, or nothing; a wire also puts the
@@ -2182,7 +2251,14 @@ impl StudioApp {
 
     fn view_panel(&mut self, ctx: &egui::Context) {
         let mut remove_part = None;
+        let mut bar = None;
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
+            if self.doc.animation.animated && !self.doc.is_circuit() {
+                let frame = Frame::new().fill(theme::palette().bg).inner_margin(Margin::symmetric(12, 6));
+                egui::TopBottomPanel::bottom(Id::new(("animation", self.doc.id)))
+                    .frame(frame)
+                    .show_inside(ui, |ui| bar = Some(animation_bar(ui, &self.doc.animation)));
+            }
             let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
             let status = viewer::Status {
                 rendering: self.doc.busy(),
@@ -2264,6 +2340,9 @@ impl StudioApp {
                 }
             }
         });
+        if let Some(input) = bar {
+            self.animation_input(ctx, input);
+        }
         if self.doc.mount.active {
             self.mount_bar(ctx, self.view_rect);
             // The pins of the wire on screen pulse.
@@ -2627,6 +2706,7 @@ impl eframe::App for StudioApp {
             }
         }
         self.receive();
+        self.animate(ctx);
         self.shortcuts(ctx);
         self.poll_disk(ctx);
 
@@ -2681,6 +2761,39 @@ impl eframe::App for StudioApp {
             }
         }
     }
+}
+
+/// What was set in the animation bar.
+struct BarInput {
+    frame: u32,
+    fps: u32,
+    steps: u32,
+    /// Play or pause was clicked.
+    toggle: bool,
+}
+
+/// The bar under the view of a design that reads `$t`: play or pause, the
+/// time and its slider, the frames a second and the frames from 0 to 1.
+fn animation_bar(ui: &mut egui::Ui, animation: &Animation) -> BarInput {
+    let mut input = BarInput { frame: animation.frame, fps: animation.fps, steps: animation.steps, toggle: false };
+    ui.horizontal(|ui| {
+        let (icon, hint) = if animation.playing { ("⏸", "Pause") } else { ("▶", "Play the model along $t") };
+        input.toggle = ui.button(icon).on_hover_text(hint).clicked();
+        let t = f64::from(input.frame) / f64::from(input.steps);
+        ui.label(RichText::new(format!("$t = {t:.3}")).monospace().color(theme::palette().text));
+        ui.spacing_mut().slider_width = (ui.available_width() - 210.0).max(60.0);
+        let last = input.steps - 1;
+        let frame = format!("Frame {} of {}", input.frame + 1, input.steps);
+        ui.add(egui::Slider::new(&mut input.frame, 0..=last).show_value(false)).on_hover_text(frame);
+        ui.add(egui::DragValue::new(&mut input.fps).range(animation::FPS).suffix(" fps")).on_hover_text("Frames shown a second");
+        ui.add(egui::DragValue::new(&mut input.steps).range(animation::STEPS).suffix(" steps"))
+            .on_hover_text("Frames from $t = 0 to 1, which it does not reach: the last frame leads back to the first");
+        let cached = RichText::new(format!("{}/{}", animation.cached(), animation.steps)).size(12.0);
+        ui.label(cached.color(theme::palette().text_dim)).on_hover_text(
+            "Frames rendered and kept in memory: once all of them are, the animation plays at full speed",
+        );
+    });
+    input
 }
 
 /// What a click on a tab asks.
