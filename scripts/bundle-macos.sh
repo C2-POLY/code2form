@@ -11,7 +11,7 @@
 #                                       and make it the app that opens .c2f and .scad files
 #
 # The icon comes from crates/studio/assets/AppIcon.icns; redraw it with
-# `swift scripts/make-icon.swift crates/studio/assets/AppIcon.icns`. The
+# `scripts/make-icon.sh`. The
 # fonts and libraries come from the reference app, installed in
 # /Applications or wherever C2F_REFERENCE_RESOURCES points.
 #
