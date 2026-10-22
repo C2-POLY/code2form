@@ -49,8 +49,13 @@ cargo run --release -p c2f-cli -- svg plate.c2f > plate.svg     # 2D models
 cargo run --release -p c2f-cli -- dxf plate.c2f > plate.dxf
 ```
 
-On macOS, `scripts/bundle-macos.sh` builds `Code2Form.app`; `--install`
-puts it in `~/Applications`, and `--install --default` also makes it the
+On macOS, `scripts/bundle-macos.sh` builds `Code2Form.app`, a universal
+app that runs on Apple silicon and Intel Macs (macOS 11 or later), and
+the zips a release ships: `Code2Form-<version>-macos-universal.zip` and
+`c2f-<version>-macos-universal.zip`, in `target/release`. It needs a
+Rust toolchain with both macOS targets
+(`rustup target add aarch64-apple-darwin x86_64-apple-darwin`). `--install`
+puts the app in `~/Applications`, and `--install --default` also makes it the
 app that opens `.c2f` and `.scad` files. The app then carries the
 Liberation fonts and the MCAD library, so it works on its own; the
 script copies them from the reference app installed in `/Applications`,
