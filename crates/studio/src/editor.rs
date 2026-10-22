@@ -6,18 +6,21 @@ use std::sync::Arc;
 
 use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, CornerRadius, FontId, Frame, Galley, Id, Key, Layout, Margin, Modifiers, Pos2,
-    Rect, RichText, Shape, Stroke, TextBuffer, TextEdit, Vec2,
+    self, Align, Align2, Button, CornerRadius, FontId, Frame, Galley, Id, Key, KeyboardShortcut, Layout, Margin,
+    Modifiers, Pos2, Rect, RichText, Shape, Stroke, TextBuffer, TextEdit, Vec2,
 };
 
 use crate::find;
 use crate::highlight::Highlighter;
+use crate::shortcuts::{self, Action};
 use crate::theme;
 
 pub struct Editor {
     id: Id,
     /// The spaces Tab indents by.
     pub indent_width: usize,
+    /// The keys of Find Next and Find Previous, for the find bar's tips.
+    pub find_keys: [KeyboardShortcut; 2],
     highlighter: Highlighter,
     /// A line (0-based) to flag in the gutter, such as a syntax error.
     pub error_line: Option<usize>,
@@ -113,6 +116,7 @@ impl Editor {
         Editor {
             id: Id::new(("c2f-editor", tab)),
             indent_width: 4,
+            find_keys: [Action::FindNext.default_keys(), Action::FindPrevious.default_keys()],
             highlighter: Highlighter::default(),
             error_line: None,
             cursor: None,
@@ -184,7 +188,13 @@ impl Editor {
                     if find_bar.open {
                         find_bar.refresh(buffer.as_str());
                         let (matches, current) = (&find_bar.matches, find_bar.current);
-                        find::mark(&mut job, matches, current, theme::FIND_MATCH, theme::FIND_CURRENT);
+                        find::mark(
+                            &mut job,
+                            matches,
+                            current,
+                            theme::palette().find_match,
+                            theme::palette().find_current,
+                        );
                     }
                     ui.fonts(|f| f.layout_job(job))
                 };
@@ -292,7 +302,7 @@ impl Editor {
             ctx.memory_mut(|m| m.request_focus(query_id));
         }
 
-        let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(10, 6));
+        let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin::symmetric(10, 6));
         let bar = frame.show(ui, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
             // The buttons and the count are laid out first, from the right;
@@ -306,11 +316,13 @@ impl Editor {
                     actions.push(FindAction::Close);
                 }
                 let any = !self.find.matches.is_empty() && !self.find.query.is_empty();
-                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text("Next match (⌘G)");
+                let [next_keys, previous_keys] = self.find_keys.map(|k| shortcuts::describe(ui.ctx(), &k));
+                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text(format!("Next match ({next_keys})"));
                 if next.clicked() {
                     actions.push(FindAction::Step { forward: true });
                 }
-                let previous = ui.add_enabled(any, small_button("⏶")).on_hover_text("Previous match (⇧⌘G)");
+                let tip = format!("Previous match ({previous_keys})");
+                let previous = ui.add_enabled(any, small_button("⏶")).on_hover_text(tip);
                 if previous.clicked() {
                     actions.push(FindAction::Step { forward: false });
                 }
@@ -320,7 +332,7 @@ impl Editor {
                     self.find.refresh(text);
                     find::count_label(self.find.matches.len(), self.find.current)
                 };
-                let color = if self.find.matches.is_empty() { theme::ERROR } else { theme::TEXT_DIM };
+                let color = if self.find.matches.is_empty() { theme::palette().error } else { theme::palette().text_dim };
                 ui.add_sized([68.0, 20.0], egui::Label::new(RichText::new(count).size(12.0).color(color)));
                 ui.add_space(4.0);
                 let case = ui.toggle_value(&mut self.find.case_sensitive, RichText::new("Aa").size(12.5));
@@ -352,7 +364,7 @@ impl Editor {
             searched
         });
         let rect = bar.response.rect;
-        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::BORDER));
+        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::palette().border));
         if bar.inner {
             // Search as you type, from where the bar was opened.
             self.find.refresh(text);
@@ -505,7 +517,7 @@ impl Editor {
         font: &FontId,
     ) -> Vec<Shape> {
         let clip = ui.clip_rect();
-        let mut shapes = vec![Shape::rect_filled(gutter, CornerRadius::ZERO, theme::GUTTER)];
+        let mut shapes = vec![Shape::rect_filled(gutter, CornerRadius::ZERO, theme::palette().gutter)];
         let mut numbers = Vec::new();
         let mut line = 0;
         let mut starts_line = true;
@@ -515,23 +527,27 @@ impl Editor {
             if visible {
                 let band = Rect::from_x_y_ranges(gutter.left()..=text_rect.right(), rect.y_range());
                 if current_line == Some(line) {
-                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, theme::CURRENT_LINE));
+                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, theme::palette().current_line));
                 }
                 if self.error_line == Some(line) {
-                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, theme::ERROR.gamma_multiply(0.12)));
+                    shapes.push(Shape::rect_filled(
+                        band,
+                        CornerRadius::ZERO,
+                        theme::palette().error.gamma_multiply(0.12),
+                    ));
                     if starts_line {
                         let mark =
                             Rect::from_min_size(Pos2::new(gutter.left(), rect.top()), Vec2::new(3.0, rect.height()));
-                        shapes.push(Shape::rect_filled(mark, CornerRadius::ZERO, theme::ERROR));
+                        shapes.push(Shape::rect_filled(mark, CornerRadius::ZERO, theme::palette().error));
                     }
                 }
                 if starts_line {
                     let color = if self.error_line == Some(line) {
-                        theme::ERROR
+                        theme::palette().error
                     } else if current_line == Some(line) {
-                        theme::TEXT
+                        theme::palette().text
                     } else {
-                        theme::TEXT_FAINT
+                        theme::palette().text_faint
                     };
                     numbers.push((Pos2::new(gutter.right() - 12.0, rect.top()), line + 1, color));
                 }
@@ -550,7 +566,7 @@ impl Editor {
         });
         shapes.push(Shape::line_segment(
             [gutter.right_top() - Vec2::new(0.5, 0.0), gutter.right_bottom() - Vec2::new(0.5, 0.0)],
-            egui::Stroke::new(1.0, Color32::from_white_alpha(10)),
+            egui::Stroke::new(1.0, theme::palette().line(10)),
         ));
         shapes
     }
@@ -796,7 +812,7 @@ mod tests {
             };
             let _ = ctx.run(input, |ctx| {
                 let panel = egui::SidePanel::left("editor")
-                    .frame(Frame::new().fill(theme::EDITOR))
+                    .frame(Frame::new().fill(theme::palette().editor))
                     .resizable(true)
                     .default_width(320.0)
                     .width_range(260.0..=900.0)

@@ -51,6 +51,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 # Already used by eframe; the app icon in the Dock and the Finder.
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
+    "NSAppearance",
     "NSApplication",
     "NSBitmapImageRep",
     "NSGraphics",

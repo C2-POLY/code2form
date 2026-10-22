@@ -92,7 +92,7 @@ impl Console {
         ui.spacing_mut().item_spacing.y = 2.0;
         if self.rows.is_empty() {
             ui.add_space(4.0);
-            ui.label(RichText::new("Nothing to report yet.").color(theme::TEXT_FAINT).font(font));
+            ui.label(RichText::new("Nothing to report yet.").color(theme::palette().text_faint).font(font));
             return;
         }
         egui::ScrollArea::both().auto_shrink(false).stick_to_bottom(true).show_rows(
@@ -102,10 +102,10 @@ impl Console {
             |ui, range| {
                 for row in &self.rows[range] {
                     let color = match row.level {
-                        Level::Info => theme::TEXT_DIM,
-                        Level::Echo => theme::TEXT,
-                        Level::Warning => theme::WARNING,
-                        Level::Error => theme::ERROR,
+                        Level::Info => theme::palette().text_dim,
+                        Level::Echo => theme::palette().text,
+                        Level::Warning => theme::palette().warning,
+                        Level::Error => theme::palette().error,
                     };
                     let text = if row.text.is_empty() { " " } else { &row.text };
                     ui.add(
