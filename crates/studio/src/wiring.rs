@@ -74,6 +74,7 @@ impl Look {
 }
 
 /// A circuit's wires, laid out once per read of the circuit.
+#[derive(Clone)]
 pub struct Wiring {
     pub circuit: Arc<Circuit>,
     /// The curve of each wire, in the order of the circuit's wires.

@@ -125,7 +125,7 @@ pub fn part_name(stem: &str, taken: &HashSet<String>) -> String {
 }
 
 /// A coordinate as a circuit writes it: to 0.1 mm, without a trailing `.0`.
-fn coordinate(v: f64) -> String {
+pub fn coordinate(v: f64) -> String {
     let text = format!("{v:.1}");
     let text = text.strip_suffix(".0").unwrap_or(&text);
     if text == "-0" { "0".to_string() } else { text.to_string() }

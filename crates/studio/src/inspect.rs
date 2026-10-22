@@ -151,7 +151,8 @@ pub fn paint_bubble_in(painter: &egui::Painter, rect: Rect, pointer: Pos2, text:
 
 /// The selection's card, in the top-left corner of the view, under the
 /// status badges: on a dark card, so that it reads whatever is behind.
-pub fn paint_card(painter: &egui::Painter, rect: Rect, title: &str, lines: &[String]) {
+/// Returns the card's rectangle, for what goes under it.
+pub fn paint_card(painter: &egui::Painter, rect: Rect, title: &str, lines: &[String]) -> Rect {
     let title = painter.layout_no_wrap(title.to_string(), FontId::proportional(13.5), TEXT);
     let lines: Vec<_> =
         lines.iter().map(|l| painter.layout_no_wrap(l.clone(), FontId::proportional(12.0), TEXT_DIM)).collect();
@@ -169,6 +170,7 @@ pub fn paint_card(painter: &egui::Painter, rect: Rect, title: &str, lines: &[Str
         painter.galley(Pos2::new(card.left() + 12.0, y), line, TEXT_DIM);
         y += h + 3.0;
     }
+    card
 }
 
 #[cfg(test)]

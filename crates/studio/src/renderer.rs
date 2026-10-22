@@ -145,6 +145,7 @@ pub struct Renderer {
     /// The solid as uploaded, to upload again in other colors.
     solid_mesh: RenderMesh,
     pending_colors: Option<Vec<[f32; 4]>>,
+    pending_positions: Option<Vec<[f32; 3]>>,
 }
 
 impl Renderer {
@@ -213,6 +214,7 @@ impl Renderer {
                 pending_overlay: None,
                 solid_mesh: RenderMesh::default(),
                 pending_colors: None,
+                pending_positions: None,
             })
         }
     }
@@ -226,6 +228,12 @@ impl Renderer {
     /// circuit greys out the parts behind a selection.
     pub fn set_solid_colors(&mut self, colors: Vec<[f32; 4]>) {
         self.pending_colors = Some(colors);
+    }
+
+    /// Moves the solid's vertices on the next paint, as a part dragged in
+    /// a circuit moves before it renders again.
+    pub fn set_solid_positions(&mut self, positions: Vec<[f32; 3]>) {
+        self.pending_positions = Some(positions);
     }
 
     /// Replaces a circuit's wires and pin dots on the next paint.
@@ -267,15 +275,20 @@ impl Renderer {
                 self.solid_mesh = if scene.parts.is_empty() { RenderMesh::default() } else { scene.solid };
             }
         }
-        if let Some(colors) = self.pending_colors.take() {
-            if colors.len() == self.solid_mesh.positions.len() && !colors.is_empty() {
+        let colors = self.pending_colors.take().filter(|c| c.len() == self.solid_mesh.positions.len());
+        let positions = self.pending_positions.take().filter(|p| p.len() == self.solid_mesh.positions.len());
+        if (colors.is_some() || positions.is_some()) && !self.solid_mesh.positions.is_empty() {
+            if let Some(colors) = colors {
                 self.solid_mesh.colors = colors;
-                unsafe {
-                    if let Some(buffer) = self.solid.take() {
-                        delete(gl, buffer);
-                    }
-                    self.solid = upload_mesh(gl, &self.solid_mesh);
+            }
+            if let Some(positions) = positions {
+                self.solid_mesh.positions = positions;
+            }
+            unsafe {
+                if let Some(buffer) = self.solid.take() {
+                    delete(gl, buffer);
                 }
+                self.solid = upload_mesh(gl, &self.solid_mesh);
             }
         }
         if let Some((wires, pins)) = self.pending_overlay.take() {
