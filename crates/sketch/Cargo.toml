@@ -1,0 +1,16 @@
+[package]
+name = "c2f-sketch"
+description = "2D sketches: geometry, constraints and dimensions, their solver, and the code they generate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Reads a sketch back from a design: its module and its dimension variables.
+c2f-lang.workspace = true
+
+[dev-dependencies]
+# Evaluates and renders the generated code, for its area and volume.
+c2f-eval.workspace = true
+c2f-geom.workspace = true
