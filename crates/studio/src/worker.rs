@@ -364,8 +364,11 @@ mod tests {
     }
 
     /// Exports the shown model in `format`: the reply, and the file written.
+    /// Each call gets its own file, since tests run in parallel in one process.
     fn export_with(worker: &Worker, format: Format) -> (Result<String, String>, Vec<u8>) {
-        let name = format!("code2form-test-{}.{}", std::process::id(), format.extension());
+        static CALLS: AtomicU64 = AtomicU64::new(0);
+        let call = CALLS.fetch_add(1, Ordering::Relaxed);
+        let name = format!("code2form-test-{}-{call}.{}", std::process::id(), format.extension());
         let target = std::env::temp_dir().join(name);
         let _ = std::fs::remove_file(&target);
         worker.export(target.clone(), format);
