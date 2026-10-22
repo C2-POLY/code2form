@@ -129,7 +129,7 @@ impl Customizer {
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Customizer").strong().size(14.0).color(theme::TEXT));
+            ui.label(RichText::new("Customizer").strong().size(14.0).color(theme::palette().text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let reset = ui
                     .add_enabled(!self.values.is_empty(), Button::new(RichText::new("Reset all").size(12.0)))
@@ -143,14 +143,14 @@ impl Customizer {
         ui.add_space(4.0);
         changed |= self.presets(ui);
         for problem in [&self.unreadable, &self.problem].into_iter().flatten() {
-            ui.label(RichText::new(problem).size(12.0).color(theme::WARNING));
+            ui.label(RichText::new(problem).size(12.0).color(theme::palette().warning));
         }
         ui.add_space(6.0);
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if !self.has_parameters() {
                 ui.add_space(8.0);
-                ui.label(RichText::new("This file declares no parameters.").color(theme::TEXT_DIM));
+                ui.label(RichText::new("This file declares no parameters.").color(theme::palette().text_dim));
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
@@ -158,19 +158,19 @@ impl Customizer {
                          with an optional comment for their range or choices:",
                     )
                     .size(12.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::palette().text_faint),
                 );
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("/* [Size] */\n// Width of the box\nwidth = 20; // [10:100]\nstyle = \"round\"; // [round, square]")
                         .monospace()
                         .size(12.0)
-                        .color(theme::CODE_TEXT),
+                        .color(theme::palette().code_text),
                 );
                 return;
             }
             for group in self.groups() {
-                let title = RichText::new(&group).strong().size(13.0).color(theme::TEXT);
+                let title = RichText::new(&group).strong().size(13.0).color(theme::palette().text);
                 egui::CollapsingHeader::new(title).id_salt(("customizer-group", &group)).default_open(true).show(
                     ui,
                     |ui| {
@@ -205,7 +205,7 @@ impl Customizer {
         let mut changed = false;
         let mut choice = None;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Preset").size(12.0).color(theme::TEXT_DIM));
+            ui.label(RichText::new("Preset").size(12.0).color(theme::palette().text_dim));
             let current = self.selected.clone().unwrap_or_else(|| DESIGN_DEFAULTS.into());
             ComboBox::from_id_salt("customizer-preset").selected_text(&current).width(ui.available_width() - 34.0).show_ui(
                 ui,
@@ -324,9 +324,9 @@ impl Customizer {
         let value = self.value(parameter).clone();
         let modified = value != parameter.default;
         ui.horizontal(|ui| {
-            let mut name = RichText::new(&parameter.name).size(13.0).color(theme::TEXT);
+            let mut name = RichText::new(&parameter.name).size(13.0).color(theme::palette().text);
             if modified {
-                name = name.color(theme::ACCENT_STRONG);
+                name = name.color(theme::palette().accent_strong);
             }
             if let (Widget::Checkbox, &Literal::Bool(on)) = (&parameter.widget, &value) {
                 let mut on = on;
@@ -350,7 +350,7 @@ impl Customizer {
             }
         });
         if let Some(description) = &parameter.description {
-            ui.label(RichText::new(description).size(11.5).color(theme::TEXT_DIM));
+            ui.label(RichText::new(description).size(11.5).color(theme::palette().text_dim));
         }
         changed |= self.control(ui, parameter, value);
         changed
@@ -447,7 +447,7 @@ impl Customizer {
                 let readable = read(&draft.text).is_some();
                 let mut field = TextEdit::singleline(&mut draft.text).desired_width(f32::INFINITY).code_editor();
                 if !readable {
-                    field = field.text_color(theme::ERROR);
+                    field = field.text_color(theme::palette().error);
                 }
                 let response = ui.add(field);
                 let edited = response.changed();
@@ -490,9 +490,9 @@ fn file_name(path: &Path) -> String {
 /// The panel's frame.
 pub fn frame() -> Frame {
     Frame::new()
-        .fill(theme::PANEL)
+        .fill(theme::palette().panel)
         .inner_margin(Margin { left: 12, right: 12, top: 10, bottom: 8 })
-        .stroke(Stroke::new(1.0, theme::BORDER))
+        .stroke(Stroke::new(1.0, theme::palette().border))
         .corner_radius(CornerRadius::ZERO)
 }
 

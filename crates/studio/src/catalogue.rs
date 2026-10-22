@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::SystemTime;
 
-use eframe::egui::{self, Button, Color32, ColorImage, RichText, TextEdit, TextureHandle, TextureOptions, Vec2};
+use eframe::egui::{self, Button, ColorImage, RichText, TextEdit, TextureHandle, TextureOptions, Vec2};
 use glam::Vec3;
 
 use crate::pick::Ray;
@@ -418,8 +418,8 @@ impl Catalogue {
             })
             .clone();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Parts").strong().color(theme::TEXT));
-            ui.label(RichText::new(format!("{}", entries.len())).color(theme::TEXT_DIM));
+            ui.label(RichText::new("Parts").strong().color(theme::palette().text));
+            ui.label(RichText::new(format!("{}", entries.len())).color(theme::palette().text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("New part…").on_hover_text("Make a part from a template, in your parts folder").clicked()
                 {
@@ -435,7 +435,7 @@ impl Catalogue {
                 .hint_text("Search name, description or pin")
                 .desired_width(f32::INFINITY),
         );
-        ui.label(RichText::new("Drag a part into the view, or press Add").size(11.5).color(theme::TEXT_DIM));
+        ui.label(RichText::new("Drag a part into the view, or press Add").size(11.5).color(theme::palette().text_dim));
         ui.add_space(4.0);
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -449,25 +449,27 @@ impl Catalogue {
                         }
                         None => {
                             let (rect, _) = ui.allocate_exact_size(Vec2::new(72.0, 54.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 4.0, Color32::from_white_alpha(10));
+                            ui.painter().rect_filled(rect, 4.0, theme::palette().line(10));
                         }
                     })
                     .response
                     .on_hover_text(format!("Drag {} into the view", entry.rel));
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&entry.name).strong().color(theme::TEXT));
+                            ui.label(RichText::new(&entry.name).strong().color(theme::palette().text));
                             let pins = entry.pins.len();
                             ui.label(
                                 RichText::new(format!("{pins} pin{}", if pins == 1 { "" } else { "s" }))
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::palette().text_dim),
                             );
                         });
                         if !entry.description.is_empty() {
                             ui.add(
-                                egui::Label::new(RichText::new(&entry.description).size(11.5).color(theme::TEXT_DIM))
-                                    .wrap(),
+                                egui::Label::new(
+                                    RichText::new(&entry.description).size(11.5).color(theme::palette().text_dim),
+                                )
+                                .wrap(),
                             );
                         }
                         if ui
@@ -495,15 +497,17 @@ impl Catalogue {
         let mut close = false;
         let modal = egui::Modal::new(egui::Id::new("new-part")).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("New part").heading().color(theme::TEXT));
+            ui.label(RichText::new("New part").heading().color(theme::palette().text));
             ui.add_space(4.0);
             let folder = user_folder().map(|f| f.display().to_string()).unwrap_or_default();
-            ui.label(RichText::new(format!("A part made from a template, in {folder}")).color(theme::TEXT_DIM));
+            ui.label(
+                RichText::new(format!("A part made from a template, in {folder}")).color(theme::palette().text_dim),
+            );
             ui.add_space(6.0);
             let field = ui.add(TextEdit::singleline(name).hint_text("name, as my_sensor").desired_width(f32::INFINITY));
             field.request_focus();
             if let Some(problem) = problem.as_ref() {
-                ui.label(RichText::new(problem.as_str()).color(theme::ERROR));
+                ui.label(RichText::new(problem.as_str()).color(theme::palette().error));
             }
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

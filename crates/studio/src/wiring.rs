@@ -13,6 +13,7 @@ use c2f_geom::RenderMesh;
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::circuit::parse_color;
+use crate::theme;
 
 /// The radius of a wire's tube, in millimeters.
 pub const WIRE_RADIUS: f64 = 0.4;
@@ -27,8 +28,6 @@ const DEFAULT_WIRE: [f32; 4] = [0.78, 0.80, 0.84, 1.0];
 const PIN: [f32; 4] = [0.42, 0.44, 0.48, 1.0];
 const WIRED_PIN: [f32; 4] = [0.96, 0.96, 0.92, 1.0];
 const ERROR_PIN: [f32; 4] = [1.0, 0.22, 0.20, 1.0];
-/// What greyed-out things fade towards.
-const GREY: [f32; 4] = [0.30, 0.32, 0.36, 1.0];
 
 /// How a wire or a pin shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -206,51 +205,54 @@ pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, top: f32, e
     if entries.is_empty() {
         return Rect::from_min_size(Pos2::new(rect.right() - right, rect.top() + top), Vec2::ZERO);
     }
+    let p = theme::palette();
     let font = FontId::proportional(12.0);
     let rows: Vec<_> = entries
         .iter()
         .map(|entry| {
-            let name = painter.layout_no_wrap(entry.name.clone(), font.clone(), TEXT);
-            let labels = painter.layout_no_wrap(entry.labels.join(", "), font.clone(), TEXT_DIM);
+            let name = painter.layout_no_wrap(entry.name.clone(), font.clone(), p.overlay_text);
+            let labels = painter.layout_no_wrap(entry.labels.join(", "), font.clone(), p.overlay_text_dim);
             (entry, name, labels)
         })
         .collect();
-    let title = painter.layout_no_wrap("Wires".to_string(), FontId::proportional(12.5), TEXT);
+    let title = painter.layout_no_wrap("Wires".to_string(), FontId::proportional(12.5), p.overlay_text);
     let name_width = rows.iter().map(|(_, n, _)| n.size().x).fold(0.0, f32::max);
     let labels_width = rows.iter().map(|(_, _, l)| l.size().x).fold(0.0, f32::max);
     let row_height = 18.0;
     let width = (22.0 + name_width + 12.0 + labels_width).max(title.size().x) + 20.0;
     let height = 30.0 + rows.len() as f32 * row_height + 6.0;
     let card = Rect::from_min_size(Pos2::new(rect.right() - right - width, rect.top() + top), Vec2::new(width, height));
-    let border = Stroke::new(1.0, Color32::from_white_alpha(20));
-    painter.rect(card, CornerRadius::same(8), Color32::from_black_alpha(170), border, StrokeKind::Inside);
-    painter.galley(card.min + Vec2::new(10.0, 8.0), title, TEXT);
+    let border = Stroke::new(1.0, p.line(20));
+    painter.rect(card, CornerRadius::same(8), p.veil(170), border, StrokeKind::Inside);
+    painter.galley(card.min + Vec2::new(10.0, 8.0), title, p.overlay_text);
     for (i, (entry, name, labels)) in rows.into_iter().enumerate() {
         let y = card.top() + 30.0 + i as f32 * row_height + row_height / 2.0;
         let swatch = Pos2::new(card.left() + 16.0, y);
-        painter.circle(swatch, 5.0, color32(entry.color), Stroke::new(1.0, Color32::from_white_alpha(110)));
-        painter.galley(Pos2::new(card.left() + 28.0, y - name.size().y / 2.0), name, TEXT);
-        painter.galley(Pos2::new(card.left() + 28.0 + name_width + 12.0, y - labels.size().y / 2.0), labels, TEXT_DIM);
+        painter.circle(swatch, 5.0, color32(entry.color), Stroke::new(1.0, p.line(110)));
+        painter.galley(Pos2::new(card.left() + 28.0, y - name.size().y / 2.0), name, p.overlay_text);
+        painter.galley(
+            Pos2::new(card.left() + 28.0 + name_width + 12.0, y - labels.size().y / 2.0),
+            labels,
+            p.overlay_text_dim,
+        );
     }
     card
 }
-
-/// Light text on the view's dark overlays.
-pub const TEXT: Color32 = Color32::from_rgb(0xec, 0xee, 0xf2);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0xa8, 0xb0, 0xbe);
 
 /// A wire's color, or the default for none or one not understood.
 pub fn wire_color(name: Option<&str>) -> [f32; 4] {
     name.and_then(parse_color).map_or(DEFAULT_WIRE, |c| [c[0], c[1], c[2], 1.0])
 }
 
-/// A color as an emphasis shows it.
+/// A color as an emphasis shows it: greyed out, it fades towards the
+/// theme's grey.
 pub fn shade(color: [f32; 4], emphasis: Emphasis) -> [f32; 4] {
+    let grey = theme::palette().dim;
     match emphasis {
         Emphasis::Normal => color,
         // Lifts dark colors (black wires) so that they still stand out.
         Emphasis::Strong => [0, 1, 2, 3].map(|i| if i == 3 { 1.0 } else { color[i] * 0.85 + 0.15 }),
-        Emphasis::Dim => [0, 1, 2, 3].map(|i| if i == 3 { 1.0 } else { color[i] * 0.25 + GREY[i] * 0.75 }),
+        Emphasis::Dim => [0, 1, 2, 3].map(|i| if i == 3 { 1.0 } else { color[i] * 0.25 + grey[i] * 0.75 }),
     }
 }
 

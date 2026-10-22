@@ -10,6 +10,7 @@ use eframe::glow::{self, HasContext};
 use glam::{Mat4, Vec3};
 use c2f_geom::RenderMesh;
 
+use crate::theme::Palette;
 use crate::worker::Scene;
 
 /// Vertex layout of meshes: position, normal, RGBA.
@@ -31,9 +32,6 @@ const NO_CUT: f32 = 1e30;
 /// Keeps what lies exactly at the cut, such as a pause plane at its height.
 const CUT_TOLERANCE: f32 = 1e-4;
 
-const BACKGROUND_TOP: [f32; 3] = [0.215, 0.240, 0.290];
-const BACKGROUND_BOTTOM: [f32; 3] = [0.078, 0.086, 0.106];
-
 /// What to draw this frame.
 #[derive(Clone, Copy)]
 pub struct Frame {
@@ -47,6 +45,8 @@ pub struct Frame {
     /// The color of the parts without `color()`, in place of
     /// `c2f_geom::DEFAULT_COLOR`.
     pub model_color: [f32; 3],
+    /// The theme's colors: the background's and the grid's.
+    pub palette: &'static Palette,
 }
 
 /// The XY grid, sized to the model.
@@ -117,6 +117,8 @@ struct BackgroundProgram {
     program: glow::Program,
     top: Option<glow::UniformLocation>,
     bottom: Option<glow::UniformLocation>,
+    vignette: Option<glow::UniformLocation>,
+    dither: Option<glow::UniformLocation>,
     vao: glow::VertexArray,
 }
 
@@ -143,6 +145,8 @@ pub struct Renderer {
     grid_lines: Option<GpuBuffer>,
     axes: Option<GpuBuffer>,
     grid: Option<Grid>,
+    /// Whether the grid uploaded has the dark theme's colors.
+    grid_dark: bool,
     /// Waiting for the next paint to reach the GPU.
     pending_scene: Option<Scene>,
     pending_grid: Option<Grid>,
@@ -203,6 +207,8 @@ impl Renderer {
                 background: BackgroundProgram {
                     top: gl.get_uniform_location(background, "u_top"),
                     bottom: gl.get_uniform_location(background, "u_bottom"),
+                    vignette: gl.get_uniform_location(background, "u_vignette"),
+                    dither: gl.get_uniform_location(background, "u_dither"),
                     program: background,
                     vao: background_vao,
                 },
@@ -216,6 +222,7 @@ impl Renderer {
                 grid_lines: None,
                 axes: None,
                 grid: None,
+                grid_dark: true,
                 pending_scene: None,
                 pending_grid: None,
                 pending_overlay: None,
@@ -255,7 +262,7 @@ impl Renderer {
         }
     }
 
-    fn upload(&mut self, gl: &glow::Context) {
+    fn upload(&mut self, gl: &glow::Context, palette: &Palette) {
         if let Some(scene) = self.pending_scene.take() {
             unsafe {
                 for buffer in [
@@ -312,14 +319,18 @@ impl Renderer {
                 for buffer in [self.grid_lines.take(), self.axes.take()].into_iter().flatten() {
                     delete(gl, buffer);
                 }
-                self.grid_lines = upload_lines(gl, &grid_vertices(grid));
+                self.grid_lines = upload_lines(gl, &grid_vertices(grid, palette));
                 self.axes = upload_lines(gl, &axis_vertices(grid.half_size()));
             }
         }
     }
 
     pub fn paint(&mut self, gl: &glow::Context, frame: &Frame) {
-        self.upload(gl);
+        if frame.palette.dark != self.grid_dark {
+            self.grid_dark = frame.palette.dark;
+            self.pending_grid = self.pending_grid.or(self.grid);
+        }
+        self.upload(gl, frame.palette);
         unsafe {
             // egui leaves the scissor box on our viewport, so this only
             // clears the 3D view.
@@ -332,8 +343,10 @@ impl Renderer {
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::BLEND);
             gl.use_program(Some(self.background.program));
-            gl.uniform_3_f32_slice(self.background.top.as_ref(), &BACKGROUND_TOP);
-            gl.uniform_3_f32_slice(self.background.bottom.as_ref(), &BACKGROUND_BOTTOM);
+            gl.uniform_3_f32_slice(self.background.top.as_ref(), &frame.palette.view_top);
+            gl.uniform_3_f32_slice(self.background.bottom.as_ref(), &frame.palette.view_bottom);
+            gl.uniform_1_f32(self.background.vignette.as_ref(), frame.palette.view_vignette);
+            gl.uniform_1_f32(self.background.dither.as_ref(), frame.palette.view_dither);
             gl.bind_vertex_array(Some(self.background.vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
 
@@ -511,12 +524,12 @@ fn pause_outlines(heights: &[f32], footprint: ([f32; 2], [f32; 2])) -> Vec<f32> 
     out
 }
 
-fn grid_vertices(grid: Grid) -> Vec<f32> {
+fn grid_vertices(grid: Grid, palette: &Palette) -> Vec<f32> {
     let half = grid.half_size();
     let mut out = Vec::with_capacity((grid.lines as usize * 2 + 1) * 4 * LINE_FLOATS);
     for i in -grid.lines..=grid.lines {
         let at = i as f32 * grid.step;
-        let color = if i % grid.major_every == 0 { [0.62, 0.68, 0.80, 0.30] } else { [0.55, 0.60, 0.70, 0.11] };
+        let color = if i % grid.major_every == 0 { palette.grid_major } else { palette.grid_minor };
         for [a, b] in [[[at, -half, 0.0], [at, half, 0.0]], [[-half, at, 0.0], [half, at, 0.0]]] {
             out.extend(a);
             out.extend(color);
@@ -755,11 +768,17 @@ const BACKGROUND_FRAGMENT: &str = r#"
 in vec2 v_uv;
 uniform vec3 u_top;
 uniform vec3 u_bottom;
+uniform float u_vignette;
+// Noise of up to a step of the screen's colors, against the bands of a
+// light gradient.
+uniform float u_dither;
 out vec4 f_color;
 void main() {
     vec3 color = mix(u_bottom, u_top, smoothstep(0.0, 1.0, v_uv.y));
     vec2 q = v_uv - vec2(0.5);
-    color *= 1.0 - 0.35 * dot(q, q);
+    color *= 1.0 - u_vignette * dot(q, q);
+    float noise = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    color += (noise - 0.5) / 255.0 * u_dither;
     f_color = vec4(color, 1.0);
 }
 "#;

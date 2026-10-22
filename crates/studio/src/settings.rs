@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::app_icon::Tint;
+use crate::shortcuts::Shortcuts;
+use crate::theme::Appearance;
 
 /// The range and default of the code's size, in points.
 pub const CODE_SIZES: std::ops::RangeInclusive<f32> = 10.0..=24.0;
@@ -58,6 +60,10 @@ pub struct Settings {
     /// The window as last left; `None` the first time.
     pub window: Option<Placement>,
     pub window_maximized: bool,
+    /// Light, dark, or as the system.
+    pub appearance: Appearance,
+    /// Each action's keys.
+    pub shortcuts: Shortcuts,
 }
 
 /// Where the window is, in the screen's points: the top left corner of its
@@ -101,6 +107,8 @@ impl Default for Settings {
             indent_width: INDENT_WIDTH,
             window: None,
             window_maximized: false,
+            appearance: Appearance::default(),
+            shortcuts: Shortcuts::default(),
         }
     }
 }
@@ -156,7 +164,12 @@ impl Settings {
                 "indent" => set(&mut settings.indent_width, value.parse().ok().filter(|w| INDENT_WIDTHS.contains(w))),
                 "window" => set(&mut settings.window, Placement::parse(value).map(Some)),
                 "window-maximized" => set(&mut settings.window_maximized, value.parse().ok()),
-                _ => {}
+                "appearance" => set(&mut settings.appearance, Appearance::from_id(value)),
+                key => {
+                    if let Some(action) = key.strip_prefix("shortcut-") {
+                        settings.shortcuts.read(action, value);
+                    }
+                }
             }
         }
         settings
@@ -188,6 +201,8 @@ impl Settings {
             text.push_str(&format!("window = {x} {y} {width} {height}\n"));
         }
         text.push_str(&format!("window-maximized = {}\n", self.window_maximized));
+        text.push_str(&format!("appearance = {}\n", self.appearance.id()));
+        self.shortcuts.write(&mut text);
         text
     }
 }
@@ -247,7 +262,10 @@ fn hex_color(value: &str) -> Option<[u8; 3]> {
 
 #[cfg(test)]
 mod tests {
+    use eframe::egui::{Key, KeyboardShortcut, Modifiers};
+
     use super::*;
+    use crate::shortcuts::Action;
 
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("code2form-settings-{name}-{}", std::process::id()))
@@ -260,6 +278,10 @@ mod tests {
 
     #[test]
     fn survive_a_save_and_load() {
+        let mut shortcuts = Shortcuts::default();
+        let ctrl_r = KeyboardShortcut::new(Modifiers { ctrl: true, alt: true, ..Modifiers::NONE }, Key::R);
+        shortcuts.set(Action::Render, ctrl_r);
+        shortcuts.set(Action::ZoomIn, KeyboardShortcut::new(Modifiers::NONE, Key::F12));
         let dir = temp("round-trip");
         let store = dir.join("settings").join("settings.txt");
         assert_eq!(Settings::load(Some(&store)), Settings::default(), "no file yet");
@@ -280,6 +302,8 @@ mod tests {
             indent_width: 2,
             window: Some(Placement { position: [-1200.5, 40.0], size: [1440.0, 900.0] }),
             window_maximized: true,
+            appearance: Appearance::Light,
+            shortcuts,
         };
         settings.save(Some(&store)).unwrap();
         assert_eq!(Settings::load(Some(&store)), settings);
@@ -322,6 +346,19 @@ mod tests {
         for broken in ["window = 1e9 0 800 600", "window = 0 0 800 NaN", "window = 0 0 800 600 1"] {
             assert_eq!(Settings::parse(broken).window, None, "{broken}");
         }
+    }
+
+    #[test]
+    fn check_the_appearance_and_the_shortcuts() {
+        let text = "appearance = sepia\nshortcut-render = F6\nshortcut-save = K\nshortcut-fly = Cmd+Y\n\
+                    shortcut-find = Cmd+Hyper\n";
+        let settings = Settings::parse(text);
+        assert_eq!(settings.appearance, Appearance::System, "the default");
+        let mut shortcuts = Shortcuts::default();
+        shortcuts.set(Action::Render, KeyboardShortcut::new(Modifiers::NONE, Key::F6));
+        assert_eq!(settings.shortcuts, shortcuts, "only F6: K alone types text");
+        assert_eq!(Settings::parse("appearance = dark\n").appearance, Appearance::Dark);
+        assert!(!Settings::default().format().contains("shortcut-"), "the default keys are not written");
     }
 
     #[test]

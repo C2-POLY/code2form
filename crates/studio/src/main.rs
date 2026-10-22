@@ -24,6 +24,7 @@ mod renderer;
 mod rewire;
 mod screenshot;
 mod settings;
+mod shortcuts;
 mod tabs;
 mod theme;
 mod viewer;
@@ -49,7 +50,9 @@ the first render is shown; the window then opens without taking focus.
 The Open Recent list is kept in the user's settings folder, or in the
 file CODE2FORM_RECENT_FILES names; screenshot runs without that variable
 neither read nor change it. The settings and the open tabs are kept in
-that folder too; screenshot runs leave them aside.";
+that folder too; screenshot runs leave them aside, and show the theme
+CODE2FORM_APPEARANCE names (system, light or dark), the system's by
+default.";
 
 fn main() -> ExitCode {
     // Old macOS versions add a process serial number to apps the Finder starts.
@@ -61,7 +64,11 @@ fn main() -> ExitCode {
     }
     // Scripted screenshots should not steal the keyboard from the user.
     let background = std::env::var_os("CODE2FORM_SCREENSHOT").is_some();
-    let settings = settings::Settings::load(settings::store().as_deref());
+    let mut settings = settings::Settings::load(settings::store().as_deref());
+    if background {
+        let appearance = std::env::var("CODE2FORM_APPEARANCE").ok().and_then(|a| theme::Appearance::from_id(&a));
+        settings.appearance = appearance.unwrap_or_default();
+    }
 
     let saved = settings.window;
     let maximized = settings.window_maximized;
