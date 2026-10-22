@@ -116,6 +116,8 @@ pub(super) fn tab_strip<T: PartialEq + Copy>(ui: &mut egui::Ui, current: &mut T,
             let text = RichText::new(label).size(12.5);
             let text = if on { text.strong().color(palette.text) } else { text.color(palette.text_dim) };
             let response = ui.add(Label::new(text).selectable(false).sense(Sense::click()));
+            // A tab, picked or not, for screen readers.
+            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, label));
             if on {
                 let y = response.rect.bottom() + 5.0;
                 ui.painter().hline(response.rect.x_range(), y, Stroke::new(2.0, palette.accent));

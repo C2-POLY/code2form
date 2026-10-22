@@ -49,6 +49,8 @@ mod toolbar;
 mod tree;
 mod view_bar;
 mod workspace;
+#[cfg(test)]
+mod e2e;
 
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
@@ -2711,6 +2713,25 @@ impl StudioApp {
     }
 }
 
+impl StudioApp {
+    /// The window's bars, panels, view and dialogs, in the order egui lays
+    /// them out: the bars across the window first, then the side panels,
+    /// then the view in what is left.
+    fn panels(&mut self, ctx: &egui::Context) {
+        self.toolbar(ctx);
+        self.tools_panel(ctx);
+        self.status_bar(ctx);
+        self.console_panel(ctx);
+        self.editor_panel(ctx);
+        self.customizer_panel(ctx);
+        self.catalogue_panel(ctx);
+        self.modelling_panels(ctx);
+        self.view_panel(ctx);
+        self.settings_dialog(ctx);
+        self.confirm_dialog(ctx);
+    }
+}
+
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if theme::follow(ctx, self.settings.appearance) {
@@ -2725,18 +2746,7 @@ impl eframe::App for StudioApp {
         self.receive();
         self.shortcuts(ctx);
         self.poll_disk(ctx);
-
-        self.toolbar(ctx);
-        self.tools_panel(ctx);
-        self.status_bar(ctx);
-        self.console_panel(ctx);
-        self.editor_panel(ctx);
-        self.customizer_panel(ctx);
-        self.catalogue_panel(ctx);
-        self.modelling_panels(ctx);
-        self.view_panel(ctx);
-        self.settings_dialog(ctx);
-        self.confirm_dialog(ctx);
+        self.panels(ctx);
         self.keep_settings(ctx);
 
         if let Some(deadline) = self.doc.render_deadline {

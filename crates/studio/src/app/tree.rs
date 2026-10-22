@@ -166,6 +166,9 @@ impl TreeState {
             let is_selected = selected.contains(&node.range);
             let (rect, response) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), Sense::click_and_drag());
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, live, is_selected, &node.name)
+            });
             last = rect;
             if reveal && is_selected {
                 response.scroll_to_me(None);
