@@ -38,6 +38,12 @@ pub(super) struct Panels {
     /// brings its Properties tab forward, the same one after a render
     /// leaves the tab picked.
     seen: Vec<Option<Range<usize>>>,
+    /// A widget that asked for the keyboard before it showed: it gets it
+    /// at the next frame.
+    refocus: Option<egui::Id>,
+    /// The widget last given the keyboard back: if it still does not show,
+    /// it is not given it again.
+    refocused: Option<egui::Id>,
 }
 
 impl StudioApp {
@@ -49,6 +55,58 @@ impl StudioApp {
     /// The Model workspace for a design.
     pub(super) fn models(&self) -> bool {
         !self.doc.is_circuit() && self.settings.workspace == Workspace::Model
+    }
+
+    /// The code editor is on screen: a circuit's, or the Code workspace's
+    /// Code tab.
+    pub(super) fn editor_shown(&self) -> bool {
+        self.doc.is_circuit() || (self.settings.workspace == Workspace::Code && self.panels.code_tab == CodeTab::Code)
+    }
+
+    /// Gives the editor the keyboard, when it is on screen: a widget out of
+    /// sight with the keyboard leaves screen readers a focus on nothing.
+    pub(super) fn focus_editor(&self, ctx: &egui::Context) {
+        if self.editor_shown() {
+            self.doc.editor.focus(ctx);
+        }
+    }
+
+    /// The code at byte `offset`, in the Code workspace's editor, with the
+    /// keyboard.
+    pub(super) fn go_to_code(&mut self, ctx: &egui::Context, offset: usize) {
+        if !self.doc.is_circuit() {
+            self.set_workspace(ctx, Workspace::Code);
+            self.panels.code_tab = CodeTab::Code;
+        }
+        let text = self.doc.text.clone();
+        self.doc.editor.go_to(ctx, &text, offset);
+        self.doc.editor.focus(ctx);
+    }
+
+    /// Takes the keyboard, at the end of a frame, from a widget that is not
+    /// on screen: egui would tell screen readers of a focus on nothing,
+    /// which the macOS one does not survive. A widget that asked for it
+    /// before it shows (the editor, as the Code workspace opens) gets it at
+    /// the next frame, once.
+    pub(super) fn drop_unseen_focus(&mut self, ctx: &egui::Context) {
+        let Some(id) = ctx.memory(|m| m.focused()) else { return };
+        if ctx.viewport(|v| v.this_pass.widgets.get(id).is_some()) {
+            self.panels.refocused = None;
+            return;
+        }
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        if self.panels.refocused != Some(id) {
+            self.panels.refocus = Some(id);
+        }
+    }
+
+    /// Gives the keyboard back, at the start of a frame, to the widget that
+    /// asked for it before it showed.
+    pub(super) fn refocus(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.panels.refocus.take() {
+            ctx.memory_mut(|m| m.request_focus(id));
+            self.panels.refocused = Some(id);
+        }
     }
 
     pub(super) fn set_workspace(&mut self, ctx: &egui::Context, workspace: Workspace) {

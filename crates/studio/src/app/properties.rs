@@ -1444,10 +1444,7 @@ impl StudioApp {
                     self.apply_code_edit(ctx, result, "");
                 }
             }
-            Action::GoTo(at) => {
-                self.doc.editor.go_to(ctx, &src, at);
-                self.doc.editor.focus(ctx);
-            }
+            Action::GoTo(at) => self.go_to_code(ctx, at),
             Action::OpenParameter(name) => {
                 self.panels.inspector = InspectorTab::Parameters;
                 self.doc.customizer_open = Some(true);

@@ -70,6 +70,12 @@ impl Window {
             app.panels(ctx);
         });
         if let Some(update) = output.platform_output.accesskit_update {
+            // What the macOS screen reader checks first, and dies of: the
+            // widget with the keyboard is among the nodes.
+            assert!(
+                update.nodes.iter().any(|(id, _)| *id == update.focus),
+                "the keyboard is on a widget out of sight"
+            );
             self.named = update
                 .nodes
                 .iter()
@@ -133,6 +139,15 @@ impl Window {
         let widget = self.named(label);
         assert!(widget.enabled, "{label:?} is disabled");
         self.click_at(widget.rect.center(), PointerButton::Primary, Modifiers::NONE);
+    }
+
+    /// Clicks the control named `label` lowest in the window: of two of a
+    /// name, the panel's tab rather than the top bar's button.
+    fn click_lowest(&mut self, label: &str) {
+        let is = |n: &&Named| !n.text && (n.label == label || n.label.starts_with(&format!("{label} ")));
+        let lowest = self.named.iter().filter(is).max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()));
+        let at = lowest.unwrap_or_else(|| panic!("no control named {label:?}")).rect.center();
+        self.click_at(at, PointerButton::Primary, Modifiers::NONE);
     }
 
     fn has(&self, label: &str) -> bool {
@@ -262,8 +277,8 @@ fn the_code_workspace_tree_tab_selects() {
     let row = w.named("translate").rect.center();
     w.click_at(row, PointerButton::Primary, Modifiers::NONE);
     assert_eq!(w.selected(), ["translate([20, 0, 0]) cube(10);"]);
-    w.click("Code");
-    assert!(w.has("Tree"), "back on the code, the tab is there");
+    w.click_lowest("Code");
+    assert_eq!(w.app.panels.code_tab, super::workspace::CodeTab::Code, "back on the code");
 }
 
 #[test]
@@ -318,4 +333,25 @@ fn esc_gives_up_choosing_a_plane() {
     w.click("Sketch");
     w.click("Sketch");
     assert!(!w.has("Sketch on"));
+}
+
+#[test]
+fn a_new_file_with_the_code_hidden() {
+    // In the Model workspace, and on the Code workspace's Tree tab.
+    let mut w = Window::new(TWO_CUBES, Workspace::Model);
+    w.click("+");
+    assert_eq!(w.app.shelf.len(), 2);
+    let mut w = Window::new(TWO_CUBES, Workspace::Code);
+    w.click("Tree");
+    w.click("+");
+    assert_eq!(w.app.shelf.len(), 2);
+    // With the code on screen, the new file's editor takes the keyboard
+    // (from Cmd+N: a click on + is a click away from it, which egui takes
+    // as leaving it).
+    w.click_lowest("Code");
+    assert_eq!(w.app.panels.code_tab, super::workspace::CodeTab::Code);
+    w.frame(vec![key(Key::N, Modifiers::COMMAND)], Modifiers::COMMAND);
+    w.frame(Vec::new(), Modifiers::NONE);
+    assert_eq!(w.app.shelf.len(), 3);
+    assert_eq!(w.ctx.memory(|m| m.focused()), Some(w.app.doc.editor.id()));
 }

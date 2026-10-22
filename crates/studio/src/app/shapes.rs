@@ -27,11 +27,9 @@ use glam::Vec3;
 
 use super::StudioApp;
 use super::toolbar::{self, Icon, Row};
-use super::workspace::CodeTab;
 use crate::code_edit::{self, Boolean, Edit, Place, Primitive};
 use crate::pick::Ray;
 use crate::select::Statement;
-use crate::settings::Workspace;
 use crate::theme;
 
 /// The toolbar's shapes: what each makes, its label and its tooltip.
@@ -338,11 +336,7 @@ impl StudioApp {
         let Some(range) = self.selected_ranges().and_then(|ranges| ranges.last().cloned()) else {
             return;
         };
-        self.set_workspace(ctx, Workspace::Code);
-        self.panels.code_tab = CodeTab::Code;
-        let text = self.doc.text.clone();
-        self.doc.editor.go_to(ctx, &text, range.start);
-        self.doc.editor.focus(ctx);
+        self.go_to_code(ctx, range.start);
     }
 
     /// Whether the clipboard holds objects copied here, for Paste.

@@ -575,7 +575,7 @@ impl StudioApp {
         if self.doc.sent == 0 || self.doc.stale || lost {
             self.render_now();
         }
-        self.doc.editor.focus(ctx);
+        self.focus_editor(ctx);
     }
 
     /// Closes tab `index`, first asking about its unsaved edits, in the
@@ -1502,7 +1502,7 @@ impl StudioApp {
                     self.add_tab();
                 }
                 self.load(path, text);
-                self.doc.editor.focus(ctx);
+                self.focus_editor(ctx);
             }
             Err(err) => self.doc.console.log(Level::Error, format!("Cannot open {}: {err}", path.display())),
         }
@@ -1531,7 +1531,7 @@ impl StudioApp {
         self.add_tab();
         self.doc.console.log(Level::Info, "New file");
         self.render_now();
-        self.doc.editor.focus(ctx);
+        self.focus_editor(ctx);
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
@@ -2718,6 +2718,7 @@ impl StudioApp {
     /// them out: the bars across the window first, then the side panels,
     /// then the view in what is left.
     fn panels(&mut self, ctx: &egui::Context) {
+        self.refocus(ctx);
         self.toolbar(ctx);
         self.tools_panel(ctx);
         self.status_bar(ctx);
@@ -2729,6 +2730,7 @@ impl StudioApp {
         self.view_panel(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
+        self.drop_unseen_focus(ctx);
     }
 }
 

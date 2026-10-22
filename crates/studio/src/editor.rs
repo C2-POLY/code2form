@@ -141,6 +141,12 @@ impl Editor {
     }
 
     /// Gives the editor keyboard focus.
+    /// The id of its text field, which has the keyboard when typing.
+    #[cfg(test)]
+    pub fn id(&self) -> Id {
+        self.id
+    }
+
     pub fn focus(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(self.id));
     }
