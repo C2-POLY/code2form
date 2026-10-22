@@ -541,6 +541,7 @@ dependencies = [
 name = "c2f-cli"
 version = "0.2.0"
 dependencies = [
+ "c2f-circuit",
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",

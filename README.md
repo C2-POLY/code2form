@@ -58,7 +58,13 @@ they are. Written in Rust, it renders as you type.
   JSON Schema is `crates/circuit/circuit.schema.json`.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
-  `-P preset`; `c2f pins` prints a part's annotations.
+  `-P preset`; `c2f pins` prints a part's annotations. `c2f circuit`
+  reads a circuit: `check` evaluates its parts and reports its errors with
+  their line, `wires` prints the wiring list in the order to lay the
+  wires (step, each pin with its label, color, length, label), `bom` the
+  bill of materials (each part file and set of params, its quantity and
+  instances), both as text or `--csv`, and `stl` and `3mf` the parts
+  assembled where the circuit places them (not the wires).
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window.
@@ -117,6 +123,9 @@ cargo run --release -p c2f-cli -- stl design.c2f > design.stl
 cargo run --release -p c2f-cli -- 3mf design.c2f > design.3mf
 cargo run --release -p c2f-cli -- svg plate.c2f > plate.svg     # 2D models
 cargo run --release -p c2f-cli -- dxf plate.c2f > plate.dxf
+cargo run --release -p c2f-cli -- circuit check examples/grogu/grogu.c2fc
+cargo run --release -p c2f-cli -- circuit wires --csv examples/grogu/grogu.c2fc > wires.csv
+cargo run --release -p c2f-cli -- circuit 3mf examples/grogu/grogu.c2fc > grogu.3mf
 ```
 
 On macOS, `scripts/bundle-macos.sh` builds `Code2Form.app`, a universal

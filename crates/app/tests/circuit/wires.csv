@@ -1,0 +1,24 @@
+step,from,from_label,to,to_label,color,label,length_mm
+1,xiao.5V,USB 5 V,amp.VIN,,red,5 V,44.3
+2,xiao.GND,,amp.GND,,black,,45.8
+3,cap.+,longer lead,amp.VIN,,red,decoupling,31.5
+4,cap.-,striped side,amp.GND,,black,,30.0
+5,amp.VIN,,driver.VCC,motor supply,red,5 V,53.5
+6,amp.GND,,driver.GND,,black,,57.7
+7,driver.VCC,motor supply,driver.EEP,sleep: high to run,red,keep the driver awake,22.9
+8,xiao.3V3,,mic.VDD,,orange,3.3 V,24.3
+9,xiao.GND,,mic.GND,,black,,21.2
+10,mic.L/R,channel: GND for left,mic.GND,,black,left channel,8.8
+11,xiao.D3,"GPIO4, A3",amp.BCLK,bit clock,blue,speaker I2S,37.3
+12,xiao.D4,"GPIO5, SDA",amp.LRC,word select,green,speaker I2S,39.6
+13,xiao.D5,"GPIO6, SCL",amp.DIN,data,yellow,speaker I2S,32.5
+14,amp.+,speaker +,speaker.+,,red,,48.9
+15,amp.-,speaker -,speaker.-,,black,,46.8
+16,xiao.D8,"GPIO7, SCK",mic.SCK,bit clock,blue,mic I2S,23.6
+17,xiao.D9,"GPIO8, MISO",mic.WS,word select,green,mic I2S,25.2
+18,mic.SD,data,xiao.D10,"GPIO9, MOSI",yellow,mic I2S,28.3
+19,xiao.D1,"GPIO2, A1",driver.IN1,,purple,,22.8
+20,xiao.D2,"GPIO3, A2, strapping",driver.IN2,,purple,,26.2
+21,driver.OUT1,,motor.+,,red,,28.2
+22,driver.OUT2,,motor.-,,black,,22.3
+23,xiao.D0,"GPIO1, A0, touch",touch.PAD,solder point,white,touch,68.0
