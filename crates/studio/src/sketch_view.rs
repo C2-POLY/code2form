@@ -232,7 +232,7 @@ impl Tool {
     pub fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
             (Tool::Select, _) => "Click to select, Shift-click to add · drag a point or a line to move it",
-            (Tool::Line, 0) => "Click the start of the line",
+            (Tool::Line, 0) => "Click the start of the line · Alt: off the grid",
             (Tool::Line, _) => "Click the next corner · click a point to close · double-click, Enter or Esc to stop",
             (Tool::Rectangle, 0) => "Click a corner",
             (Tool::Rectangle, _) => "Click the opposite corner",
@@ -261,13 +261,42 @@ pub enum Target {
 }
 
 /// The pick at `at`: the snap within `tolerance` if any, the origin when
-/// nothing of the sketch is in reach.
-pub fn pick(sketch: &Sketch, at: Point, tolerance: f64) -> Pick {
+/// nothing of the sketch is in reach, else the nearest crossing of the grid
+/// of spacing `grid` (when given), as the drawing should sit on round
+/// numbers.
+pub fn pick(sketch: &Sketch, at: Point, tolerance: f64, grid: Option<f64>) -> Pick {
     match c2f_sketch::snap(sketch, at, tolerance) {
         Some(snap) => Pick { at: snap.at, snap: Some(Target::Sketch(snap)) },
         None if at.distance(Point::default()) <= tolerance => Pick { at: Point::default(), snap: Some(Target::Origin) },
-        None => Pick { at, snap: None },
+        None => Pick { at: grid.filter(|s| *s > 0.0).map_or(at, |s| on_grid(at, s)), snap: None },
     }
+}
+
+/// The crossing of the grid of spacing `step` nearest to `at`.
+pub fn on_grid(at: Point, step: f64) -> Point {
+    // Rounded again to the step's own decimals, so 0.1 steps give 0.3 and
+    // not 0.30000000000000004 in the code.
+    let round = |v: f64| {
+        let n = (v / step).round() * step;
+        let decimals = (-step.log10().floor()).max(0.0) as i32;
+        let scale = 10f64.powi(decimals);
+        (n * scale).round() / scale + 0.0
+    };
+    Point::new(round(at.x), round(at.y))
+}
+
+/// The spacing of the sketch's grid, at least `minimum` units: 1, 2 or 5
+/// times a power of ten. Returns the spacing and how many spacings a
+/// stronger line comes every.
+pub fn grid_step(minimum: f64) -> (f64, f64) {
+    let mut step = 10f64.powf(minimum.log10().floor());
+    for (factor, every) in [(1.0, 10.0), (2.0, 5.0), (5.0, 2.0), (10.0, 10.0)] {
+        if step * factor >= minimum {
+            step *= factor;
+            return (step, every);
+        }
+    }
+    (step, 10.0)
 }
 
 /// A point a tool has placed, before the entity it belongs to is drawn.
@@ -1016,7 +1045,7 @@ mod tests {
     fn draw_lines(sketch: &mut Sketch, drawing: &mut Drawing, clicks: &[(f64, f64)]) -> Vec<EntityId> {
         let mut made = Vec::new();
         for &(x, y) in clicks {
-            made.extend(drawing.click(sketch, &pick(sketch, Point::new(x, y), 0.5)));
+            made.extend(drawing.click(sketch, &pick(sketch, Point::new(x, y), 0.5, None)));
         }
         made
     }
@@ -1335,5 +1364,27 @@ sketch_logo();
         assert!(text[selection[0].clone()].contains("rotate_extrude"), "{text}");
         let tube = std::f64::consts::PI * (25.0 - 9.0) * 10.0;
         assert!((volume(&text) - tube).abs() < tube * 0.01, "{}", volume(&text));
+    }
+
+    #[test]
+    fn a_click_off_the_sketch_lands_on_the_grid() {
+        let mut sketch = Sketch::new(Plane::Xy);
+        sketch.add_point(10.0, 10.0);
+        // On the grid, rounded to the step's decimals.
+        assert_eq!(pick(&sketch, Point::new(3.26, -7.74), 0.1, Some(0.5)).at, Point::new(3.5, -7.5));
+        assert_eq!(pick(&sketch, Point::new(0.28, 0.71), 0.01, Some(0.1)).at, Point::new(0.3, 0.7));
+        // A point of the sketch wins over the grid, and no grid leaves the
+        // click where it is.
+        assert_eq!(pick(&sketch, Point::new(10.2, 9.9), 0.5, Some(5.0)).at, Point::new(10.0, 10.0));
+        assert_eq!(pick(&sketch, Point::new(3.26, 1.0), 0.1, None).at, Point::new(3.26, 1.0));
+    }
+
+    #[test]
+    fn the_grid_steps_by_one_two_five() {
+        assert_eq!(grid_step(0.8), (1.0, 10.0));
+        assert_eq!(grid_step(1.3), (2.0, 5.0));
+        assert_eq!(grid_step(3.0), (5.0, 2.0));
+        assert_eq!(grid_step(0.04), (0.05, 2.0));
+        assert_eq!(grid_step(7.0), (10.0, 10.0));
     }
 }

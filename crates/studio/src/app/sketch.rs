@@ -624,7 +624,9 @@ impl StudioApp {
         } else if mode.drawing.tool == Tool::Select {
             select_input(ctx, response, mode, cursor, tolerance);
         } else if let Some(at) = cursor {
-            let pick = view::pick(&mode.sketch, at, tolerance);
+            // The grid drawn, unless Alt is held.
+            let grid = (!ctx.input(|i| i.modifiers.alt)).then(|| view::grid_step(f64::from(12.0 / ppm)).0);
+            let pick = view::pick(&mode.sketch, at, tolerance, grid);
             if clicked && !mode.drawing.click(&mut mode.sketch, &pick).is_empty() {
                 mode.resolve();
             }
@@ -1319,16 +1321,8 @@ fn paint_grid(viewer: &crate::viewer::Viewer, rect: Rect, painter: &egui::Painte
     let (lo, hi) = corners.iter().fold((corners[0], corners[0]), |(lo, hi), p| {
         (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y)))
     });
-    let minimum = f64::from(12.0 / ppm);
-    let mut step = 10f64.powf(minimum.log10().floor());
-    let mut major = 10.0;
-    for (factor, every) in [(1.0, 10.0), (2.0, 5.0), (5.0, 2.0), (10.0, 10.0)] {
-        if step * factor >= minimum {
-            step *= factor;
-            major = every;
-            break;
-        }
-    }
+    // The same spacing a click snaps to.
+    let (step, major) = view::grid_step(f64::from(12.0 / ppm));
     if (hi.x - lo.x) / step > 400.0 || (hi.y - lo.y) / step > 400.0 {
         return;
     }
