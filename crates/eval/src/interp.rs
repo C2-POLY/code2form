@@ -49,6 +49,7 @@ pub struct Interp<'p> {
     pub base_dir: std::path::PathBuf,
     pub echo: Vec<String>,
     pub warnings: Vec<String>,
+    pub pauses: Vec<crate::Pause>,
     /// Names of the user modules being instantiated, innermost last.
     pub module_stack: Vec<&'p str>,
     call_depth: usize,
@@ -121,6 +122,7 @@ impl<'p> Interp<'p> {
             base_dir: program.files[0].path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
             echo: Vec::new(),
             warnings: Vec::new(),
+            pauses: Vec::new(),
             module_stack: Vec::new(),
             call_depth: 0,
             instantiation_depth: 0,

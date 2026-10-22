@@ -228,6 +228,21 @@ pub fn instantiate<'p>(
                 convexity: convexity(p.number("convexity"), 1),
             })
         }
+        // Not in the reference: a pause for the 3D print, with no geometry.
+        "pause" => {
+            let p = bind!(["z", "message"]);
+            match finite(p.number("z")) {
+                Some(z) => {
+                    let message = match p.get("message") {
+                        Value::Undef => String::new(),
+                        other => other.to_display(),
+                    };
+                    interp.pauses.push(crate::Pause { z, message });
+                }
+                None => interp.warn(format!("Ignoring pause(): z = {} is not a height", p.get("z").repr())),
+            }
+            Ok(Some(None))
+        }
         "text" => {
             let p = bind!(["text", "size", "font"], ["halign", "valign", "spacing", "direction", "language", "script"]);
             leaf(NodeKind::Text(text(&p)))

@@ -27,6 +27,18 @@ pub struct Output {
     pub warnings: Vec<String>,
     /// The error that stopped evaluation, if any.
     pub error: Option<String>,
+    /// The pauses `pause()` asks of a 3D print, in the order it was called.
+    pub pauses: Vec<Pause>,
+}
+
+/// A pause in a 3D print, made once the print is done up to height `z`
+/// (in the model's coordinates, in millimeters) and before the layer that
+/// covers it: to drop magnets, nuts or weights into closed cavities.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pause {
+    pub z: f64,
+    /// Shown on the printer while it waits; may be empty.
+    pub message: String,
 }
 
 impl Output {
@@ -62,5 +74,5 @@ fn evaluate_here(program: &Program) -> Output {
         Ok(nodes) => (interp.root.take().map_or(nodes, |root| vec![root]), None),
         Err(interp::Abort(message)) => (Vec::new(), Some(message)),
     };
-    Output { nodes, echo: std::mem::take(&mut interp.echo), warnings, error }
+    Output { nodes, echo: std::mem::take(&mut interp.echo), warnings, error, pauses: std::mem::take(&mut interp.pauses) }
 }

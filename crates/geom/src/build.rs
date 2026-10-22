@@ -77,7 +77,7 @@ pub fn render_in(nodes: &[Node], base_dir: &Path) -> Rendered {
     for part in &builder.backgrounds {
         backgrounds.append(display(part, Some(BACKGROUND_COLOR)));
     }
-    Rendered { solid, highlights, backgrounds, is_2d, stats, warnings: builder.warnings, model }
+    Rendered { solid, highlights, backgrounds, is_2d, stats, warnings: builder.warnings, model, pauses: Vec::new() }
 }
 
 #[derive(Clone, Copy)]

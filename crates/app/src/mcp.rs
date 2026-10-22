@@ -20,7 +20,10 @@ program's text (`code`) or a file (`path`). `render` reports errors with \
 their line, echo output, warnings, the triangle count, the volume and the \
 bounding box; `image` returns a picture of the model from a view; \
 `parameters` lists the customizer parameters, which every tool can set \
-with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D).";
+with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D). \
+`pause(z, message);` pauses a 3D print once it is done up to height `z`, \
+to drop magnets or nuts into closed cavities: the 3MF carries the pauses \
+for PrusaSlicer.";
 
 /// The picture's size when the agent gives none, and the largest it can ask.
 const IMAGE_SIZE: (u64, u64) = (800, 600);
@@ -368,6 +371,10 @@ fn render(args: &Value) -> Result<(c2f_geom::Rendered, Value), String> {
             let size: Vec<f64> = (0..3).map(|i| hi[i] - lo[i]).collect();
             report.insert("bounding_box".into(), json!({ "min": lo, "max": hi, "size": size }));
         }
+    }
+    if !rendered.pauses.is_empty() {
+        let pauses: Vec<Value> = rendered.pauses.iter().map(|p| json!({ "z": p.z, "message": p.message })).collect();
+        report.insert("pauses".into(), json!(pauses));
     }
     Ok((rendered, Value::Object(report)))
 }

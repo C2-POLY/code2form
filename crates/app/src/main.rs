@@ -189,6 +189,7 @@ impl Export {
 /// its main file.
 fn render(program: &c2f_eval::Program, output: &c2f_eval::Output) -> c2f_geom::Rendered {
     c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")))
+        .with_pauses(output.pauses.clone())
 }
 
 /// Prints the CSG tree, or with `export` the geometry in that format.

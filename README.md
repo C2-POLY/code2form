@@ -20,6 +20,15 @@ they are. Written in Rust, it renders as you type.
 - **Export** of solids to STL and 3MF (in millimeters), checked with
   PrusaSlicer's own loader, and of 2D models to SVG and DXF, laid out as
   the reference implementation (release 2021.01) writes them.
+- **Print pauses**: `pause(z, message);` asks the 3D print to stop once it
+  is done up to height `z`, before the layer that covers it, to drop
+  magnets, nuts or weights into closed cavities. The 3MF carries the
+  pauses (`M601`, the message shown on the printer) and an empty settings
+  part, so that PrusaSlicer opens it as a project, which keeps the pauses
+  and leaves the printer, print and filament settings as they are: with
+  File > Open Project, or "Open as project" when the file is dropped or
+  opened from the Finder. It makes no geometry, and the reference
+  implementation ignores it with a warning.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`.
