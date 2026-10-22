@@ -401,6 +401,10 @@ impl StudioApp {
                     ui.label(RichText::new("Browser").strong().size(12.5).color(theme::palette().text));
                 });
                 ui.add_space(4.0);
+                // The rest of the model waits while a sketch is open.
+                if self.doc.sketch.active() {
+                    ui.disable();
+                }
                 self.tree_view(ctx, ui);
             });
     }

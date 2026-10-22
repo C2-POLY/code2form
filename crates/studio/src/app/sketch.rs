@@ -28,7 +28,7 @@ use c2f_sketch::{
     solve_with,
 };
 use eframe::egui::{
-    self, Align2, Button, Color32, CornerRadius, FontId, Key, PointerButton, Pos2, Rect, RichText,
+    self, Align2, Button, Color32, CornerRadius, FontId, Key, PointerButton, Pos2, Rect, RichText, Sense,
     Stroke, StrokeKind, TextEdit, Vec2,
 };
 use glam::Vec3;
@@ -360,19 +360,36 @@ impl StudioApp {
         egui::SidePanel::right("sketch_panel")
             .frame(crate::customizer::frame())
             .resizable(false)
-            .exact_width(250.0)
+            .exact_width(280.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| action = panel_ui(ui, &mut mode));
             });
-        // Extruding is seen from three quarters, drawing face on.
-        if std::mem::discriminant(&mode.stage) != stage {
+        self.follow_stage(&mode, stage);
+        self.doc.sketch.mode = Some(mode);
+        self.sketch_action(ctx, action);
+    }
+
+    /// Extruding is seen from three quarters, drawing face on: the camera
+    /// flies when the stage changed from `before`.
+    fn follow_stage(&mut self, mode: &SketchMode, before: std::mem::Discriminant<Stage>) {
+        if std::mem::discriminant(&mode.stage) != before {
             let goal = if mode.stage == Stage::Draw {
-                face_camera(&mode, &self.doc.viewer)
+                face_camera(mode, &self.doc.viewer)
             } else {
-                extrude_camera(&mode, &self.doc.viewer)
+                extrude_camera(mode, &self.doc.viewer)
             };
             self.doc.viewer.fly_to(goal);
         }
+    }
+
+    /// The sketch's row of the toolbar: while drawing, DRAW and CONSTRAIN
+    /// and the green Finish sketch; while extruding or revolving, Back and
+    /// the green button that writes it.
+    pub(super) fn sketch_toolbar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, row: Row) {
+        let Some(mut mode) = self.doc.sketch.mode.take() else { return };
+        let stage = std::mem::discriminant(&mode.stage);
+        let action = toolbar_ui(ui, row, &mut mode);
+        self.follow_stage(&mode, stage);
         self.doc.sketch.mode = Some(mode);
         self.sketch_action(ctx, action);
     }
@@ -786,29 +803,29 @@ impl StudioApp {
 
 fn panel_ui(ui: &mut egui::Ui, mode: &mut SketchMode) -> Option<Action> {
     let mut action = None;
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Sketch").strong().size(15.0).color(theme::palette().text));
-        if mode.reopened {
-            ui.label(RichText::new(module_name(&mode.name)).monospace().color(theme::palette().text_dim));
-        }
-    });
-    if !mode.reopened {
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            ui.add(TextEdit::singleline(&mut mode.name).desired_width(140.0))
-                .on_hover_text("The module is sketch_<name>");
-        });
-    }
-    let plane = match mode.sketch.plane {
-        Plane::Xy => "XY plane",
-        Plane::Xz => "XZ plane",
-        Plane::Yz => "YZ plane",
-        Plane::Face { .. } => "a face",
-    };
-    ui.label(RichText::new(format!("On {plane}")).color(theme::palette().text_dim));
+    let palette = theme::palette();
+    ui.label(RichText::new("Sketch").strong().size(14.0).color(palette.text));
+    ui.add_space(6.0);
     let (status, color) = mode.status();
-    ui.label(RichText::new(status).color(color));
-    ui.separator();
+    ui.horizontal(|ui| {
+        let (dot, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
+        ui.painter().circle_filled(dot.center(), 4.0, color);
+        ui.label(RichText::new(status).color(color));
+    });
+    ui.add_space(6.0);
+    egui::Grid::new("sketch_identity").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+        ui.label(RichText::new("Name").color(palette.text_dim));
+        if mode.reopened {
+            ui.label(RichText::new(module_name(&mode.name)).monospace().color(palette.code_text));
+        } else {
+            ui.add(TextEdit::singleline(&mut mode.name).desired_width(160.0))
+                .on_hover_text("The module is sketch_<name>");
+        }
+        ui.end_row();
+        ui.label(RichText::new("Plane").color(palette.text_dim));
+        ui.label(RichText::new(plane_name(&mode.sketch.plane)).color(palette.text));
+        ui.end_row();
+    });
 
     match mode.stage.clone() {
         Stage::Draw => draw_panel(ui, mode, &mut action),
@@ -817,32 +834,135 @@ fn panel_ui(ui: &mut egui::Ui, mode: &mut SketchMode) -> Option<Action> {
     action
 }
 
-fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(4.0);
-    ui.label(RichText::new(title).strong().color(theme::palette().text_dim));
+fn plane_name(plane: &Plane) -> &'static str {
+    match plane {
+        Plane::Xy => "XY",
+        Plane::Xz => "XZ",
+        Plane::Yz => "YZ",
+        Plane::Face { .. } => "a face",
+    }
 }
 
-fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Action>) {
-    section(ui, "Draw");
-    ui.horizontal_wrapped(|ui| {
+/// The sketch's row of the toolbar; returns what it asks of the app.
+fn toolbar_ui(ui: &mut egui::Ui, row: Row, mode: &mut SketchMode) -> Option<Action> {
+    let mut action = None;
+    let name = if mode.name.trim().is_empty() { "sketch".to_string() } else { mode.name.trim().to_string() };
+    let detail = format!("{name} · {}", plane_name(&mode.sketch.plane));
+    match mode.stage {
+        Stage::Draw => {
+            toolbar::context(ui, "SKETCH", &detail);
+            toolbar::separator(ui);
+            draw_tools(ui, row, mode);
+            toolbar::separator(ui);
+            constrain_tools(ui, row, mode);
+        }
+        Stage::Extrude { .. } => toolbar::context(ui, "EXTRUDE", &detail),
+        Stage::Revolve { .. } => toolbar::context(ui, "REVOLVE", &detail),
+    }
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.add_space(4.0);
+        match mode.stage {
+            Stage::Draw => {
+                if toolbar::finish_button(ui, "Finish sketch", "Write the sketch into the code (Enter)").clicked() {
+                    action = Some(Action::Finish);
+                }
+                let tip = "Leave without writing; Sketch ▸ Resume brings it back (Esc)";
+                if ui.button("Cancel").on_hover_text(tip).clicked() {
+                    action = Some(Action::Leave);
+                }
+            }
+            _ => {
+                let verb = if matches!(mode.stage, Stage::Extrude { .. }) { "Extrude" } else { "Revolve" };
+                let tip = "Write the sketch and the feature into the code (Enter)";
+                if toolbar::finish_button(ui, verb, tip).clicked() {
+                    action = Some(Action::Apply);
+                }
+                if ui.button("Back").on_hover_text("Back to the sketch (Esc)").clicked() {
+                    mode.stage = Stage::Draw;
+                }
+            }
+        }
+    });
+    action
+}
+
+/// The DRAW group: the tools that draw, and Select.
+fn draw_tools(ui: &mut egui::Ui, row: Row, mode: &mut SketchMode) {
+    toolbar::group(ui, "DRAW", row, |ui| {
         for tool in Tool::ALL {
-            let key = match tool {
-                Tool::Select => "S",
-                Tool::Line => "L",
-                Tool::Rectangle => "R",
-                Tool::Circle => "C",
-                Tool::Arc => "A",
+            let (icon, key) = match tool {
+                Tool::Select => (Icon::Select, "S"),
+                Tool::Line => (Icon::Line, "L"),
+                Tool::Rectangle => (Icon::Rectangle, "R"),
+                Tool::Circle => (Icon::Circle, "C"),
+                Tool::Arc => (Icon::Arc, "A"),
             };
-            if ui
-                .selectable_label(mode.drawing.tool == tool, tool.name())
-                .on_hover_text(format!("{} ({key})", tool.hint(0)))
-                .clicked()
-            {
+            let tip = format!("{} ({key})", tool.hint(0));
+            if toolbar::tool(ui, row, icon, tool.name(), mode.drawing.tool == tool, Ok(()), &tip).clicked() {
                 mode.drawing.set_tool(tool);
                 mode.hint = None;
             }
         }
     });
+}
+
+/// The CONSTRAIN group: the rules on the selection, and the dimensions.
+fn constrain_tools(ui: &mut egui::Ui, row: Row, mode: &mut SketchMode) {
+    toolbar::group(ui, "CONSTRAIN", row, |ui| {
+        for rule in Rule::ALL {
+            let (icon, short) = match rule {
+                Rule::Horizontal => (Icon::Horizontal, "Horiz."),
+                Rule::Vertical => (Icon::Vertical, "Vert."),
+                Rule::Parallel => (Icon::Parallel, "Parallel"),
+                Rule::Perpendicular => (Icon::Perpendicular, "Perp."),
+                Rule::Coincident => (Icon::Coincident, "Coincid."),
+                Rule::Tangent => (Icon::Tangent, "Tangent"),
+                Rule::Equal => (Icon::Equal, "Equal"),
+                Rule::Fix => (Icon::Fix, "Fix"),
+            };
+            let tip = format!("{}: {}", rule.name(), rule.help());
+            if toolbar::tool(ui, row, icon, short, false, Ok(()), &tip).clicked() {
+                match view::constraints_for(rule, &mode.sketch, &mode.selection) {
+                    Ok(made) => {
+                        mode.sketch.constraints.extend(made);
+                        mode.resolve();
+                        mode.hint = None;
+                    }
+                    Err(help) => mode.hint = Some(help.to_string()),
+                }
+            }
+        }
+        let tip = "A length, a radius or an angle on the selection, with its value";
+        let dimension = toolbar::tool(ui, row, Icon::Dimension, "Dimension", false, Ok(()), tip);
+        egui::Popup::menu(&dimension).show(|ui| {
+            for measure in Measure::ALL {
+                if ui.button(measure.name()).on_hover_text(measure.help()).clicked() {
+                    match view::dimension_for(measure, &mode.sketch, &mode.selection) {
+                        Ok(constraint) => {
+                            let at = ui.ctx().screen_rect().center() - Vec2::new(120.0, 40.0);
+                            mode.prompt = Some(new_prompt(constraint, None, at));
+                            mode.hint = None;
+                        }
+                        Err(help) => mode.hint = Some(help.to_string()),
+                    }
+                }
+            }
+        });
+    });
+}
+
+fn section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(4.0);
+    ui.label(RichText::new(title).strong().color(theme::palette().text_dim));
+}
+
+fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, _action: &mut Option<Action>) {
+    if let Some(hint) = &mode.hint {
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(hint).color(theme::palette().warning)).wrap());
+    }
+    section(ui, "Selection");
     let entities: Vec<EntityId> =
         mode.selection.iter().filter_map(|i| if let Item::Entity(e) = i { Some(*e) } else { None }).collect();
     ui.horizontal(|ui| {
@@ -864,44 +984,6 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
             mode.renumbered();
         }
     });
-
-    section(ui, "Constrain");
-    egui::Grid::new("sketch_rules").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-        for (i, rule) in Rule::ALL.into_iter().enumerate() {
-            if ui.add_sized([110.0, 20.0], Button::new(rule.name())).on_hover_text(rule.help()).clicked() {
-                match view::constraints_for(rule, &mode.sketch, &mode.selection) {
-                    Ok(made) => {
-                        mode.sketch.constraints.extend(made);
-                        mode.resolve();
-                        mode.hint = None;
-                    }
-                    Err(help) => mode.hint = Some(help.to_string()),
-                }
-            }
-            if i % 2 == 1 {
-                ui.end_row();
-            }
-        }
-    });
-
-    section(ui, "Dimension");
-    ui.horizontal(|ui| {
-        for measure in Measure::ALL {
-            if ui.button(measure.name()).on_hover_text(measure.help()).clicked() {
-                match view::dimension_for(measure, &mode.sketch, &mode.selection) {
-                    Ok(constraint) => {
-                        let at = ui.ctx().screen_rect().center() - Vec2::new(120.0, 40.0);
-                        mode.prompt = Some(new_prompt(constraint, None, at));
-                        mode.hint = None;
-                    }
-                    Err(help) => mode.hint = Some(help.to_string()),
-                }
-            }
-        }
-    });
-    if let Some(hint) = &mode.hint {
-        ui.label(RichText::new(hint).color(theme::palette().warning));
-    }
 
     // The dimensions, with their values to change.
     let dimensions: Vec<usize> =
@@ -972,20 +1054,10 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
         }
     }
 
+    ui.add_space(6.0);
     ui.separator();
-    ui.horizontal(|ui| {
-        if ui
-            .button(RichText::new("Finish sketch").strong())
-            .on_hover_text("Write the sketch into the code (Enter)")
-            .clicked()
-        {
-            *action = Some(Action::Finish);
-        }
-        if ui.button("Cancel").on_hover_text("Leave without writing; Sketch ▸ Resume brings it back (Esc)").clicked()
-        {
-            *action = Some(Action::Leave);
-        }
-    });
+    section(ui, "Then");
+    ui.label(RichText::new("Finish sketch writes the profile alone, or:").size(12.0).color(theme::palette().text_dim));
     ui.horizontal(|ui| {
         let closed = !profile(&mode.sketch, 64).is_empty();
         let extrude = ui
@@ -1013,7 +1085,7 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
     });
 }
 
-fn feature_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Action>) {
+fn feature_panel(ui: &mut egui::Ui, mode: &mut SketchMode, _action: &mut Option<Action>) {
     let can_cut = mode.cut_from.is_some();
     let cut_help = "Cut it out of the object selected (or clicked) when the sketch began";
     let no_cut = "Select the object to cut before starting the sketch, or sketch on its face";
@@ -1059,19 +1131,9 @@ fn feature_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<A
         }
         Stage::Draw => {}
     }
-    ui.separator();
-    ui.horizontal(|ui| {
-        if ui
-            .button(RichText::new(verb).strong())
-            .on_hover_text("Write the sketch and the feature into the code (Enter)")
-            .clicked()
-        {
-            *action = Some(Action::Apply);
-        }
-        if ui.button("Back").on_hover_text("Back to the sketch (Esc)").clicked() {
-            mode.stage = Stage::Draw;
-        }
-    });
+    ui.add_space(6.0);
+    let hint = format!("{verb} writes the sketch and the feature; Back returns to the drawing.");
+    ui.add(egui::Label::new(RichText::new(hint).size(12.0).color(theme::palette().text_dim)).wrap());
 }
 
 fn variable_field(ui: &mut egui::Ui, name: &mut String) {

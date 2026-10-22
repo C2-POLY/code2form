@@ -2725,6 +2725,7 @@ impl eframe::App for StudioApp {
         self.poll_disk(ctx);
 
         self.toolbar(ctx);
+        self.tools_panel(ctx);
         self.status_bar(ctx);
         self.console_panel(ctx);
         self.editor_panel(ctx);

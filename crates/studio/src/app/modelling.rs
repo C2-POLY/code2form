@@ -35,10 +35,9 @@ impl StudioApp {
             return;
         }
         self.tree_panel(ctx);
-        // The sketch's own panel and tools take their place while sketching.
+        // The sketch's own panel takes the inspector's place while sketching.
         if !self.doc.sketch.active() {
             self.inspector_panel(ctx);
-            self.modelling_toolbar(ctx);
         }
     }
 

@@ -1,7 +1,9 @@
-//! The modelling toolbar above the view, as Fusion's: one row of tools in
-//! groups (SKETCH, CREATE, MODIFY, COMBINE), each tool an icon over its
-//! name and each group named under its tools. Too narrow a view keeps the
-//! icons alone, the names in their tooltips.
+//! The toolbar across the window under the top bar, as Fusion's: one row
+//! of tools in groups, each tool an icon over its name and each group named
+//! under its tools. Modelling, it holds SKETCH, CREATE, MODIFY and COMBINE;
+//! while a sketch is open, the sketch's own DRAW and CONSTRAIN, and the
+//! button that finishes it. Too narrow a window keeps the icons alone, the
+//! names in their tooltips.
 
 use std::f32::consts::{PI, TAU};
 
@@ -14,9 +16,11 @@ use crate::theme;
 const TOOL: Vec2 = Vec2::new(48.0, 46.0);
 const COMPACT_TOOL: Vec2 = Vec2::new(34.0, 34.0);
 const ICON: f32 = 20.0;
-/// The tools and the separators of the row, for the width it needs.
+/// The tools and the separators of the modelling row, and the sketch's
+/// with its context and its buttons, for the width they need.
 const TOOLS: f32 = 14.0;
 const SEPARATORS: f32 = 3.0;
+const SKETCH_ROW: f32 = 1060.0;
 const SEPARATOR: f32 = 14.0;
 /// The space between two tools, or a tool and a separator.
 const GAP: f32 = 1.0;
@@ -46,6 +50,21 @@ pub(super) enum Icon {
     Pauses,
     Help,
     Gear,
+    // The sketch's.
+    Select,
+    Line,
+    Rectangle,
+    Circle,
+    Arc,
+    Horizontal,
+    Vertical,
+    Coincident,
+    Parallel,
+    Perpendicular,
+    Tangent,
+    Equal,
+    Fix,
+    Dimension,
 }
 
 /// How the row lays its tools out this frame.
@@ -55,23 +74,77 @@ pub(super) struct Row {
 }
 
 impl StudioApp {
-    /// The row of tools across the top of the 3D view. Added after the
-    /// side panels, it spans the view only.
-    pub(super) fn modelling_toolbar(&mut self, ctx: &egui::Context) {
+    /// The toolbar across the window, under the top bar: the sketch's
+    /// while one is open, else the modelling tools in the Model workspace.
+    /// Added before the side panels, it spans them too.
+    pub(super) fn tools_panel(&mut self, ctx: &egui::Context) {
+        if self.doc.is_circuit() {
+            return;
+        }
+        let sketching = self.doc.sketch.active();
+        if !sketching && !self.models() {
+            return;
+        }
         let palette = theme::palette();
-        let frame = egui::Frame::new().fill(palette.panel).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 3 });
+        // A tint of the accent: the window is in the sketch mode.
+        let fill = if sketching { palette.panel.lerp_to_gamma(palette.accent, 0.07) } else { palette.panel };
+        let frame = egui::Frame::new().fill(fill).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 3 });
         egui::TopBottomPanel::top("modelling-toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
             // The names under the icons when they fit.
-            let full = TOOLS * (TOOL.x + GAP) + SEPARATORS * (SEPARATOR + GAP);
+            let full = if sketching {
+                SKETCH_ROW
+            } else {
+                TOOLS * (TOOL.x + GAP) + SEPARATORS * (SEPARATOR + GAP)
+            };
             let row = Row { compact: ui.available_width() < full };
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(GAP, 0.0);
-                self.sketch_tools(ctx, ui, row);
-                separator(ui);
-                self.shape_tools(ctx, ui, row);
+                if sketching {
+                    self.sketch_toolbar(ctx, ui, row);
+                } else {
+                    self.sketch_tools(ctx, ui, row);
+                    separator(ui);
+                    self.shape_tools(ctx, ui, row);
+                }
             });
+            if sketching {
+                // The row's edge in the accent: the window is in a mode.
+                let rect = ui.max_rect().expand2(Vec2::new(8.0, 3.0));
+                let painter = ui.painter().with_clip_rect(rect);
+                painter.hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(2.0, palette.accent));
+            }
         });
     }
+}
+
+/// What the toolbar is about, at its left: `kind` in small capitals over
+/// `detail`.
+pub(super) fn context(ui: &mut egui::Ui, kind: &str, detail: &str) {
+    let palette = theme::palette();
+    ui.add_space(4.0);
+    ui.vertical(|ui| {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(kind).size(10.0).strong().color(palette.accent_strong));
+        ui.label(egui::RichText::new(detail).monospace().size(12.5).color(palette.text));
+    });
+    ui.add_space(8.0);
+}
+
+/// The green button that ends a mode, as Finish sketch.
+pub(super) fn finish_button(ui: &mut egui::Ui, label: &str, tip: &str) -> egui::Response {
+    let palette = theme::palette();
+    let text = if palette.dark { Color32::from_rgb(13, 26, 18) } else { Color32::WHITE };
+    // Room on the left for the check mark, drawn: the fonts have none.
+    let button = egui::Button::new(egui::RichText::new(format!("      {label}")).strong().color(text))
+        .fill(palette.success)
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(8))
+        .min_size(Vec2::new(0.0, 34.0));
+    let response = ui.add(button);
+    let c = Pos2::new(response.rect.left() + 17.0, response.rect.center().y);
+    let check = vec![c + Vec2::new(-5.0, 0.5), c + Vec2::new(-1.5, 4.0), c + Vec2::new(5.0, -4.0)];
+    ui.painter().add(Shape::line(check, Stroke::new(2.0, text)));
+    response.on_hover_text(tip)
 }
 
 /// A group of tools and its name under them.
@@ -112,7 +185,13 @@ pub(super) fn tool(
     tip: &str,
 ) -> egui::Response {
     let palette = theme::palette();
-    let size = if row.compact { COMPACT_TOOL } else { TOOL };
+    let font = FontId::proportional(10.5);
+    let size = if row.compact {
+        COMPACT_TOOL
+    } else {
+        let name_width = ui.painter().layout_no_wrap(name.to_string(), font.clone(), palette.text).size().x;
+        Vec2::new(TOOL.x.max(name_width + 10.0), TOOL.y)
+    };
     let sense = if enabled.is_ok() { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(size, sense);
     let hovered = enabled.is_ok() && response.hovered();
@@ -135,7 +214,7 @@ pub(super) fn tool(
     if !row.compact {
         let text = if enabled.is_ok() { palette.text } else { palette.text_faint };
         let at = Pos2::new(rect.center().x, rect.bottom() - 9.0);
-        painter.text(at, Align2::CENTER_CENTER, name, FontId::proportional(10.5), text);
+        painter.text(at, Align2::CENTER_CENTER, name, font, text);
     }
     let response = if row.compact { response.on_hover_text(format!("{name}: {tip}")) } else { response.on_hover_text(tip) };
     match enabled {
@@ -167,7 +246,7 @@ fn icon_color(icon: Icon) -> Color32 {
     let palette = theme::palette();
     match icon {
         Icon::Sketch | Icon::EditSketch => palette.accent_strong,
-        Icon::Hole => palette.warning,
+        Icon::Hole | Icon::Dimension => palette.warning,
         _ => palette.text,
     }
 }
@@ -289,6 +368,69 @@ pub(super) fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Colo
         Icon::Help => {
             painter.circle_stroke(c, r * 0.85, stroke);
             painter.text(c, Align2::CENTER_CENTER, "?", FontId::proportional(r * 1.15), color);
+        }
+        Icon::Select => {
+            let arrow = vec![at(-0.5, -0.85), at(0.55, 0.05), at(0.05, 0.12), at(-0.2, 0.75), at(-0.5, -0.85)];
+            painter.add(Shape::closed_line(arrow, stroke));
+        }
+        Icon::Line => {
+            painter.line_segment([at(-0.7, 0.7), at(0.7, -0.7)], stroke);
+            painter.circle_filled(at(-0.7, 0.7), 2.2, color);
+            painter.circle_filled(at(0.7, -0.7), 2.2, color);
+        }
+        Icon::Rectangle => {
+            painter.rect_stroke(Rect::from_center_size(c, Vec2::new(r * 1.7, r * 1.2)), 1.0, stroke, egui::StrokeKind::Middle);
+        }
+        Icon::Circle => {
+            painter.circle_stroke(c, r * 0.8, stroke);
+            painter.circle_filled(c, 1.5, color);
+        }
+        Icon::Arc => {
+            painter.add(line(ellipse(at(0.0, 0.45), r * 0.8, r * 0.8, PI, TAU)));
+        }
+        Icon::Horizontal => {
+            painter.line_segment([at(-0.85, 0.0), at(0.85, 0.0)], Stroke::new(1.8, color));
+            painter.text(at(0.0, -0.55), Align2::CENTER_CENTER, "H", FontId::proportional(r * 0.8), color);
+        }
+        Icon::Vertical => {
+            painter.line_segment([at(0.2, -0.85), at(0.2, 0.85)], Stroke::new(1.8, color));
+            painter.text(at(-0.45, 0.0), Align2::CENTER_CENTER, "V", FontId::proportional(r * 0.8), color);
+        }
+        Icon::Coincident => {
+            painter.line_segment([at(-0.85, 0.7), at(0.0, 0.0)], stroke);
+            painter.line_segment([at(0.85, 0.7), at(0.0, 0.0)], stroke);
+            painter.circle_filled(c, 2.6, color);
+        }
+        Icon::Parallel => {
+            painter.line_segment([at(-0.6, 0.8), at(0.0, -0.8)], stroke);
+            painter.line_segment([at(0.0, 0.8), at(0.6, -0.8)], stroke);
+        }
+        Icon::Perpendicular => {
+            painter.line_segment([at(-0.85, 0.75), at(0.85, 0.75)], stroke);
+            painter.line_segment([at(0.0, 0.75), at(0.0, -0.85)], stroke);
+            painter.rect_stroke(Rect::from_min_size(at(0.0, 0.4), Vec2::splat(r * 0.35)), 0.0, stroke, egui::StrokeKind::Middle);
+        }
+        Icon::Tangent => {
+            painter.circle_stroke(at(0.0, 0.25), r * 0.6, stroke);
+            painter.line_segment([at(-0.9, -0.35), at(0.9, -0.35)], stroke);
+        }
+        Icon::Equal => {
+            painter.line_segment([at(-0.7, -0.3), at(0.7, -0.3)], Stroke::new(1.8, color));
+            painter.line_segment([at(-0.7, 0.3), at(0.7, 0.3)], Stroke::new(1.8, color));
+        }
+        Icon::Fix => {
+            // A padlock.
+            painter.rect_stroke(Rect::from_min_max(at(-0.6, -0.1), at(0.6, 0.85)), 2.0, stroke, egui::StrokeKind::Middle);
+            painter.add(line(ellipse(at(0.0, -0.1), r * 0.38, r * 0.55, PI, TAU)));
+        }
+        Icon::Dimension => {
+            painter.line_segment([at(-0.85, 0.2), at(0.85, 0.2)], stroke);
+            for x in [-0.85, 0.85] {
+                painter.line_segment([at(x, -0.3), at(x, 0.7)], stroke);
+            }
+            painter.add(line(vec![at(-0.55, 0.0), at(-0.85, 0.2), at(-0.55, 0.4)]));
+            painter.add(line(vec![at(0.55, 0.0), at(0.85, 0.2), at(0.55, 0.4)]));
+            painter.line_segment([at(-0.35, -0.6), at(0.35, -0.6)], stroke);
         }
         Icon::Gear => {
             painter.circle_stroke(c, r * 0.38, stroke);
