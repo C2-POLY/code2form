@@ -75,6 +75,11 @@ pub struct Instance {
     pub annotations: Annotations,
     /// Its name in the circuit file.
     pub span: Span,
+    /// Its `part` value, and its `at` and `rotate` values when written, in
+    /// the circuit file: for editors that change them in place.
+    pub part_span: Span,
+    pub at_span: Option<Span>,
+    pub rotate_span: Option<Span>,
 }
 
 /// A wire from one pin to another.
@@ -374,6 +379,9 @@ impl Reader<'_> {
             color: entry.color,
             annotations: file.annotations.clone(),
             span: span(&name),
+            part_span: span(&entry.part),
+            at_span: entry.at.as_ref().map(span),
+            rotate_span: entry.rotate.as_ref().map(span),
         })
     }
 

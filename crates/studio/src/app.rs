@@ -21,6 +21,7 @@ use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
 use crate::open_events;
 use crate::pause_edit;
+use crate::part_edit::{self, Grab};
 use crate::recent::RecentFiles;
 use crate::tabs::{self, Owners, Session, Shelf};
 use crate::rewire::{self, Edit, Side};
@@ -158,6 +159,9 @@ struct Tab {
     mount: Mount,
     /// A drag rewiring the circuit, from a pin or a wire's end.
     rewire: Option<Rewire>,
+    /// A part being dragged: the drag, where the press was, whether it
+    /// moved, and the circuit as read before it.
+    part_drag: Option<(part_edit::Drag, egui::Pos2, bool, Arc<c2f_circuit::Circuit>)>,
     /// The generation it was read for.
     circuit_generation: u64,
     /// The circuit's part files and their modification times, to render
@@ -199,6 +203,7 @@ impl Tab {
             shown_parts: Vec::new(),
             mount: Mount::default(),
             rewire: None,
+            part_drag: None,
             circuit_generation: 0,
             part_files: Vec::new(),
             editor: Editor::for_tab(id),
@@ -397,6 +402,12 @@ impl StudioApp {
         // A drag or a hover in the view belongs to the view it began in.
         self.doc.rewire = None;
         self.doc.hover = None;
+        // A part being dragged goes back where it was.
+        if let Some((drag, _, moved, original)) = self.doc.part_drag.take() {
+            if moved {
+                self.preview_part(&part_edit::Drag { at: drag.from, ..drag }, &original);
+            }
+        }
         self.shelf.select(&mut self.doc, index);
         self.show_tab(ctx);
     }
@@ -583,6 +594,10 @@ impl StudioApp {
                         self.doc.viewer.set_scene(scene, frame);
                         // The new solid comes in its own colors.
                         self.update_overlay();
+                        // A part still being dragged stays where the drag has it.
+                        if let Some((drag, _, true, original)) = self.doc.part_drag.clone() {
+                            self.preview_part(&drag, &original);
+                        }
                     }
                     Err(line) => {
                         self.doc.failed = true;
@@ -598,8 +613,20 @@ impl StudioApp {
                 self.set_circuit(Some(circuit));
                 if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()).filter(|_| shown) {
                     let rewire = target.strip_prefix("rewire:").and_then(|t| t.split_once('>'));
+                    let moved = target.strip_prefix("move:").and_then(|t| t.split_once(':'));
                     if target == "catalogue" {
                         self.catalogue_open = true;
+                    } else if let Some((name, to)) = moved {
+                        // A part held mid-drag, as `move:mic:40,10` asks.
+                        let xy: Vec<f64> = to.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                        let circuit = self.doc.wiring.as_ref().map(|w| w.circuit.clone());
+                        let part = circuit.as_ref().and_then(|c| c.parts.iter().position(|p| p.name == name));
+                        if let (Some(circuit), Some(part), &[x, y]) = (circuit, part, xy.as_slice()) {
+                            let from = circuit.parts[part].at;
+                            let drag = part_edit::Drag { part, offset: [0.0; 2], from, at: [x, y, from[2]], turns: 0 };
+                            self.doc.part_drag = Some((drag.clone(), egui::Pos2::ZERO, true, circuit.clone()));
+                            self.preview_part(&drag, &circuit);
+                        }
                     } else if let Some((from, to)) = rewire {
                         // A new wire held over a pin, as a drag shows it.
                         let end = |name: &str| match self.doc.wiring.as_ref().and_then(|w| find_hit(&w.circuit, name)) {
@@ -951,13 +978,20 @@ impl StudioApp {
             return;
         }
         let ray = self.doc.viewer.ray(self.view_rect, origin);
-        let grabbed = match pick::pick(wiring, &self.doc.part_boxes, &ray) {
-            Some(Hit::Pin(end)) => Some((None, end)),
-            Some(Hit::Wire(index)) => pick::wire_side(wiring, index, &ray).map(|side| {
+        let grabbed = match part_edit::grab(wiring, &self.doc.part_boxes, &ray) {
+            Some(Grab::Pin(end)) => Some((None, end)),
+            Some(Grab::WireEnd(index, side)) => {
                 let wire = &wiring.circuit.wires[index];
-                (Some((index, side)), if side == Side::From { wire.to } else { wire.from })
-            }),
-            _ => None,
+                Some((Some((index, side)), if side == Side::From { wire.to } else { wire.from }))
+            }
+            Some(Grab::Part(part)) => {
+                // A part moves flat, at its own height.
+                let circuit = wiring.circuit.clone();
+                let drag = part_edit::Drag::start(&circuit, part, &ray);
+                self.doc.part_drag = drag.map(|drag| (drag, origin, false, circuit));
+                None
+            }
+            None => None,
         };
         if let Some((grabbed, anchor)) = grabbed {
             self.doc.rewire = Some(Rewire { grabbed, anchor, origin, moved: false, target: None, error: None });
@@ -1076,17 +1110,150 @@ impl StudioApp {
         }
     }
 
+    // ---- Moving parts ----
+
+    /// Follows a part's drag: the part and its wires where the pointer
+    /// puts it, R turning it; on release, the edit. Returns false when the
+    /// press turned out to be a click.
+    fn follow_part_drag(&mut self, ctx: &egui::Context, response: &egui::Response) -> bool {
+        let Some((drag, origin, moved, original)) = &mut self.doc.part_drag else { return false };
+        let (pointer, released, fine, turn) = ctx.input(|i| {
+            (i.pointer.interact_pos(), i.pointer.primary_released(), i.modifiers.shift, i.key_pressed(Key::R))
+        });
+        if turn {
+            drag.turns += 1;
+        }
+        let mut changed = false;
+        if let Some(pos) = pointer {
+            *moved |= pos.distance(*origin) > 4.0;
+            let step = if fine { part_edit::FINE_SNAP } else { part_edit::SNAP };
+            changed = *moved && drag.follow(&self.doc.viewer.ray(response.rect, pos), step);
+        }
+        if changed {
+            let (drag, original) = (drag.clone(), original.clone());
+            self.preview_part(&drag, &original);
+        }
+        if !released {
+            ctx.request_repaint();
+            return true;
+        }
+        let Some((drag, _, moved, original)) = self.doc.part_drag.take() else { return false };
+        if !moved && drag.turns == 0 {
+            return false;
+        }
+        let at = drag.moved().then_some(drag.at);
+        if !self.place_part(ctx, &original, drag.part, at, drag.turns) {
+            // Back where it was.
+            self.preview_part(&part_edit::Drag { at: drag.from, ..drag }, &original);
+        }
+        true
+    }
+
+    /// Shows a dragged part, and its wires, where the drag has it.
+    fn preview_part(&mut self, drag: &part_edit::Drag, original: &Arc<c2f_circuit::Circuit>) {
+        let delta = std::array::from_fn::<f32, 3, _>(|i| (drag.at[i] - drag.from[i]) as f32);
+        self.doc.viewer.preview_part_move(drag.part, glam::Vec3::from(delta));
+        let mut moved = (**original).clone();
+        moved.parts[drag.part].at = drag.at;
+        self.doc.wiring = Some(Wiring::new(Arc::new(moved)));
+        self.update_overlay();
+    }
+
+    /// Writes part `part`'s new place and turns into the circuit's text, as
+    /// one step of the editor's undo history, and renders it.
+    fn place_part(
+        &mut self,
+        ctx: &egui::Context,
+        circuit: &c2f_circuit::Circuit,
+        part: usize,
+        at: Option<[f64; 3]>,
+        turns: u32,
+    ) -> bool {
+        let Some(instance) = circuit.parts.get(part) else { return false };
+        let fresh = self.doc.sent_source.as_deref() == Some(self.doc.text.as_str());
+        let result = if fresh {
+            part_edit::place(&self.doc.text, instance, at, turns)
+        } else {
+            Err("the code changed since the last render: try again once it is rendered".to_string())
+        };
+        match result {
+            Ok((text, cursor)) => {
+                self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
+                let mut done = Vec::new();
+                if let Some(at) = at {
+                    done.push(format!("moved `{}` to [{}, {}]", instance.name, at[0], at[1]));
+                }
+                if turns > 0 {
+                    done.push(format!("turned `{}` by {}°", instance.name, 90 * turns));
+                }
+                let done = done.join(", ");
+                let mut chars = done.chars();
+                let done: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
+                self.doc.console.log(Level::Info, done);
+                self.render_now();
+                true
+            }
+            Err(why) => {
+                self.doc.console.log(Level::Warning, format!("Cannot move the part: {why}"));
+                false
+            }
+        }
+    }
+
+    /// Removes part `part` and the wires to it, as one step of the
+    /// editor's undo history.
+    fn remove_part(&mut self, ctx: &egui::Context, part: usize) {
+        let Some(wiring) = &self.doc.wiring else { return };
+        let circuit = wiring.circuit.clone();
+        let fresh = self.doc.sent_source.as_deref() == Some(self.doc.text.as_str());
+        let result = if fresh {
+            part_edit::remove(&self.doc.text, &circuit, part)
+        } else {
+            Err("the code changed since the last render: try again once it is rendered".to_string())
+        };
+        match result {
+            Ok((text, cursor, wires)) => {
+                self.doc.selection = None;
+                self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
+                let name = &circuit.parts[part].name;
+                let what = match wires {
+                    0 => format!("Removed `{name}`"),
+                    1 => format!("Removed `{name}` and its wire"),
+                    n => format!("Removed `{name}` and its {n} wires"),
+                };
+                self.doc.console.log(Level::Info, what);
+                self.render_now();
+            }
+            Err(why) => self.doc.console.log(Level::Warning, format!("Cannot remove the part: {why}")),
+        }
+    }
+
     /// Hovering, clicks and Escape over the view of a circuit.
     fn circuit_input(&mut self, ctx: &egui::Context, response: &egui::Response) {
         if self.doc.rewire.is_some() && self.follow_rewire(ctx, response) {
             self.doc.hover = None;
             return;
         }
-        // Delete or Backspace removes the wire selected.
-        let delete = ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace));
-        if delete && !self.doc.mount.active && ctx.memory(|m| m.focused().is_none()) {
-            if let Some(Hit::Wire(wire)) = self.doc.selection {
-                self.apply_rewire(ctx, Edit::Remove { wire });
+        if self.doc.part_drag.is_some() && self.follow_part_drag(ctx, response) {
+            self.doc.hover = None;
+            return;
+        }
+        // Delete or Backspace removes the wire or the part selected, and R
+        // turns the part selected.
+        let idle = !self.doc.mount.active && ctx.memory(|m| m.focused().is_none());
+        let (delete, turn) =
+            ctx.input(|i| (i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace), i.key_pressed(Key::R)));
+        if delete && idle {
+            match self.doc.selection {
+                Some(Hit::Wire(wire)) => self.apply_rewire(ctx, Edit::Remove { wire }),
+                Some(Hit::Part(part)) => self.remove_part(ctx, part),
+                _ => {}
+            }
+        }
+        if turn && idle {
+            if let (Some(Hit::Part(part)), Some(wiring)) = (self.doc.selection, &self.doc.wiring) {
+                let circuit = wiring.circuit.clone();
+                self.place_part(ctx, &circuit, part, None, 1);
             }
         }
         let Some(wiring) = &self.doc.wiring else { return };
@@ -1782,6 +1949,7 @@ impl StudioApp {
     }
 
     fn view_panel(&mut self, ctx: &egui::Context) {
+        let mut remove_part = None;
         egui::CentralPanel::default().frame(Frame::new().fill(theme::BG)).show(ctx, |ui| {
             let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
             let status = viewer::Status {
@@ -1798,11 +1966,17 @@ impl StudioApp {
             // A double-click on a part opens it rather than framing the view.
             self.doc.viewer.frame_on_double_click = !matches!(self.doc.hover, Some(Hit::Part(_)));
             self.start_rewire(ctx);
-            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none();
+            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none();
             let response = self.doc.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
+            if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
+                let name = &original.parts[drag.part].name;
+                let turned = if drag.turns > 0 { format!(", turned {}°", 90 * drag.turns) } else { String::new() };
+                let text = format!("`{name}` at [{}, {}]{turned} · Shift: 0.1 mm · R: turn", drag.at[0], drag.at[1]);
+                inspect::paint_bubble(&ui.painter_at(response.rect), response.rect, pointer, &text);
+            }
             // A part dragged from the catalogue lands where it is dropped.
             if let Some(dragged) = response.dnd_release_payload::<catalogue::Dragged>() {
                 let pointer = ctx.input(|i| i.pointer.interact_pos());
@@ -1819,7 +1993,14 @@ impl StudioApp {
                 let lengths = inspect::Lengths { routed: &wiring.lengths, margin: self.wire_margin.mm };
                 if let Some(selection) = self.doc.selection.filter(|_| !self.doc.mount.active) {
                     let (title, lines) = inspect::card(&wiring.circuit, selection, &self.doc.text, lengths);
-                    inspect::paint_card(&painter, response.rect, &title, &lines);
+                    let card = inspect::paint_card(&painter, response.rect, &title, &lines);
+                    if let Hit::Part(part) = selection {
+                        let button = egui::Rect::from_min_size(card.left_bottom() + Vec2::new(0.0, 6.0), Vec2::new(150.0, 22.0));
+                        let remove = ui.put(button, Button::new("Remove with its wires"));
+                        if remove.on_hover_text("Remove the part and every wire to it (Delete)").clicked() {
+                            remove_part = Some(part);
+                        }
+                    }
                 }
                 if let (Some(hover), Some(pos)) = (self.doc.hover, response.hover_pos()) {
                     if !response.dragged() {
@@ -1856,6 +2037,9 @@ impl StudioApp {
             // The pins of the wire on screen pulse.
             self.update_overlay();
             ctx.request_repaint_after(Duration::from_millis(33));
+        }
+        if let Some(part) = remove_part {
+            self.remove_part(ctx, part);
         }
         if let Some(edit) = self.doc.viewer.take_pause_edit() {
             self.apply_pause_edit(ctx, edit);

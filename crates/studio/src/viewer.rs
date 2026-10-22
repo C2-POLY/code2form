@@ -96,6 +96,7 @@ pub struct Viewer {
     /// solid's colors as rendered.
     part_ranges: Vec<std::ops::Range<usize>>,
     solid_colors: Vec<[f32; 4]>,
+    solid_positions: Vec<[f32; 3]>,
     /// How each part shows, as the app last said.
     part_emphasis: Vec<Emphasis>,
     /// A circuit's enclosure: its vertices in the solid, and whether it
@@ -148,6 +149,7 @@ impl Viewer {
             overlay_bounds: None,
             part_ranges: Vec::new(),
             solid_colors: Vec::new(),
+            solid_positions: Vec::new(),
             part_emphasis: Vec::new(),
             enclosure: 0..0,
             show_enclosure: true,
@@ -187,6 +189,7 @@ impl Viewer {
         self.part_ranges = scene.parts.clone();
         self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
+        self.solid_positions = if scene.parts.is_empty() { Vec::new() } else { scene.solid.positions.clone() };
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
         self.menu = None;
@@ -219,6 +222,21 @@ impl Viewer {
     pub fn set_part_emphasis(&mut self, emphasis: &[Emphasis]) {
         self.part_emphasis = emphasis.to_vec();
         self.recolor();
+    }
+
+    /// Shows part `part` of a circuit moved by `delta`, until the next
+    /// scene: a part dragged, before the circuit renders again.
+    pub fn preview_part_move(&mut self, part: usize, delta: Vec3) {
+        let Some(range) = self.part_ranges.get(part).cloned() else { return };
+        let mut positions = self.solid_positions.clone();
+        for p in positions.get_mut(range).unwrap_or_default() {
+            *p = (Vec3::from(*p) + delta).into();
+        }
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_solid_positions(positions);
+            }
+        }
     }
 
     /// Whether a circuit's enclosure shows.

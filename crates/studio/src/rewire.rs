@@ -120,6 +120,11 @@ pub fn apply(src: &str, circuit: &Circuit, edit: Edit) -> Result<(String, usize)
 /// and blank lines after it, before the next table, are left, as they
 /// tell of what comes next. `inside` is a byte of the table.
 fn table(src: &str, inside: usize) -> Option<std::ops::Range<usize>> {
+    table_of(src, inside, |header| header == "[[wires]]")
+}
+
+/// [`table`] for any table whose header line, trimmed, `header` accepts.
+pub fn table_of(src: &str, inside: usize, header_is: impl Fn(&str) -> bool) -> Option<std::ops::Range<usize>> {
     // Lines, with where each starts.
     let mut starts = vec![0];
     starts.extend(src.match_indices('\n').map(|(i, _)| i + 1).filter(|&i| i < src.len()));
@@ -131,7 +136,7 @@ fn table(src: &str, inside: usize) -> Option<std::ops::Range<usize>> {
     let is_header = |i: usize| line(i).trim_start().starts_with('[');
     let at = line_of(inside.min(src.len().saturating_sub(1)));
     let header = (0..=at).rev().find(|&i| is_header(i))?;
-    if line(header).trim() != "[[wires]]" {
+    if !header_is(line(header).trim()) {
         return None;
     }
     let next = (header + 1..starts.len()).find(|&i| is_header(i)).unwrap_or(starts.len());

@@ -437,7 +437,7 @@ circuit if it changed), and the catalogue lists it.
 - **Double-click a part**: opens its `.c2f` file, to fix an annotation.
 - **Escape** clears the selection.
 
-### Rewire with the mouse
+### Rewire and move parts with the mouse
 
 The view edits the wiring too, by writing into the circuit file: only
 the values or the table concerned change, and the file keeps its
@@ -456,9 +456,26 @@ the editor).
 
 While you drag, the pin under the pointer stands out. When dropping
 there would break a check (5 V onto a 3.3 V pin, two supplies tied), it
-turns red and the bubble says why; you can still drop. A drag that
-starts elsewhere turns the camera as usual. Rewiring is off in Assembly
-mode.
+turns red and the bubble says why; you can still drop.
+
+Parts move the same way:
+
+- **Move a part**: press on it (not on a pin's dot or near a wire's
+  end) and drag. It slides flat, at its own height, where you hold it,
+  on a 0.5 mm grid (0.1 mm with **Shift** held); its wires follow. On
+  release its `at` is rewritten, or added after its `part` line, with
+  its height kept.
+- **Turn a part**: **R** turns the part selected, or the one being
+  dragged, a quarter turn about z: `rotate` gets 90° more on z, or
+  `rotate = [0, 0, 90]` is added.
+- **Remove a part**: click it and press **Delete** (or Backspace), or
+  press **Remove with its wires** under its card. Its `[parts.NAME]`
+  table goes, with every `[[wires]]` table to it; the console says how
+  many, as "Removed `mic` and its 6 wires".
+
+A press on a pin wins over a wire's end, which wins over a part. A drag
+that starts on nothing turns the camera as usual. All of this is off in
+Assembly mode.
 
 ### Assembly mode
 
