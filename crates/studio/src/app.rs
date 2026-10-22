@@ -23,6 +23,7 @@ use crate::recent::RecentFiles;
 use crate::screenshot::Screenshot;
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
+use crate::wiring::{self, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
@@ -100,8 +101,11 @@ pub struct StudioApp {
     model: Option<ModelInfo>,
     /// Frame the next model that arrives (after opening a file).
     frame_next: bool,
-    /// The circuit on screen, when the file is one, as last read.
-    circuit: Option<Arc<c2f_circuit::Circuit>>,
+    /// The wires of the circuit on screen, when the file is one, as last
+    /// read.
+    wiring: Option<Wiring>,
+    /// How its wires and pins show.
+    look: Look,
     /// The generation it was read for.
     circuit_generation: u64,
     /// The circuit's part files and their modification times, to render
@@ -144,7 +148,8 @@ impl StudioApp {
             failed: false,
             model: None,
             frame_next: true,
-            circuit: None,
+            wiring: None,
+            look: Look::default(),
             circuit_generation: 0,
             part_files: Vec::new(),
             editor: Editor::new(),
@@ -296,7 +301,20 @@ impl StudioApp {
                 (file, mtime)
             })
             .collect();
-        self.circuit = found;
+        self.wiring = found.map(Wiring::new);
+        self.look = Look::default();
+        self.update_overlay();
+    }
+
+    /// Sends the wires and pins, as they now look, to the view.
+    fn update_overlay(&mut self) {
+        match &self.wiring {
+            Some(wiring) => {
+                let (wires, pins) = wiring.meshes(&self.look);
+                self.viewer.set_overlay(wires, pins, wiring.bounds());
+            }
+            None => self.viewer.set_overlay(Default::default(), Default::default(), None),
+        }
     }
 
     // ---- Files ----
@@ -890,7 +908,11 @@ impl StudioApp {
                     viewer::empty_hint(!self.text.trim().is_empty())
                 },
             };
-            self.viewer.show(ui, &status);
+            let response = self.viewer.show(ui, &status);
+            if let Some(wiring) = &self.wiring {
+                let right = if self.viewer.layer_view { 70.0 } else { 12.0 };
+                wiring::paint_legend(&ui.painter_at(response.rect), response.rect, right, &wiring.legend());
+            }
         });
         if let Some(edit) = self.viewer.take_pause_edit() {
             self.apply_pause_edit(ctx, edit);

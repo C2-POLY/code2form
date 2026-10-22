@@ -2,8 +2,8 @@
 //!
 //! Meshes are uploaded once, when a new scene arrives, and drawn every
 //! frame: a background gradient, the grid, the opaque model, the axes and
-//! the outlines of the print's pauses, then the translucent parts with
-//! depth writes off, the pause planes last.
+//! the outlines of the print's pauses, a circuit's wires and pin dots,
+//! then the translucent parts with depth writes off, the pause planes last.
 
 use eframe::egui_glow::ShaderVersion;
 use eframe::glow::{self, HasContext};
@@ -132,12 +132,16 @@ pub struct Renderer {
     backgrounds: Option<GpuBuffer>,
     pause_planes: Option<GpuBuffer>,
     pause_outlines: Option<GpuBuffer>,
+    /// A circuit's wires and pins, drawn over its parts.
+    wires: Option<GpuBuffer>,
+    pins: Option<GpuBuffer>,
     grid_lines: Option<GpuBuffer>,
     axes: Option<GpuBuffer>,
     grid: Option<Grid>,
     /// Waiting for the next paint to reach the GPU.
     pending_scene: Option<Scene>,
     pending_grid: Option<Grid>,
+    pending_overlay: Option<(RenderMesh, RenderMesh)>,
 }
 
 impl Renderer {
@@ -196,11 +200,14 @@ impl Renderer {
                 backgrounds: None,
                 pause_planes: None,
                 pause_outlines: None,
+                wires: None,
+                pins: None,
                 grid_lines: None,
                 axes: None,
                 grid: None,
                 pending_scene: None,
                 pending_grid: None,
+                pending_overlay: None,
             })
         }
     }
@@ -208,6 +215,11 @@ impl Renderer {
     /// Replaces the meshes on the next paint.
     pub fn set_scene(&mut self, scene: Scene) {
         self.pending_scene = Some(scene);
+    }
+
+    /// Replaces a circuit's wires and pin dots on the next paint.
+    pub fn set_overlay(&mut self, wires: RenderMesh, pins: RenderMesh) {
+        self.pending_overlay = Some((wires, pins));
     }
 
     pub fn set_grid(&mut self, grid: Grid) {
@@ -240,6 +252,15 @@ impl Renderer {
                     self.pause_planes = upload_mesh(gl, &pause_planes(&heights, footprint));
                     self.pause_outlines = upload_lines(gl, &pause_outlines(&heights, footprint));
                 }
+            }
+        }
+        if let Some((wires, pins)) = self.pending_overlay.take() {
+            unsafe {
+                for buffer in [self.wires.take(), self.pins.take()].into_iter().flatten() {
+                    delete(gl, buffer);
+                }
+                self.wires = upload_mesh(gl, &wires);
+                self.pins = upload_mesh(gl, &pins);
             }
         }
         if let Some(grid) = self.pending_grid.take() {
@@ -292,6 +313,9 @@ impl Renderer {
             gl.disable(glow::BLEND);
             if let Some(solid) = &self.solid {
                 self.draw_mesh(gl, frame, solid, Pass::Opaque, true);
+            }
+            for overlay in [&self.wires, &self.pins].into_iter().flatten() {
+                self.draw_mesh(gl, frame, overlay, Pass::Opaque, false);
             }
             gl.enable(glow::BLEND);
 
@@ -383,6 +407,8 @@ impl Renderer {
                 self.backgrounds.take(),
                 self.pause_planes.take(),
                 self.pause_outlines.take(),
+                self.wires.take(),
+                self.pins.take(),
                 self.grid_lines.take(),
                 self.axes.take(),
             ]

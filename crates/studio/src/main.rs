@@ -16,6 +16,7 @@ mod renderer;
 mod screenshot;
 mod theme;
 mod viewer;
+mod wiring;
 mod worker;
 
 use std::path::PathBuf;

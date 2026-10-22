@@ -8,6 +8,7 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Key, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
 use eframe::{egui_glow, glow};
+use c2f_geom::RenderMesh;
 use glam::{Mat4, Vec2 as GVec2, Vec3, Vec4};
 
 use crate::camera::Camera;
@@ -85,6 +86,8 @@ pub struct Viewer {
     /// view or the toggle stops it.
     pub turntable: bool,
     bounds: Option<(Vec3, Vec3)>,
+    /// The box around a circuit's wires and pins, framed with the model.
+    overlay_bounds: Option<(Vec3, Vec3)>,
     pauses: Vec<PauseMark>,
     /// The text the scene was rendered from.
     scene_source: String,
@@ -121,6 +124,7 @@ impl Viewer {
             heights: None,
             turntable: false,
             bounds: None,
+            overlay_bounds: None,
             pauses: Vec::new(),
             scene_source: String::new(),
             dragging: None,
@@ -166,10 +170,29 @@ impl Viewer {
         }
     }
 
+    /// Shows a circuit's wires and pin dots, or nothing; `bounds` is the
+    /// box around them.
+    pub fn set_overlay(&mut self, wires: RenderMesh, pins: RenderMesh, bounds: Option<([f32; 3], [f32; 3])>) {
+        self.overlay_bounds = bounds.map(|(lo, hi)| (Vec3::from(lo), Vec3::from(hi)));
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_overlay(wires, pins);
+            }
+        }
+    }
+
+    /// The model's box and the overlay's, together.
+    fn drawn_bounds(&self) -> Option<(Vec3, Vec3)> {
+        match (self.bounds, self.overlay_bounds) {
+            (Some((l1, h1)), Some((l2, h2))) => Some((l1.min(l2), h1.max(h2))),
+            (a, b) => a.or(b),
+        }
+    }
+
     /// The box to frame: the model, or a default 20-unit cube around the
     /// origin when there is none.
     fn frame_box(&self) -> (Vec3, Vec3) {
-        self.bounds.unwrap_or((Vec3::splat(-10.0), Vec3::splat(10.0)))
+        self.drawn_bounds().unwrap_or((Vec3::splat(-10.0), Vec3::splat(10.0)))
     }
 
     /// The number of layers the solid prints in, if there is one.
@@ -248,7 +271,7 @@ impl Viewer {
     fn scene_radius(&self) -> f32 {
         let half = self.grid.half_size();
         let (mut lo, mut hi) = (Vec3::new(-half, -half, 0.0), Vec3::new(half, half, 0.0));
-        if let Some((l, h)) = self.bounds {
+        if let Some((l, h)) = self.drawn_bounds() {
             lo = lo.min(l);
             hi = hi.max(h);
         }
@@ -265,10 +288,12 @@ impl Viewer {
         radius.max(1e-3)
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, status: &Status) {
+    /// Draws the view; returns its response, for what the app draws over
+    /// it.
+    pub fn show(&mut self, ui: &mut egui::Ui, status: &Status) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if rect.width() < 1.0 || rect.height() < 1.0 {
-            return;
+            return response;
         }
         self.aspect = rect.width() / rect.height();
         self.handle_input(ui, rect, &response);
@@ -321,6 +346,7 @@ impl Viewer {
         }
         self.paint_gizmo(&painter, rect);
         paint_overlays(ui, &painter, rect, status);
+        response
     }
 
     fn handle_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
