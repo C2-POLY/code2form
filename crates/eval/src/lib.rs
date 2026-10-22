@@ -5,6 +5,7 @@
 mod color;
 pub mod customizer;
 mod dxf;
+mod enclosure;
 mod env;
 mod functions;
 mod interp;
@@ -77,7 +78,7 @@ pub fn evaluate(program: &Program) -> Output {
     })
 }
 
-fn evaluate_here(program: &Program) -> Output {
+pub(crate) fn evaluate_here(program: &Program) -> Output {
     let mut interp = interp::Interp::new(program);
     let result = interp.run();
     let mut warnings = program.warnings.clone();

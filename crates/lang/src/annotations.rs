@@ -30,6 +30,13 @@
 //!
 //! Positions and sizes are numbers only: they do not depend on the file's
 //! variables.
+//!
+//! An enclosure names the circuit whose parts it holds, its path relative
+//! to the file, as a word or a `"string"`:
+//!
+//! ```text
+//! // @circuit grogu.c2fc
+//! ```
 
 use std::fmt;
 
@@ -39,18 +46,28 @@ use crate::dump::{number, string};
 use crate::span::Span;
 
 /// What a part declares for wiring and mounting, in source order within
-/// each kind.
+/// each kind, and the circuit an enclosure is made for.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Annotations {
     pub pins: Vec<Pin>,
     pub mount_holes: Vec<MountHole>,
     pub ports: Vec<Port>,
+    pub circuit: Option<CircuitLink>,
 }
 
 impl Annotations {
     pub fn is_empty(&self) -> bool {
-        self.pins.is_empty() && self.mount_holes.is_empty() && self.ports.is_empty()
+        self.pins.is_empty() && self.mount_holes.is_empty() && self.ports.is_empty() && self.circuit.is_none()
     }
+}
+
+/// `// @circuit grogu.c2fc`: the circuit file whose parts an enclosure
+/// holds, which gives it the standoffs and cutouts of those parts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CircuitLink {
+    /// As written, relative to the file's folder.
+    pub path: String,
+    pub span: Span,
 }
 
 /// `// @pin name [x, y, z] ...`: where a wire is soldered or plugged.
@@ -176,6 +193,7 @@ pub fn read(src: &str) -> (Annotations, Vec<Diagnostic>) {
             "pin" => lex(fields, fields_start).and_then(|items| reader.pin(items, span)),
             "mount_hole" => lex(fields, fields_start).and_then(|items| reader.mount_hole(items, span)),
             "port" => lex(fields, fields_start).and_then(|items| reader.port(items, span)),
+            "circuit" => lex(fields, fields_start).and_then(|items| reader.circuit(items, span)),
             // Other `@words` belong to someone else.
             _ => continue,
         };
@@ -329,6 +347,25 @@ impl What {
 }
 
 impl Reader {
+    fn circuit(&mut self, items: Vec<Item>, span: Span) -> Result<(), Diagnostic> {
+        if self.annotations.circuit.is_some() {
+            return Err(Diagnostic::new("the file already names its circuit", span));
+        }
+        let expected = "expected the circuit file, as in `@circuit robot.c2fc`, or its name in quotes";
+        let mut items = items.into_iter();
+        let path = match items.next() {
+            Some(Item { token: Token::Word(word), .. }) => word.to_string(),
+            Some(Item { token: Token::Str(text), .. }) if !text.is_empty() => text,
+            Some(item) => return Err(Diagnostic::new(expected, item.span)),
+            None => return Err(Diagnostic::new(expected, span)),
+        };
+        if let Some(extra) = items.next() {
+            return Err(Diagnostic::new("a circuit annotation takes the file alone", extra.span));
+        }
+        self.annotations.circuit = Some(CircuitLink { path, span });
+        Ok(())
+    }
+
     fn pin(&mut self, items: Vec<Item>, span: Span) -> Result<(), Diagnostic> {
         let mut items = items.into_iter();
         let (name, name_span) = name(items.next(), What::Pin, span)?;
@@ -538,6 +575,13 @@ impl fmt::Display for Pin {
     }
 }
 
+impl fmt::Display for CircuitLink {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let plain = !self.path.is_empty() && !self.path.contains(|c: char| c.is_whitespace() || c == '"' || c == '[');
+        if plain { write!(f, "@circuit {}", self.path) } else { write!(f, "@circuit {}", string(&self.path)) }
+    }
+}
+
 impl fmt::Display for MountHole {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "@mount_hole {} d={} {}", vector(&self.position), number(self.diameter), direction(self.direction))
@@ -570,6 +614,7 @@ mod tests {
         printed.extend(annotations.pins.iter().map(|a| (a.span, a.to_string())));
         printed.extend(annotations.mount_holes.iter().map(|a| (a.span, a.to_string())));
         printed.extend(annotations.ports.iter().map(|a| (a.span, a.to_string())));
+        printed.extend(annotations.circuit.iter().map(|a| (a.span, a.to_string())));
         printed.sort_by_key(|(span, _)| span.start);
         let lines = LineIndex::new(src);
         let errors = errors
@@ -673,6 +718,33 @@ cube(10);
                 "16: unknown mount hole field `\"label\"`: expected its diameter d=… or a direction (up, down, +x, -y, [x, y, z])",
                 "17: expected numbers separated by commas",
                 "18: expected the pin's name",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_enclosure_names_its_circuit() {
+        let (printed, errors) = read_text("// @circuit grogu.c2fc\ncube(1);\n");
+        assert_eq!((printed, errors), (vec!["@circuit grogu.c2fc".to_string()], vec![]));
+        let (annotations, _) = read("//@circuit \"my robot/main.c2fc\"\n");
+        assert_eq!(annotations.circuit.as_ref().unwrap().path, "my robot/main.c2fc");
+        assert_eq!(annotations.circuit.unwrap().to_string(), "@circuit \"my robot/main.c2fc\"");
+        let src = "\
+// @circuit
+// @circuit a.c2fc b.c2fc
+// @circuit [1, 2, 3]
+// @circuit a.c2fc
+// @circuit b.c2fc
+";
+        let (printed, errors) = read_text(src);
+        assert_eq!(printed, ["@circuit a.c2fc"]);
+        assert_eq!(
+            errors,
+            [
+                "1: expected the circuit file, as in `@circuit robot.c2fc`, or its name in quotes",
+                "2: a circuit annotation takes the file alone",
+                "3: expected the circuit file, as in `@circuit robot.c2fc`, or its name in quotes",
+                "5: the file already names its circuit",
             ]
         );
     }

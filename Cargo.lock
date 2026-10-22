@@ -531,6 +531,7 @@ name = "c2f-circuit"
 version = "0.2.0"
 dependencies = [
  "c2f-eval",
+ "c2f-geom",
  "c2f-lang",
  "serde",
  "serde_json",
@@ -553,6 +554,7 @@ dependencies = [
 name = "c2f-eval"
 version = "0.2.0"
 dependencies = [
+ "c2f-circuit",
  "c2f-lang",
  "serde_json",
 ]

@@ -8,5 +8,7 @@ license.workspace = true
 
 [dependencies]
 c2f-lang.workspace = true
+# The circuit an enclosure names, for its parts' standoffs and cutouts.
+c2f-circuit.workspace = true
 # Parameter set files; keeps their order.
 serde_json = { version = "1", features = ["preserve_order"] }

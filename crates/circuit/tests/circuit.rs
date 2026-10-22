@@ -8,8 +8,13 @@ fn grogu_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grogu/grogu.c2fc")
 }
 
+/// The repository's electronics library, where Grogu's parts are.
+fn library() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library")
+}
+
 fn grogu() -> Circuit {
-    c2f_circuit::load(&grogu_path(), &[]).unwrap_or_else(|errors| {
+    c2f_circuit::load(&grogu_path(), &[library()]).unwrap_or_else(|errors| {
         panic!("{}", errors.iter().map(Error::render).collect::<String>())
     })
 }
@@ -73,7 +78,7 @@ fn grogu_reads_in_file_order() {
     assert_eq!((first.color.as_deref(), first.label.as_deref()), (Some("red"), Some("5 V")));
     let last = circuit.wires.last().unwrap();
     assert_eq!(circuit.end_name(last.to), "touch.PAD");
-    assert_eq!(circuit.enclosure, None);
+    assert!(circuit.enclosure.unwrap().ends_with("grogu_plate.c2f"));
 }
 
 #[test]
@@ -102,8 +107,8 @@ fn pins_follow_their_part() {
     let mic = circuit.parts.iter().position(|p| p.name == "mic").unwrap();
     let sd = circuit.parts[mic].pin("SD").unwrap();
     let placed = circuit.place(End { part: mic, pin: sd });
-    // [-2.54, -5, 1], turned half a turn about z, then moved to [35, 12, 0].
-    assert!(close(placed.position, [37.54, 17.0, 1.0]), "{:?}", placed.position);
+    // [-2.54, -5, 1], turned half a turn about z, then moved to [-12, 44, 1].
+    assert!(close(placed.position, [-9.46, 49.0, 2.0]), "{:?}", placed.position);
     assert!(close(placed.direction, [0.0, 0.0, 1.0]));
 }
 

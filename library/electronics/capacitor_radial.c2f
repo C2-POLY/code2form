@@ -1,0 +1,45 @@
+// Radial aluminium electrolytic capacitor standing on its two leads: the
+// can, its stripe on the - side, the leads. The can's axis on z, the lead
+// ends at z = 0.
+// https://en.wikipedia.org/wiki/Aluminum_electrolytic_capacitor
+// (and the datasheet of the capacitor's series, which has the final word)
+//
+// From the manufacturers' tables for radial cans (Nichicon, Panasonic): the
+// lead pitch is 2 mm for a 5 mm can, 2.5 mm for 6.3 mm, 3.5 mm for 8 mm,
+// 5 mm for 10 to 12.5 mm and 7.5 mm for 16 to 18 mm; the leads are 0.5 to
+// 0.8 mm thick. The can is a little taller than its nominal height once
+// its sleeve and vent are counted; it is drawn at the nominal one.
+//
+// Annotations are plain numbers: the pins are the lead ends of an 8 mm can
+// (3.5 mm pitch), and stay there for other diameters. They take 16 V, a
+// common rating for the 5 V rail: edit them for another capacitor.
+
+/* [Size] */
+// Diameter of the can.
+d = 8; // [4:0.5:18]
+// Height of the can.
+h = 12; // [5:0.5:40]
+// Length of lead between the can and the board.
+lead = 2; // [0:0.5:10]
+
+// @pin + [-1.75, 0, 0] down passive 16V "longer lead"
+// @pin - [1.75, 0, 0]  down passive 16V "striped side"
+
+module capacitor_radial(d = 8, h = 12, lead = 2) {
+    $fn = 48;
+    pitch = d <= 5 ? 2 : d <= 6.3 ? 2.5 : d <= 8 ? 3.5 : d <= 12.5 ? 5 : 7.5;
+    wire = d <= 6.3 ? 0.5 : d <= 10 ? 0.6 : 0.8;
+
+    color("MidnightBlue") translate([0, 0, lead]) cylinder(d = d, h = h);
+    // The stripe marking the - lead.
+    color("LightGray")
+        translate([0, 0, lead])
+            intersection() {
+                cylinder(d = d + 0.02, h = h);
+                translate([d / 4, -d / 6, 0]) cube([d, d / 3, h]);
+            }
+    for (x = [-pitch / 2, pitch / 2])
+        color("Silver") translate([x, 0, 0]) cylinder(d = wire, h = lead + 0.5, $fn = 12);
+}
+
+capacitor_radial(d, h, lead);

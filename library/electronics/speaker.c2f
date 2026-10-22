@@ -1,0 +1,27 @@
+// Small 8 ohm speaker, 28 mm across, cone up: the front rim around the
+// cone, the magnet behind it, and its two wires' solder points under it.
+// The center of its back at the origin.
+// https://www.adafruit.com/product/1890
+//
+// A generic part (Adafruit's "mini metal speaker", 8 ohm 0.5 W, is one):
+// 28 mm across from the product page; the depth (5 mm), the magnet's
+// size and where the wires leave it are estimated. It has no mount holes:
+// glue it, or hold its rim in a ring.
+
+// @pin + [-4, 9, 0] down passive "red wire"
+// @pin - [4, 9, 0]  down passive "black wire"
+// @port cone [0, 0, 5] up d=24 "the cone: leave it open"
+
+module speaker() {
+    $fn = 64;
+
+    color("DimGray") difference() {
+        union() {
+            translate([0, 0, 3]) cylinder(d = 28, h = 2);
+            cylinder(d = 20, h = 3.01);
+        }
+        translate([0, 0, 2.5]) cylinder(d1 = 12, d2 = 24, h = 2.51);
+    }
+}
+
+speaker();

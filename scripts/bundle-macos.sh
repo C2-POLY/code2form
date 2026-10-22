@@ -95,6 +95,12 @@ cp "$assets/AppIcon.icns" "$app/Contents/Resources/"
 sed "s/@VERSION@/$version/g" "$assets/Info.plist" > "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
+# The repository's own library (MIT OR Apache-2.0, as the rest of it),
+# with its licences, found by `use <electronics/...>` as MCAD is.
+mkdir -p "$app/Contents/Resources/libraries"
+ditto "$root/library" "$app/Contents/Resources/libraries"
+cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$app/Contents/Resources/libraries/"
+
 # The fonts text() defaults to (Liberation, SIL Open Font License) and the
 # MCAD library (LGPL 2.1), with their licences, copied from the reference
 # app so that this one works on its own.

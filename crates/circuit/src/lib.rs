@@ -5,12 +5,12 @@
 //! version = 1
 //!
 //! [parts.xiao]
-//! part = "parts/xiao_esp32s3.c2f"
+//! part = "electronics/xiao_esp32s3.c2f"
 //! at = [0, 0, 0]
 //! rotate = [0, 0, 90]
 //!
 //! [parts.amp]
-//! part = "parts/max98357a.c2f"
+//! part = "electronics/max98357a.c2f"
 //! at = [-30, 0, 0]
 //! params = { headers = true }
 //!

@@ -1,0 +1,55 @@
+// Seeed Studio XIAO ESP32-S3: the board, its shield, its USB-C connector,
+// and its pin headers when soldered. Seen from above, USB-C towards +y,
+// the board's corner at the origin.
+// https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/
+//
+// From the documentation: the board is 21 x 17.8 mm, with 2 x 7 pins at
+// 2.54 mm pitch on rows 15.24 mm apart, D0 and 5V nearest the USB-C.
+// Not given there, and estimated: the board's thickness (1.2 mm), the
+// shield's size and height, and how far the USB-C sits from the edge. The
+// board has no mount holes: hold it by its edges or by its headers.
+//
+// Annotations are plain numbers: the pins are the pads on top of the
+// board, wherever the headers point.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// Pin headers soldered to the board.
+headers = false;
+// The side the headers' long pins stick out of.
+header_side = "down"; // [down, up]
+
+// @pin D0  [1.28, 18.12, 1.2]  io 3.3V "GPIO1, A0, touch 1"
+// @pin D1  [1.28, 15.58, 1.2]  io 3.3V "GPIO2, A1, touch 2"
+// @pin D2  [1.28, 13.04, 1.2]  io 3.3V reserved "GPIO3, A2, strapping (JTAG source)"
+// @pin D3  [1.28, 10.5, 1.2]   io 3.3V "GPIO4, A3, touch 4"
+// @pin D4  [1.28, 7.96, 1.2]   io 3.3V "GPIO5, A4, SDA, touch 5"
+// @pin D5  [1.28, 5.42, 1.2]   io 3.3V "GPIO6, A5, SCL, touch 6"
+// @pin D6  [1.28, 2.88, 1.2]   io 3.3V "GPIO43, TX"
+// @pin 5V  [16.52, 18.12, 1.2] power_out 5V "USB 5 V; or 5 V in"
+// @pin GND [16.52, 15.58, 1.2] ground
+// @pin 3V3 [16.52, 13.04, 1.2] power_out 3.3V "regulator output"
+// @pin D10 [16.52, 10.5, 1.2]  io 3.3V "GPIO9, A10, MOSI, touch 9"
+// @pin D9  [16.52, 7.96, 1.2]  io 3.3V "GPIO8, A9, MISO, touch 8"
+// @pin D8  [16.52, 5.42, 1.2]  io 3.3V "GPIO7, A8, SCK, touch 7"
+// @pin D7  [16.52, 2.88, 1.2]  io 3.3V "GPIO44, RX"
+// @port usb_c [8.9, 21, 2.83] +y [8.94, 3.26] "USB-C"
+
+module xiao_esp32s3(headers = false, header_side = "down") {
+    $fn = 24;
+    t = 1.2;
+
+    color("RoyalBlue") cube([17.8, 21, t]);
+    // The shield over the ESP32-S3 and its flash and PSRAM.
+    color("Silver") translate([2.9, 1.5, t]) cube([12, 12, 2.2]);
+    // The USB-C receptacle, flush with the edge.
+    color("Silver")
+        translate([8.9 - 8.94 / 2, 21 - 7.35, t])
+            cube([8.94, 7.35, 3.26]);
+    if (headers)
+        for (x = [1.28, 16.52])
+            pin_header(7, [x, 2.88], t, header_side);
+}
+
+xiao_esp32s3(headers, header_side);

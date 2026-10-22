@@ -65,6 +65,28 @@ they are. Written in Rust, it renders as you type.
   unwired while its other pins are wired, a wired `nc` pin. Warnings:
   grounds that are not all one net, a wired `reserved` pin, two `output`
   pins on one net. Errors fail the check, warnings do not.
+- **Electronics library**: annotated parts in `library/electronics`, which
+  the app ships and `cargo run` finds in the repository: the XIAO
+  ESP32-S3 and the ESP32-S3-DevKitC-1, DRV8833, MAX98357A and INMP441
+  modules, capacitors, a speaker, a DC motor and a touch plate, each with
+  its headers soldered or not (`use <electronics/xiao_esp32s3.c2f>`, then
+  `xiao_esp32s3(headers = true);`). Each file links to the part's
+  documentation and says which dimensions are estimated; see
+  `library/README.md`.
+- **Enclosures**: a `.c2f` file that names its circuit in a comment,
+  `// @circuit grogu.c2fc` (next to it), is drawn in the circuit's
+  coordinates and gets built-in modules that follow its parts:
+  `standoffs_for(part, height, d, hole, screw)`, a standoff under each
+  mount hole the part declares, along the hole's direction (`screw =
+  "M2"`, `"M2.5"` or `"M3"` sizes it and its pilot hole);
+  `holes_for(part, depth, hole, screw)`, the screws' clearance holes;
+  `cutout_for(part, port, clearance = 0.5, depth = 10)`, the port's
+  opening grown by the clearance, along the way it faces, to subtract from
+  a wall; `circuit_part(part)`, the part itself. The circuit is read with
+  the file, so moving a part moves them at the next render. Without
+  `@circuit` they warn and draw nothing; the reference implementation
+  ignores them as unknown modules. `examples/grogu/grogu_plate.c2f` is
+  the plate the Grogu circuit names as its `enclosure`.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`; `c2f pins` prints a part's annotations. `c2f circuit`
@@ -170,8 +192,9 @@ Rust toolchain with both macOS targets
 (`rustup target add aarch64-apple-darwin x86_64-apple-darwin`). `--install`
 puts the app in `~/Applications`, and `--install --default` also makes it the
 app that opens `.c2f` and `.scad` files. The app then carries the
-Liberation fonts and the MCAD library, so it works on its own; the
-script copies them from the reference app installed in `/Applications`,
+repository's `library` folder, and the Liberation fonts and the MCAD
+library, so it works on its own; the script copies the last two from
+the reference app installed in `/Applications`,
 or from the `Contents/Resources` folder that `C2F_REFERENCE_RESOURCES`
 names.
 
@@ -206,7 +229,8 @@ Windows and Linux.
 Code2Form is licensed under either of the [Apache License 2.0](LICENSE-APACHE)
 or the [MIT licence](LICENSE-MIT), at your option. Unless you state
 otherwise, any contribution you submit for inclusion is licensed the same
-way, without any additional terms.
+way, without any additional terms. The parts and helpers in `library/`
+are under the same licences.
 
 The Liberation fonts 2.00.1 in `fonts/` are under the SIL Open Font
 License 1.1 (`fonts/Liberation-2.00.1/LICENSE`). The macOS app bundles
