@@ -109,6 +109,44 @@ fn yaw_pitch(back: Vec3) -> (f32, f32) {
     (yaw.to_radians(), pitch.to_radians())
 }
 
+/// The origin planes offered to sketch on, in the order they are listed.
+pub const ORIGIN_PLANES: [Plane; 3] = [Plane::Xy, Plane::Xz, Plane::Yz];
+
+/// The square an origin plane shows as while a sketch's plane is chosen:
+/// `size` along its two axes from the origin, in their positive quadrant,
+/// corner after corner.
+pub fn origin_square(plane: &Plane, size: f32) -> [Vec3; 4] {
+    let (u, v) = match plane {
+        Plane::Xz => (Vec3::X, Vec3::Z),
+        Plane::Yz => (Vec3::Y, Vec3::Z),
+        _ => (Vec3::X, Vec3::Y),
+    };
+    [Vec3::ZERO, u * size, (u + v) * size, v * size]
+}
+
+/// The origin plane whose square (`size`) a ray from `origin` along
+/// `direction` meets first, and how far along the ray.
+pub fn origin_plane_hit(origin: Vec3, direction: Vec3, size: f32) -> Option<(Plane, f32)> {
+    ORIGIN_PLANES
+        .iter()
+        .filter_map(|plane| {
+            // The axis the plane is across, and its two own.
+            let (n, a, b) = match plane {
+                Plane::Xz => (1, 0, 2),
+                Plane::Yz => (0, 1, 2),
+                _ => (2, 0, 1),
+            };
+            if direction[n].abs() < 1e-6 {
+                return None;
+            }
+            let t = -origin[n] / direction[n];
+            let hit = origin + direction * t;
+            let inside = |x: f32| (0.0..=size).contains(&x);
+            (t > 0.0 && inside(hit[a]) && inside(hit[b])).then_some((*plane, t))
+        })
+        .min_by(|x, y| x.1.total_cmp(&y.1))
+}
+
 /// The plane of a flat face, at `point` with this `normal` (facing the
 /// eye, as the 3D view gives it): its x axis is the screen's right when
 /// the camera faces it, as [`PlaneFrame::face_on`] turns it. Values a hair
@@ -991,6 +1029,35 @@ fn follow(old: &str, range: Range<usize>, new: &str) -> Option<Range<usize>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_nearest_origin_plane_under_the_pointer_is_picked() {
+        // From above, looking down at (5, 5): the XY square.
+        let (plane, t) = origin_plane_hit(Vec3::new(5.0, 5.0, 50.0), -Vec3::Z, 20.0).unwrap();
+        assert_eq!((plane, t), (Plane::Xy, 50.0));
+        // Outside the squares, or beside them: nothing.
+        assert!(origin_plane_hit(Vec3::new(-5.0, 5.0, 50.0), -Vec3::Z, 20.0).is_none());
+        assert!(origin_plane_hit(Vec3::new(25.0, 5.0, 50.0), -Vec3::Z, 20.0).is_none());
+        // From the front (−y), looking along +y at (5, 0, 5): the XZ square.
+        let (plane, _) = origin_plane_hit(Vec3::new(5.0, -50.0, 5.0), Vec3::Y, 20.0).unwrap();
+        assert_eq!(plane, Plane::Xz);
+        // From the side (+x), looking along −x at (0, 5, 5): the YZ square.
+        let (plane, _) = origin_plane_hit(Vec3::new(50.0, 5.0, 5.0), -Vec3::X, 20.0).unwrap();
+        assert_eq!(plane, Plane::Yz);
+        // A slanted ray through two squares: the first one met.
+        let direction = Vec3::new(-1.0, 0.0, -1.0).normalize();
+        let (plane, _) = origin_plane_hit(Vec3::new(10.0, 5.0, 2.0), direction, 20.0).unwrap();
+        assert_eq!(plane, Plane::Xy, "z reaches 0 before x does");
+        // Behind the eye: nothing.
+        assert!(origin_plane_hit(Vec3::new(5.0, 5.0, 50.0), Vec3::Z, 20.0).is_none());
+    }
+
+    #[test]
+    fn an_origin_square_lies_in_its_plane() {
+        assert_eq!(origin_square(&Plane::Xz, 10.0)[2], Vec3::new(10.0, 0.0, 10.0));
+        assert_eq!(origin_square(&Plane::Yz, 10.0)[1], Vec3::new(0.0, 10.0, 0.0));
+        assert_eq!(origin_square(&Plane::Xy, 10.0)[3], Vec3::new(0.0, 10.0, 0.0));
+    }
+
     use std::path::Path;
 
     use c2f_sketch::{ExtrudeMode, extrude_code, from_code, revolve_code, solve};

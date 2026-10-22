@@ -189,7 +189,7 @@ fn the_toolbar_rounds_a_selected_cube() {
 fn a_rectangle_sketched_and_extruded() {
     let mut w = Window::new("", Workspace::Model);
     w.click("Sketch");
-    w.click("On the XY plane");
+    w.click("XY");
     assert!(w.app.doc.sketch.active(), "the sketch mode");
     w.settle();
     w.click("Rectangle");
@@ -210,14 +210,14 @@ fn a_rectangle_sketched_and_extruded() {
 fn esc_leaves_a_sketch_and_the_model_toolbar_comes_back() {
     let mut w = Window::new(TWO_CUBES, Workspace::Model);
     w.click("Sketch");
-    w.click("On the XY plane");
+    w.click("XY");
     assert!(w.has("Finish sketch"));
     w.click("Cancel");
     assert!(!w.app.doc.sketch.active());
     assert!(w.has("Cube") && !w.has("Finish sketch"));
     // Escape too, from a new sketch.
     w.click("Sketch");
-    w.click("On the XY plane");
+    w.click("XY");
     w.frame(vec![Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
     w.settle();
     assert!(!w.app.doc.sketch.active(), "Esc leaves the sketch");
@@ -275,4 +275,47 @@ fn the_inspector_shows_parameters_and_comes_back_to_properties() {
     w.click_at(top, PointerButton::Primary, Modifiers::NONE);
     assert_eq!(w.selected(), ["cube(size);"]);
     assert_eq!(w.app.panels.inspector, super::workspace::InspectorTab::Properties);
+}
+
+#[test]
+fn a_plane_picked_in_the_view() {
+    let mut w = Window::new("", Workspace::Model);
+    // From the top, the XZ and YZ squares are seen edge on: the XY one.
+    let &(_, yaw, pitch) = crate::viewer::PRESETS.iter().find(|p| p.0 == "Top").unwrap();
+    w.app.doc.viewer.look_from(yaw, pitch);
+    w.settle();
+    w.click("Sketch");
+    assert!(w.has("Sketch on"), "the planes' bar");
+    assert!(!w.app.doc.sketch.active());
+    let at = w.screen([5.0, 5.0, 0.0]);
+    w.click_at(at, PointerButton::Primary, Modifiers::NONE);
+    let (plane, _) = w.app.doc.sketch.plane_and_cut().expect("a sketch");
+    assert_eq!(plane, c2f_sketch::Plane::Xy);
+}
+
+#[test]
+fn a_sketch_on_a_face_cuts_its_object() {
+    let mut w = Window::new(TWO_CUBES, Workspace::Model);
+    w.click("Sketch");
+    let top = w.screen([25.0, 5.0, 10.0]);
+    w.click_at(top, PointerButton::Primary, Modifiers::NONE);
+    let (plane, cut) = w.app.doc.sketch.plane_and_cut().expect("a sketch");
+    let c2f_sketch::Plane::Face { origin, normal, .. } = plane else { panic!("{plane:?}") };
+    assert_eq!((origin[2], normal), (10.0, [0.0, 0.0, 1.0]));
+    let cut = cut.expect("the cube clicked");
+    assert_eq!(&w.app.doc.text[cut], "cube(10);");
+}
+
+#[test]
+fn esc_gives_up_choosing_a_plane() {
+    let mut w = Window::new(TWO_CUBES, Workspace::Model);
+    w.click("Sketch");
+    assert!(w.has("Sketch on"));
+    w.frame(vec![key(Key::Escape, Modifiers::NONE)], Modifiers::NONE);
+    w.settle();
+    assert!(!w.has("Sketch on") && !w.app.doc.sketch.active());
+    // Sketch twice gives up too.
+    w.click("Sketch");
+    w.click("Sketch");
+    assert!(!w.has("Sketch on"));
 }

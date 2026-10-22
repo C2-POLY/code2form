@@ -14,7 +14,7 @@
 //!
 //! Finishing writes the sketch as one undo step (`sketch_view::write`).
 //! Leaving without finishing (Esc, Cancel) keeps the sketch in memory,
-//! once, for "Resume unfinished sketch": an Esc too many must not lose a
+//! once, for "Resume unfinished": an Esc too many must not lose a
 //! drawing, and the code stays untouched until the sketch is finished.
 //!
 //! The logic without the window (the plane, the tools, hit tests, the
@@ -53,8 +53,8 @@ pub(super) struct SketchState {
     mode: Option<Box<SketchMode>>,
     /// The last sketch left without finishing it, to resume.
     draft: Option<Box<SketchMode>>,
-    /// Waiting for a click on a flat face to sketch on.
-    picking_face: bool,
+    /// Choosing the plane of a new sketch.
+    picking: Option<Picking>,
     /// What the screenshot hook asks for (`sketch:xy`, `sketch:open:name`,
     /// `sketch:extrude:name`), done at the next frame.
     pub(super) screenshot: Option<String>,
@@ -65,6 +65,53 @@ impl SketchState {
     pub(super) fn active(&self) -> bool {
         self.mode.is_some()
     }
+
+    /// The sketch's plane, and what it will cut.
+    #[cfg(test)]
+    pub(super) fn plane_and_cut(&self) -> Option<(Plane, Option<Range<usize>>)> {
+        self.mode.as_ref().map(|m| (m.sketch.plane, m.cut_from.clone()))
+    }
+}
+
+/// Choosing the plane of a new sketch: the origin planes show in the view,
+/// and the plane or the flat face of the model under the pointer lights up.
+#[derive(Debug, Default)]
+struct Picking {
+    /// What the sketch cuts once extruded: the object selected when Sketch
+    /// was clicked (a click on a face cuts the face's object instead).
+    cut_from: Option<Range<usize>>,
+    /// A plane lit without the pointer on it: the one whose button the
+    /// pointer is on, or a screenshot's.
+    lit: Option<Plane>,
+}
+
+/// What the pointer is on while a sketch's plane is chosen.
+#[derive(Clone, Copy, Debug)]
+enum Pointed {
+    Origin(Plane),
+    /// A face of the model: a point of it, its normal, its statement.
+    Face(Vec3, Vec3, Option<crate::select::Statement>),
+}
+
+/// The colors of the origin planes: each the color of the axis it is
+/// across, as the view's axes and gizmo draw them; darker in the light
+/// theme, to read on its light buttons.
+fn plane_color(plane: &Plane) -> Color32 {
+    let dark = theme::palette().dark;
+    match (plane, dark) {
+        (Plane::Xz, true) => Color32::from_rgb(0x5f, 0xb8, 0x6b),
+        (Plane::Xz, false) => Color32::from_rgb(0x1e, 0x7a, 0x34),
+        (Plane::Yz, true) => Color32::from_rgb(0xe0, 0x5a, 0x5a),
+        (Plane::Yz, false) => Color32::from_rgb(0xb8, 0x2e, 0x2e),
+        (_, true) => Color32::from_rgb(0x5f, 0x8d, 0xff),
+        (_, false) => Color32::from_rgb(0x1f, 0x5f, 0xd1),
+    }
+}
+
+/// How large the origin planes show: half the model's size, within
+/// bounds, so that they read next to it without hiding it.
+fn plane_size(bounds: Option<(Vec3, Vec3)>) -> f32 {
+    bounds.map_or(20.0, |(lo, hi)| ((hi - lo).max_element() * 0.5).clamp(10.0, 500.0))
 }
 
 /// A sketch being drawn.
@@ -277,7 +324,7 @@ impl StudioApp {
         let goal = face_camera(&mode, &self.doc.viewer);
         self.doc.viewer.fly_to(goal);
         self.doc.viewer.clear_selection();
-        self.doc.sketch.picking_face = false;
+        self.doc.sketch.picking = None;
         self.doc.sketch.mode = Some(mode);
     }
 
@@ -286,7 +333,7 @@ impl StudioApp {
     fn leave_sketch(&mut self) {
         if let Some(mode) = self.doc.sketch.mode.take() {
             if !mode.sketch.entities.is_empty() {
-                let message = "Sketch left unfinished: Sketch ▸ Resume unfinished sketch brings it back";
+                let message = "Sketch left unfinished: Sketch, then Resume unfinished, takes it up again";
                 self.doc.console.log(Level::Info, message);
                 // One draft is kept, the newest; the one it replaces is
                 // said to be gone rather than lost silently.
@@ -306,7 +353,8 @@ impl StudioApp {
     /// except around an extrusion. Called just before the view is shown.
     pub(super) fn sketch_before_view(&mut self) {
         let state = &self.doc.sketch;
-        self.doc.viewer.select_enabled = state.mode.is_none();
+        // Neither while a sketch's plane is chosen: a click picks a plane.
+        self.doc.viewer.select_enabled = state.mode.is_none() && state.picking.is_none();
         if let Some(mode) = &state.mode {
             self.doc.viewer.frame_on_double_click = false;
             self.doc.viewer.orbit_enabled &= mode.orbit;
@@ -332,6 +380,8 @@ impl StudioApp {
         let Some(spec) = self.doc.sketch.screenshot.take() else { return };
         let spec = spec.strip_prefix("sketch:").unwrap_or(&spec).to_string();
         match spec.as_str() {
+            "pick" => self.doc.sketch.picking = Some(Picking::default()),
+            "pick:xz" => self.doc.sketch.picking = Some(Picking { lit: Some(Plane::Xz), ..Picking::default() }),
             "xy" => self.new_sketch(Plane::Xy, None),
             "xz" => self.new_sketch(Plane::Xz, None),
             "yz" => self.new_sketch(Plane::Yz, None),
@@ -473,8 +523,8 @@ impl StudioApp {
     /// pointer and the keys there; whether it took the view, so that the
     /// other modelling features leave it alone.
     pub(super) fn sketch_view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, response: &egui::Response) -> bool {
-        if self.doc.sketch.picking_face {
-            self.pick_face(ctx, ui, response);
+        if self.doc.sketch.picking.is_some() {
+            self.pick_plane(ctx, ui, response);
             return true;
         }
         let Some(mut mode) = self.doc.sketch.mode.take() else {
@@ -496,77 +546,186 @@ impl StudioApp {
     /// of planes, and the sketch selected reopened.
     pub(super) fn sketch_tools(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, row: Row) {
         let edit = self.selected_sketch();
-        let has_draft = self.doc.sketch.draft.is_some();
-        let mut chosen: Option<Plane> = None;
-        let (mut face, mut open, mut resume) = (false, false, false);
+        let picking = self.doc.sketch.picking.is_some();
+        let (mut start, mut open) = (false, false);
         toolbar::group(ui, "SKETCH", row, |ui| {
-            let tip = "Draw a 2D profile on a plane, constrain it, then extrude or revolve it";
-            let new = toolbar::tool(ui, row, Icon::Sketch, "Sketch", false, Ok(()), tip);
-            egui::Popup::menu(&new).show(|ui| {
-                for (plane, label) in [
-                    (Plane::Xy, "On the XY plane"),
-                    (Plane::Xz, "On the XZ plane"),
-                    (Plane::Yz, "On the YZ plane"),
-                ] {
-                    if ui.button(label).clicked() {
-                        chosen = Some(plane);
-                    }
-                }
-                face = ui.button("On a face…").on_hover_text("Then click a flat face of the model").clicked();
-                if has_draft {
-                    ui.separator();
-                    resume = ui.button("Resume unfinished sketch").clicked();
-                }
-            });
+            let tip = "Draw a 2D profile on a plane or a face of the model, constrain it, then extrude or revolve it";
+            start = toolbar::tool(ui, row, Icon::Sketch, "Sketch", picking, Ok(()), tip).clicked();
             let (enabled, tip) = match &edit {
                 Some(module) => (Ok(()), format!("Reopen {module} with its constraints")),
                 None => (Err("Select a sketch to reopen it"), String::new()),
             };
             open = toolbar::tool(ui, row, Icon::EditSketch, "Edit", false, enabled, &tip).clicked();
         });
-        if let Some(plane) = chosen {
-            let cut_from = self.cut_target();
-            self.new_sketch(plane, cut_from);
-        } else if face {
-            self.doc.sketch.picking_face = true;
-        } else if resume {
-            if let Some(mut draft) = self.doc.sketch.draft.take() {
-                // The code may have changed meanwhile: no cutting then.
-                if draft.source != self.doc.text {
-                    draft.cut_from = None;
-                }
-                draft.stage = Stage::Draw;
-                self.enter_sketch(draft);
-            }
+        // Sketch again while choosing gives up.
+        if start && picking {
+            self.doc.sketch.picking = None;
+        } else if start {
+            self.doc.sketch.picking = Some(Picking { cut_from: self.cut_target(), lit: None });
         } else if let (true, Some(module)) = (open, edit) {
             self.open_sketch(ctx, &module);
         }
     }
 
-    /// Waiting for a click on a flat face to sketch on; Esc gives up.
-    fn pick_face(&mut self, ctx: &egui::Context, ui: &egui::Ui, response: &egui::Response) {
-        let rect = response.rect;
-        let painter = ui.painter_at(rect);
-        hint_bar(&painter, rect, "Click a flat face to sketch on it · Esc: cancel");
-        if response.hovered() {
-            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+    /// Takes up the sketch left unfinished.
+    fn resume_sketch(&mut self) {
+        if let Some(mut draft) = self.doc.sketch.draft.take() {
+            // The code may have changed meanwhile: no cutting then.
+            if draft.source != self.doc.text {
+                draft.cut_from = None;
+            }
+            draft.stage = Stage::Draw;
+            self.enter_sketch(draft);
         }
+    }
+
+    /// Choosing the plane of a new sketch: the origin planes drawn in the
+    /// view, the plane or flat face under the pointer lit, a click to
+    /// sketch on it, and a bar of the planes by name. Esc gives up.
+    fn pick_plane(&mut self, ctx: &egui::Context, ui: &egui::Ui, response: &egui::Response) {
+        let rect = response.rect;
+        let (chosen, lit_by_bar) = self.plane_bar(ctx, rect);
+        if chosen {
+            return;
+        }
+        let viewer = &self.doc.viewer;
+        let size = plane_size(viewer.model_bounds());
+        // The nearer of an origin plane and a face of the model.
+        let pointed = response.hover_pos().and_then(|pos| {
+            let ray = viewer.ray(rect, pos);
+            let plane = view::origin_plane_hit(ray.origin, ray.direction, size);
+            let face = viewer.surface_at(rect, pos).map(|(point, normal, statement)| {
+                ((point - ray.origin).dot(ray.direction), Pointed::Face(point, normal, statement))
+            });
+            match (plane, face) {
+                (Some((plane, t)), Some((at, _))) if t <= at => Some(Pointed::Origin(plane)),
+                (_, Some((_, face))) => Some(face),
+                (Some((plane, _)), None) => Some(Pointed::Origin(plane)),
+                (None, None) => None,
+            }
+        });
+        let picking = self.doc.sketch.picking.as_ref();
+        let lit = match pointed {
+            Some(Pointed::Origin(plane)) => Some(plane),
+            _ => lit_by_bar.or(picking.and_then(|p| p.lit)),
+        };
+
+        // The squares, the farthest first.
+        let painter = ui.painter_at(rect);
+        let eye = viewer.ray(rect, rect.center()).origin;
+        let mut planes = view::ORIGIN_PLANES;
+        let distance = |plane: &Plane| -> f32 {
+            let corners = view::origin_square(plane, size);
+            (corners[2] * 0.5).distance(eye)
+        };
+        planes.sort_by(|a, b| distance(b).total_cmp(&distance(a)));
+        for plane in planes {
+            let corners = view::origin_square(&plane, size);
+            let Some(points) = corners.iter().map(|c| viewer.to_screen(rect, *c)).collect::<Option<Vec<Pos2>>>() else {
+                continue;
+            };
+            let on = lit == Some(plane);
+            let color = plane_color(&plane);
+            let fill = color.gamma_multiply(if on { 0.4 } else { 0.14 });
+            painter.add(egui::Shape::convex_polygon(points.clone(), fill, Stroke::new(if on { 2.0 } else { 1.0 }, color)));
+            let name = match plane {
+                Plane::Xz => "XZ",
+                Plane::Yz => "YZ",
+                _ => "XY",
+            };
+            let font = FontId::proportional(if on { 14.0 } else { 12.0 });
+            painter.text(points[2], Align2::LEFT_BOTTOM, name, font, color);
+        }
+        if let Some(Pointed::Face(point, normal, _)) = pointed {
+            let accent = theme::palette().accent_strong;
+            if let (Some(at), Some(tip)) = (viewer.to_screen(rect, point), viewer.to_screen(rect, point + normal * size * 0.25)) {
+                painter.line_segment([at, tip], Stroke::new(2.0, accent));
+                painter.circle(at, 5.0, accent.gamma_multiply(0.35), Stroke::new(1.5, accent));
+            }
+        }
+        let hint = match pointed {
+            Some(Pointed::Face(..)) => "Click to sketch on this face · Esc: cancel",
+            Some(Pointed::Origin(_)) => "Click to sketch on this plane · Esc: cancel",
+            None => "Click a plane or a flat face of the model to sketch on it · Esc: cancel",
+        };
+        hint_bar(&painter, rect, hint);
+        if pointed.is_some() {
+            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.doc.sketch.picking_face = false;
+            self.doc.sketch.picking = None;
             return;
         }
         if !response.clicked_by(PointerButton::Primary) {
             return;
         }
-        let Some(pos) = response.interact_pointer_pos() else { return };
-        match self.doc.viewer.surface_at(rect, pos) {
-            Some((point, normal, statement)) => {
+        let cut_from = self.doc.sketch.picking.take().and_then(|p| p.cut_from);
+        match pointed {
+            Some(Pointed::Origin(plane)) => self.new_sketch(plane, cut_from),
+            Some(Pointed::Face(point, normal, statement)) => {
                 let current = self.doc.viewer.scene_source() == self.doc.text;
                 let cut_from = statement.and_then(|s| s.range()).filter(|_| current);
                 self.new_sketch(view::face_plane(point, normal), cut_from);
             }
-            None => self.doc.console.log(Level::Info, "No face there: click on the model"),
+            // A click beside them keeps choosing.
+            None => self.doc.sketch.picking = Some(Picking { cut_from, lit: None }),
         }
+    }
+
+    /// The bar over the view while a sketch's plane is chosen: the origin
+    /// planes by name, the sketch left unfinished, and Cancel. Returns
+    /// whether it settled the choice, and the plane whose button the
+    /// pointer is on.
+    fn plane_bar(&mut self, ctx: &egui::Context, view: Rect) -> (bool, Option<Plane>) {
+        let palette = theme::palette();
+        let has_draft = self.doc.sketch.draft.is_some();
+        let (mut chosen, mut hovered, mut resume, mut cancel) = (None, None, false, false);
+        let frame = egui::Frame::new()
+            .fill(palette.panel)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(egui::Margin::symmetric(10, 6));
+        egui::Area::new(egui::Id::new("sketch-planes"))
+            .pivot(Align2::CENTER_TOP)
+            .fixed_pos(egui::pos2(view.center().x, view.top() + 12.0))
+            .constrain_to(view)
+            .show(ctx, |ui| {
+                frame.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Sketch on").color(palette.text_dim));
+                        for (plane, name, tip) in [
+                            (Plane::Xy, "XY", "The ground plane, across Z"),
+                            (Plane::Xz, "XZ", "The front plane, across Y"),
+                            (Plane::Yz, "YZ", "The side plane, across X"),
+                        ] {
+                            let text = RichText::new(name).strong().color(plane_color(&plane));
+                            let button = ui.add(Button::new(text).min_size(Vec2::new(40.0, 0.0))).on_hover_text(tip);
+                            if button.hovered() {
+                                hovered = Some(plane);
+                            }
+                            if button.clicked() {
+                                chosen = Some(plane);
+                            }
+                        }
+                        ui.label(RichText::new("or a face of the model").color(palette.text_dim));
+                        ui.separator();
+                        if has_draft {
+                            resume = ui.button("Resume unfinished").on_hover_text("Take up the sketch left unfinished").clicked();
+                        }
+                        cancel = ui.button("Cancel").on_hover_text("Give up (Esc)").clicked();
+                    });
+                });
+            });
+        if let Some(plane) = chosen {
+            let cut_from = self.doc.sketch.picking.take().and_then(|p| p.cut_from);
+            self.new_sketch(plane, cut_from);
+        } else if resume {
+            self.resume_sketch();
+        } else if cancel {
+            self.doc.sketch.picking = None;
+        }
+        (chosen.is_some() || resume || cancel, hovered)
     }
 
     /// Drawing, selecting, dragging and dimensioning.
@@ -867,7 +1026,7 @@ fn toolbar_ui(ui: &mut egui::Ui, row: Row, mode: &mut SketchMode) -> Option<Acti
                 if toolbar::finish_button(ui, "Finish sketch", "Write the sketch into the code (Enter)").clicked() {
                     action = Some(Action::Finish);
                 }
-                let tip = "Leave without writing; Sketch ▸ Resume brings it back (Esc)";
+                let tip = "Leave without writing; Sketch, then Resume unfinished, takes it up again (Esc)";
                 if ui.button("Cancel").on_hover_text(tip).clicked() {
                     action = Some(Action::Leave);
                 }

@@ -623,6 +623,11 @@ impl Viewer {
     }
 
     /// The model's box and the overlay's, together.
+    /// The model's box, without what is drawn over it.
+    pub fn model_bounds(&self) -> Option<(Vec3, Vec3)> {
+        self.bounds
+    }
+
     fn drawn_bounds(&self) -> Option<(Vec3, Vec3)> {
         match (self.bounds, self.overlay_bounds) {
             (Some((l1, h1)), Some((l2, h2))) => Some((l1.min(l2), h1.max(h2))),
