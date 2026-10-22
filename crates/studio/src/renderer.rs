@@ -466,9 +466,12 @@ impl Renderer {
             // axis to tilt them as it tilts the faces.
             let normal = glam::Mat3::from_mat4(model).inverse().transpose();
             let normal = if normal.is_finite() { normal } else { glam::Mat3::IDENTITY };
+            // Uniforms go to the program in use: set them only once it is
+            // ours, or the background's or the lines' program gets them and
+            // the last selection's move stays on every mesh.
+            gl.use_program(Some(self.mesh.program));
             gl.uniform_matrix_4_f32_slice(self.mesh.model.as_ref(), false, &model.to_cols_array());
             gl.uniform_matrix_3_f32_slice(self.mesh.normal.as_ref(), false, &normal.to_cols_array());
-            gl.use_program(Some(self.mesh.program));
             gl.uniform_1_f32(self.mesh.cut.as_ref(), frame.cut.map_or(NO_CUT, |z| z + CUT_TOLERANCE));
             gl.uniform_1_i32(self.mesh.cut_face.as_ref(), i32::from(solid && frame.cut.is_some()));
             gl.uniform_matrix_4_f32_slice(self.mesh.view.as_ref(), false, &frame.view.to_cols_array());
