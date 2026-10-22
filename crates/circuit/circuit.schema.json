@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/C2-POLY/code2form/blob/main/crates/circuit/circuit.schema.json",
+  "title": "Code2Form circuit (.c2fc)",
+  "description": "The parts of an electronics build, where each one sits, and the wires between their pins. Written in TOML; wires are laid in the order the file lists them.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "The format's version.",
+      "const": 1
+    },
+    "enclosure": {
+      "description": "The .c2f file of the enclosure, next to the circuit or in the library folders.",
+      "type": "string"
+    },
+    "parts": {
+      "description": "The parts, by the name wires call them by.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[^.,=\\s]+$" },
+      "additionalProperties": { "$ref": "#/$defs/part" }
+    },
+    "wires": {
+      "description": "The wires, in the order they are laid.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/wire" }
+    }
+  },
+  "$defs": {
+    "vector": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "literal": {
+      "description": "A value as a .scad constant: a boolean, a number, a string, or an array of them.",
+      "anyOf": [
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/literal" } }
+      ]
+    },
+    "part": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["part"],
+      "properties": {
+        "part": {
+          "description": "The part's .c2f file, which declares its pins in // @pin comments; next to the circuit or in the library folders.",
+          "type": "string"
+        },
+        "at": {
+          "description": "Where the part's origin goes, in millimeters, as translate([x, y, z]). [0, 0, 0] by default.",
+          "$ref": "#/$defs/vector"
+        },
+        "rotate": {
+          "description": "Degrees about x, then y, then z, as rotate([x, y, z]), before moving it. [0, 0, 0] by default.",
+          "$ref": "#/$defs/vector"
+        },
+        "params": {
+          "description": "Values for the part's variables, as c2f -D name=value sets them.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_$][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/literal" }
+        },
+        "color": {
+          "description": "A color to show the part in.",
+          "type": "string"
+        }
+      }
+    },
+    "wire": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": {
+          "description": "A pin, as part.pin.",
+          "type": "string",
+          "pattern": "^[^.]+\\..+$"
+        },
+        "to": {
+          "description": "Another pin, as part.pin.",
+          "type": "string",
+          "pattern": "^[^.]+\\..+$"
+        },
+        "color": {
+          "description": "The wire's color.",
+          "type": "string"
+        },
+        "label": {
+          "description": "What the wire carries, as shown next to it.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

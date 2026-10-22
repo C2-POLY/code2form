@@ -1,0 +1,9 @@
+// Copper plate the ESP32-S3 senses a touch on, glued under the shell.
+// Draft for the circuit example; the electronics library replaces it.
+
+/* [Size] */
+size = 20; // [10:50]
+
+// @pin PAD [2, 2, 0.3] up passive "solder point"
+
+color("Chocolate") cube([size, size, 0.3]);

@@ -1,0 +1,18 @@
+[package]
+name = "c2f-circuit"
+description = "Electronics circuits: parts placed in space and the wires between their pins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+c2f-lang.workspace = true
+# The `.c2fc` files, with the position of each value for errors.
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+[dev-dependencies]
+c2f-eval.workspace = true
+# Reads the JSON Schema of the format.
+serde_json = "1"

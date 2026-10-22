@@ -49,6 +49,13 @@ they are. Written in Rust, it renders as you type.
   `nc`), the most a pin takes in volts, a `"label"`, a diameter `d=`, a
   port's opening `[width, height]`. A badly written annotation is marked
   on its line, and the model still renders.
+- **Circuits**: a `.c2fc` file (TOML) places annotated parts and wires
+  their pins, part by part and pin to pin, as in
+  `examples/grogu/grogu.c2fc`. Each part is a `.c2f` file next to the
+  circuit or in the library folders, placed with `at` and `rotate` as
+  `translate()` and `rotate()` would, its `params` set as `-D` sets
+  them; wires are laid in the order the file lists them. The format's
+  JSON Schema is `crates/circuit/circuit.schema.json`.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`; `c2f pins` prints a part's annotations.
@@ -132,6 +139,7 @@ names.
 | `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, electronics annotations, AST dump |
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
 | `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, SVG and DXF exports, PNG pictures |
+| `crates/circuit` (`c2f-circuit`) | Circuit files: parts placed in space and the wires between their pins |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |
 

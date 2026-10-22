@@ -1,0 +1,184 @@
+# Grogu: a XIAO ESP32-S3 that listens (INMP441), speaks (MAX98357A and a
+# speaker), moves (DRV8833 and a DC motor) and feels a touch (a copper
+# plate). Wires are laid in the order below: power first, then signals.
+#
+# The 5 V rail feeds the amplifier and the motor driver; the microphone
+# alone takes 3.3 V. Never 3V3 to the amplifier or the driver.
+
+version = 1
+
+[parts.xiao]
+part = "parts/xiao_esp32s3.c2f"
+at = [0, 0, 0]
+
+[parts.amp]
+part = "parts/max98357a.c2f"
+at = [-30, 0, 0]
+params = { headers = true }
+
+[parts.cap]
+part = "parts/capacitor_radial.c2f"
+at = [-20, 26, 0]
+params = { d = 8, h = 12 }
+
+[parts.speaker]
+part = "parts/speaker.c2f"
+at = [-45, 40, 0]
+
+[parts.mic]
+part = "parts/inmp441.c2f"
+at = [35, 12, 0]
+rotate = [0, 0, 180]
+
+[parts.driver]
+part = "parts/drv8833.c2f"
+at = [0, 32, 0]
+
+[parts.motor]
+part = "parts/dc_motor.c2f"
+at = [25, 40, 0]
+
+[parts.touch]
+part = "parts/touch_plate.c2f"
+at = [25, -30, 0]
+
+# Power: the 5 V rail, with the decoupling capacitor at the amplifier.
+
+[[wires]]
+from = "xiao.5V"
+to = "amp.VIN"
+color = "red"
+label = "5 V"
+
+[[wires]]
+from = "xiao.GND"
+to = "amp.GND"
+color = "black"
+
+[[wires]]
+from = "cap.+"
+to = "amp.VIN"
+color = "red"
+label = "decoupling"
+
+[[wires]]
+from = "cap.-"
+to = "amp.GND"
+color = "black"
+
+[[wires]]
+from = "amp.VIN"
+to = "driver.VCC"
+color = "red"
+label = "5 V"
+
+[[wires]]
+from = "amp.GND"
+to = "driver.GND"
+color = "black"
+
+[[wires]]
+from = "driver.VCC"
+to = "driver.EEP"
+color = "red"
+label = "keep the driver awake"
+
+# Power: 3.3 V for the microphone only.
+
+[[wires]]
+from = "xiao.3V3"
+to = "mic.VDD"
+color = "orange"
+label = "3.3 V"
+
+[[wires]]
+from = "xiao.GND"
+to = "mic.GND"
+color = "black"
+
+[[wires]]
+from = "mic.L/R"
+to = "mic.GND"
+color = "black"
+label = "left channel"
+
+# Speaker I2S.
+
+[[wires]]
+from = "xiao.D3"
+to = "amp.BCLK"
+color = "blue"
+label = "speaker I2S"
+
+[[wires]]
+from = "xiao.D4"
+to = "amp.LRC"
+color = "green"
+label = "speaker I2S"
+
+[[wires]]
+from = "xiao.D5"
+to = "amp.DIN"
+color = "yellow"
+label = "speaker I2S"
+
+[[wires]]
+from = "amp.+"
+to = "speaker.+"
+color = "red"
+
+[[wires]]
+from = "amp.-"
+to = "speaker.-"
+color = "black"
+
+# Microphone I2S.
+
+[[wires]]
+from = "xiao.D8"
+to = "mic.SCK"
+color = "blue"
+label = "mic I2S"
+
+[[wires]]
+from = "xiao.D9"
+to = "mic.WS"
+color = "green"
+label = "mic I2S"
+
+[[wires]]
+from = "mic.SD"
+to = "xiao.D10"
+color = "yellow"
+label = "mic I2S"
+
+# Motor, kept off D6 and D7: they are the serial port, busy while the
+# board starts.
+
+[[wires]]
+from = "xiao.D1"
+to = "driver.IN1"
+color = "purple"
+
+[[wires]]
+from = "xiao.D2"
+to = "driver.IN2"
+color = "purple"
+
+[[wires]]
+from = "driver.OUT1"
+to = "motor.+"
+color = "red"
+
+[[wires]]
+from = "driver.OUT2"
+to = "motor.-"
+color = "black"
+
+# Touch.
+
+[[wires]]
+from = "xiao.D0"
+to = "touch.PAD"
+color = "white"
+label = "touch"

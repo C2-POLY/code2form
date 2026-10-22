@@ -1,0 +1,15 @@
+// Radial electrolytic capacitor standing on its leads, simplified.
+// Draft for the circuit example; the electronics library replaces it.
+
+/* [Size] */
+// Diameter of the can.
+d = 8; // [4:0.5:18]
+// Height of the can.
+h = 12; // [5:40]
+
+// @pin + [-1.75, 0, 0] down passive 16V "longer lead"
+// @pin - [1.75, 0, 0]  down passive 16V "striped side"
+
+$fn = 48;
+color("Black") translate([0, 0, 2]) cylinder(d = d, h = h);
+for (x = [-1.75, 1.75]) color("Silver") translate([x, 0, 0]) cylinder(d = 0.6, h = 2);

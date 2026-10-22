@@ -1,0 +1,12 @@
+// 28 mm 8 ohm speaker, cone up, simplified.
+// Draft for the circuit example; the electronics library replaces it.
+
+// @pin + [-4, 9, 0] down passive
+// @pin - [4, 9, 0]  down passive
+// @port cone [0, 0, 5] up d=24
+
+$fn = 64;
+color("DimGray") difference() {
+    cylinder(d = 28, h = 5);
+    translate([0, 0, 1]) cylinder(d1 = 12, d2 = 24, h = 4.01);
+}

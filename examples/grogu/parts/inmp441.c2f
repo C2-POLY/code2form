@@ -1,0 +1,16 @@
+// INMP441 I2S MEMS microphone module, simplified: the round board and its
+// two rows of pins. The sound hole goes through the board.
+// https://invensense.tdk.com/products/digital/inmp441/
+// Draft for the circuit example; the electronics library replaces it.
+
+// @pin SD  [-2.54, -5, 1]  output 3.6V "data"
+// @pin VDD [0, -5, 1]      power_in 3.6V
+// @pin GND [2.54, -5, 1]   ground
+// @pin L/R [-2.54, -2.46, 1] input 3.6V "channel: GND for left"
+// @pin WS  [0, -2.46, 1]   input 3.6V "word select"
+// @pin SCK [2.54, -2.46, 1] input 3.6V "bit clock"
+// @port sound [0, 3, 1] up d=1 "sound hole"
+
+$fn = 48;
+color("Purple") cylinder(d = 14, h = 1);
+color("Silver") translate([-2, 1.5, -1]) cube([4, 3, 1]);
