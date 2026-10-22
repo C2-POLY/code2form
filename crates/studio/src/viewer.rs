@@ -81,6 +81,8 @@ pub struct Viewer {
     /// the slider on the right of the view.
     pub layer_view: bool,
     pub layer_height: f32,
+    /// The color of the parts without `color()`.
+    pub model_color: [f32; 3],
     /// The layer the cut shows the top of, from 1; `None` for the last.
     layer: Option<u32>,
     /// The solid's bottom and top.
@@ -187,6 +189,7 @@ impl Viewer {
             show_pauses: true,
             layer_view: false,
             layer_height: 0.2,
+            model_color: [c2f_geom::DEFAULT_COLOR[0], c2f_geom::DEFAULT_COLOR[1], c2f_geom::DEFAULT_COLOR[2]],
             layer: None,
             heights: None,
             turntable: false,
@@ -556,6 +559,12 @@ impl Viewer {
         !self.enclosure.is_empty()
     }
 
+    /// Gives the solid the theme's colors: greyed-out parts fade towards
+    /// its grey.
+    pub fn restyle(&self) {
+        self.recolor();
+    }
+
     /// Sends the solid's colors, as the parts' emphasis and the
     /// enclosure's toggle make them, when they differ from the scene's.
     fn recolor(&self) {
@@ -763,6 +772,8 @@ impl Viewer {
                     show_axes: self.show_axes,
                     show_pauses: self.show_pauses,
                     cut: self.cut(),
+                    model_color: self.model_color,
+                    palette: theme::palette(),
                 };
                 let renderer = renderer.clone();
                 let callback = egui_glow::CallbackFn::new(move |_info, painter| {
@@ -773,13 +784,13 @@ impl Viewer {
                 ui.painter().add(egui::PaintCallback { rect, callback: Arc::new(callback) });
             }
             Err(message) => {
-                ui.painter().rect_filled(rect, CornerRadius::ZERO, theme::BG);
+                ui.painter().rect_filled(rect, CornerRadius::ZERO, theme::palette().bg);
                 ui.painter().text(
                     rect.center(),
                     Align2::CENTER_CENTER,
                     format!("3D view unavailable: {message}"),
                     FontId::proportional(14.0),
-                    theme::ERROR,
+                    theme::palette().error,
                 );
             }
         }
@@ -890,7 +901,8 @@ impl Viewer {
             let Some(anchor) = corners.iter().filter_map(|&c| to_screen(c)).max_by(|a, b| a.x.total_cmp(&b.x)) else {
                 continue;
             };
-            let galley = painter.layout_no_wrap(label.clone(), FontId::proportional(12.0), Color32::WHITE);
+            let palette = theme::palette();
+            let galley = painter.layout_no_wrap(label.clone(), FontId::proportional(12.0), palette.overlay_text);
             let size = galley.size();
             let mut inside = rect.shrink(10.0);
             if self.layer_view {
@@ -903,9 +915,9 @@ impl Viewer {
             );
             let text = Rect::from_min_size(min, size);
             let badge = text.expand2(Vec2::new(6.0, 3.0));
-            painter.rect_filled(badge, CornerRadius::same(4), Color32::from_black_alpha(160));
-            painter.rect_stroke(badge, CornerRadius::same(4), Stroke::new(1.0, PAUSE_COLOR), StrokeKind::Inside);
-            painter.galley(text.min, galley, Color32::WHITE);
+            painter.rect_filled(badge, CornerRadius::same(4), palette.veil(160));
+            painter.rect_stroke(badge, CornerRadius::same(4), Stroke::new(1.0, palette.pause), StrokeKind::Inside);
+            painter.galley(text.min, galley, palette.overlay_text);
         }
     }
 
@@ -997,11 +1009,16 @@ impl Viewer {
         let handle = Pos2::new(x, track.y_of_layer(layer as f32));
         painter.line_segment(
             [Pos2::new(x, track.top), Pos2::new(x, track.bottom)],
-            Stroke::new(4.0, Color32::from_white_alpha(30)),
+            Stroke::new(4.0, theme::palette().line(30)),
         );
-        painter.line_segment([Pos2::new(x, track.bottom), handle], Stroke::new(4.0, theme::ACCENT));
+        painter.line_segment([Pos2::new(x, track.bottom), handle], Stroke::new(4.0, theme::palette().accent));
         let active = response.hovered() || response.dragged();
-        painter.circle(handle, if active { 8.0 } else { 7.0 }, theme::TEXT, Stroke::new(2.0, theme::ACCENT));
+        painter.circle(
+            handle,
+            if active { 8.0 } else { 7.0 },
+            theme::palette().text,
+            Stroke::new(2.0, theme::palette().accent),
+        );
         for (i, mark) in self.pauses.iter().enumerate() {
             let dragged = self.dragging.filter(|&(d, _)| d == i);
             let y = match dragged {
@@ -1010,15 +1027,28 @@ impl Viewer {
             };
             let strong = dragged.is_some() || hovered_mark == Some(i);
             let (half, width) = if strong { (12.0, 3.0) } else { (9.0, 2.0) };
-            painter.line_segment([Pos2::new(x - half, y), Pos2::new(x + half, y)], Stroke::new(width, PAUSE_COLOR));
+            painter.line_segment(
+                [Pos2::new(x - half, y), Pos2::new(x + half, y)],
+                Stroke::new(width, theme::palette().pause),
+            );
             if let Some((_, layer)) = dragged {
                 let z = self.layer_top(layer).unwrap_or(hi);
-                badge_left_of(painter, Pos2::new(x - 14.0, y), &format!("Pause → {} mm", pause_edit::number(z)), PAUSE_COLOR);
+                badge_left_of(
+                    painter,
+                    Pos2::new(x - 14.0, y),
+                    &format!("Pause → {} mm", pause_edit::number(z)),
+                    theme::palette().pause,
+                );
             }
         }
         if self.dragging.is_none() {
             // What the cut shows, left of the handle.
-            badge_left_of(painter, handle - Vec2::new(14.0, 0.0), &format!("Layer {layer} / {count} · {z:.2} mm"), theme::TEXT);
+            badge_left_of(
+                painter,
+                handle - Vec2::new(14.0, 0.0),
+                &format!("Layer {layer} / {count} · {z:.2} mm"),
+                theme::palette().text,
+            );
         }
 
         // The layer height, under the track.
@@ -1052,7 +1082,7 @@ impl Viewer {
             }
             Some(SliderMenu::Pause(i)) => {
                 let Some(mark) = self.pauses.get(i) else { return };
-                ui.label(egui::RichText::new(&mark.label).color(PAUSE_COLOR));
+                ui.label(egui::RichText::new(&mark.label).color(theme::palette().pause));
                 match &mark.source {
                     Some(source) => {
                         if ui.button("Remove this pause").clicked() {
@@ -1061,7 +1091,10 @@ impl Viewer {
                         }
                     }
                     None => {
-                        ui.label(egui::RichText::new("Written in a library or an included file").color(theme::TEXT_DIM));
+                        ui.label(
+                            egui::RichText::new("Written in a library or an included file")
+                                .color(theme::palette().text_dim),
+                        );
                     }
                 }
             }
@@ -1088,12 +1121,7 @@ impl Viewer {
             .collect();
         // Farthest first, so nearer axes draw on top.
         projected.sort_by(|a, b| a.0.total_cmp(&b.0));
-        painter.circle(
-            center,
-            length + 12.0,
-            Color32::from_black_alpha(36),
-            Stroke::new(1.0, Color32::from_white_alpha(14)),
-        );
+        painter.circle(center, length + 12.0, theme::palette().gizmo, Stroke::new(1.0, theme::palette().line(14)));
         for (_, offset, label, color) in projected {
             let tip = center + offset;
             painter.line_segment([center, tip], Stroke::new(2.0, color));
@@ -1107,11 +1135,12 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     let margin = 12.0;
 
     if !status.has_model && !status.rendering {
-        let title = painter.layout_no_wrap("Nothing to show yet".into(), FontId::proportional(19.0), theme::TEXT);
+        let title =
+            painter.layout_no_wrap("Nothing to show yet".into(), FontId::proportional(19.0), theme::palette().text);
         let hint = painter.layout(
             status.empty_hint.into(),
             FontId::proportional(13.5),
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             (rect.width() - 80.0).clamp(120.0, 340.0),
         );
         let width = title.size().x.max(hint.size().x) + 48.0;
@@ -1120,22 +1149,22 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
         painter.rect(
             card,
             CornerRadius::same(12),
-            Color32::from_rgba_unmultiplied(22, 25, 31, 225),
-            Stroke::new(1.0, Color32::from_white_alpha(16)),
+            theme::palette().card,
+            Stroke::new(1.0, theme::palette().line(16)),
             StrokeKind::Inside,
         );
         let title_pos = Pos2::new(card.center().x - title.size().x / 2.0, card.top() + 18.0);
         let hint_pos = Pos2::new(card.center().x - hint.size().x / 2.0, title_pos.y + title.size().y + 10.0);
-        painter.galley(title_pos, title, theme::TEXT);
-        painter.galley(hint_pos, hint, theme::TEXT_DIM);
+        painter.galley(title_pos, title, theme::palette().text);
+        painter.galley(hint_pos, hint, theme::palette().text_dim);
     }
 
     // Badges, top-left.
     let mut at = rect.left_top() + Vec2::splat(margin);
     if status.rendering {
-        let width = badge(painter, at, "Rendering…", theme::ACCENT_STRONG, true);
+        let width = badge(painter, at, "Rendering…", theme::palette().accent_strong, true);
         let spinner = Rect::from_center_size(at + Vec2::new(14.0, 12.0), Vec2::splat(12.0));
-        egui::Spinner::new().size(12.0).color(theme::ACCENT_STRONG).paint_at(ui, spinner);
+        egui::Spinner::new().size(12.0).color(theme::palette().accent_strong).paint_at(ui, spinner);
         at.x += width + 8.0;
     }
     if status.failed {
@@ -1144,14 +1173,14 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
         } else {
             "Render failed: see the console"
         };
-        badge(painter, at, text, theme::ERROR, false);
+        badge(painter, at, text, theme::palette().error, false);
     }
 
     // Top-right: 2D note.
     if status.is_2d && status.has_model {
-        let galley = painter.layout_no_wrap("2D".into(), FontId::proportional(12.0), theme::TEXT_DIM);
+        let galley = painter.layout_no_wrap("2D".into(), FontId::proportional(12.0), theme::palette().text_dim);
         let pos = Pos2::new(rect.right() - margin - galley.size().x - 16.0, rect.top() + margin);
-        badge(painter, pos, "2D", theme::TEXT_DIM, false);
+        badge(painter, pos, "2D", theme::palette().text_dim, false);
     }
 
     // Bottom-right: mouse help.
@@ -1160,7 +1189,7 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
         Align2::RIGHT_BOTTOM,
         "Click: select   Shift/Alt-click: add/hidden   Drag: orbit   Right/Shift-drag: pan   Scroll: zoom   Double-click: fit",
         FontId::proportional(11.0),
-        Color32::from_white_alpha(70),
+        theme::palette().view_hint,
     );
 }
 
@@ -1173,7 +1202,7 @@ fn badge(painter: &egui::Painter, at: Pos2, text: &str, color: Color32, spinner:
     painter.rect(
         rect,
         CornerRadius::same(12),
-        Color32::from_rgba_unmultiplied(18, 20, 25, 215),
+        theme::palette().badge,
         Stroke::new(1.0, color.gamma_multiply(0.45)),
         StrokeKind::Inside,
     );
@@ -1227,12 +1256,9 @@ fn badge_left_of(painter: &egui::Painter, right: Pos2, text: &str, color: Color3
     let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.0), color);
     let size = galley.size();
     let text = Rect::from_min_size(right - Vec2::new(size.x + 8.0, size.y / 2.0), size);
-    painter.rect_filled(text.expand2(Vec2::new(6.0, 3.0)), CornerRadius::same(4), Color32::from_black_alpha(160));
+    painter.rect_filled(text.expand2(Vec2::new(6.0, 3.0)), CornerRadius::same(4), theme::palette().veil(160));
     painter.galley(text.min, galley, color);
 }
-
-/// The cyan of the pause planes, for their labels.
-const PAUSE_COLOR: Color32 = Color32::from_rgb(115, 230, 255);
 
 /// "Pause 19.4 mm", then the message, if any.
 fn pause_label(pause: &c2f_eval::Pause) -> String {

@@ -5,7 +5,7 @@ use c2f_circuit::{Circuit, End};
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::pick::{Hit, net};
-use crate::wiring::{TEXT, TEXT_DIM};
+use crate::theme;
 
 /// `xiao · D3 · GPIO4, A3`: the part, the pin and its label.
 pub fn pin_name(circuit: &Circuit, end: End) -> String {
@@ -131,7 +131,7 @@ pub fn card(circuit: &Circuit, hit: Hit, source: &str, lengths: Lengths) -> (Str
 
 /// The bubble next to the pointer, kept inside the view.
 pub fn paint_bubble(painter: &egui::Painter, rect: Rect, pointer: Pos2, text: &str) {
-    paint_bubble_in(painter, rect, pointer, text, TEXT);
+    paint_bubble_in(painter, rect, pointer, text, theme::palette().overlay_text);
 }
 
 /// [`paint_bubble`], its text in `color`.
@@ -144,8 +144,9 @@ pub fn paint_bubble_in(painter: &egui::Painter, rect: Rect, pointer: Pos2, text:
         (pointer.y + 18.0).min(inside.bottom() - size.y).max(inside.top()),
     );
     let bubble = Rect::from_min_size(min, size);
-    let border = Stroke::new(1.0, Color32::from_white_alpha(40));
-    painter.rect(bubble, CornerRadius::same(6), Color32::from_black_alpha(200), border, StrokeKind::Inside);
+    let palette = theme::palette();
+    let border = Stroke::new(1.0, palette.line(40));
+    painter.rect(bubble, CornerRadius::same(6), palette.veil(200), border, StrokeKind::Inside);
     painter.galley(bubble.min + Vec2::new(8.0, 4.0), galley, color);
 }
 
@@ -153,21 +154,24 @@ pub fn paint_bubble_in(painter: &egui::Painter, rect: Rect, pointer: Pos2, text:
 /// status badges: on a dark card, so that it reads whatever is behind.
 /// Returns the card's rectangle, for what goes under it.
 pub fn paint_card(painter: &egui::Painter, rect: Rect, title: &str, lines: &[String]) -> Rect {
-    let title = painter.layout_no_wrap(title.to_string(), FontId::proportional(13.5), TEXT);
-    let lines: Vec<_> =
-        lines.iter().map(|l| painter.layout_no_wrap(l.clone(), FontId::proportional(12.0), TEXT_DIM)).collect();
+    let p = theme::palette();
+    let title = painter.layout_no_wrap(title.to_string(), FontId::proportional(13.5), p.overlay_text);
+    let lines: Vec<_> = lines
+        .iter()
+        .map(|l| painter.layout_no_wrap(l.clone(), FontId::proportional(12.0), p.overlay_text_dim))
+        .collect();
     let width = lines.iter().map(|g| g.size().x).fold(title.size().x, f32::max) + 24.0;
     let height = title.size().y + lines.iter().map(|g| g.size().y + 3.0).sum::<f32>() + 22.0;
     let card = Rect::from_min_size(rect.left_top() + Vec2::new(12.0, 44.0), Vec2::new(width, height));
-    let border = Stroke::new(1.0, Color32::from_white_alpha(28));
-    painter.rect(card, CornerRadius::same(8), Color32::from_black_alpha(185), border, StrokeKind::Inside);
+    let border = Stroke::new(1.0, p.line(28));
+    painter.rect(card, CornerRadius::same(8), p.veil(185), border, StrokeKind::Inside);
     let mut y = card.top() + 9.0;
     let title_height = title.size().y;
-    painter.galley(Pos2::new(card.left() + 12.0, y), title, TEXT);
+    painter.galley(Pos2::new(card.left() + 12.0, y), title, p.overlay_text);
     y += title_height + 6.0;
     for line in lines {
         let h = line.size().y;
-        painter.galley(Pos2::new(card.left() + 12.0, y), line, TEXT_DIM);
+        painter.galley(Pos2::new(card.left() + 12.0, y), line, p.overlay_text_dim);
         y += h + 3.0;
     }
     card

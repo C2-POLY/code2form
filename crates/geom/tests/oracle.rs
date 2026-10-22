@@ -25,7 +25,7 @@ const TOLERANCE: f64 = 1e-4;
 const KNOWN_GAPS: &[(&str, f64)] = &[("examples/Advanced/GEB.scad", 14.6463277)];
 
 fn reference() -> String {
-    std::env::var("C2F_REFERENCE").unwrap_or_else(|_| "/Applications/OpenSCAD-2021.01.app/Contents/MacOS/OpenSCAD".into())
+    std::env::var("C2F_REFERENCE").expect("C2F_REFERENCE names the reference's executable")
 }
 
 /// Signed volume of an ASCII or binary STL.
@@ -104,7 +104,7 @@ fn oracle(scad: &Path, out: &Path) -> Option<f64> {
 }
 
 #[test]
-#[ignore = "needs the reference's desktop app; set C2F_REFERENCE to override its path"]
+#[ignore = "needs the reference's desktop app; set C2F_REFERENCE to its executable"]
 fn live_volumes() {
     let resources = Path::new(&reference()).parent().unwrap().join("../Resources");
     let mut scads = Vec::new();

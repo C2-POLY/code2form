@@ -357,7 +357,7 @@ impl StudioApp {
         let point = Vec3::from_array(landing.at.map(|x| x as f32));
         let normal = Vec3::from_array(landing.normal.unwrap_or([0.0, 0.0, 1.0]).map(|x| x as f32));
         let growth = if hole { -normal } else { normal };
-        let color = if hole { theme::WARNING } else { theme::ACCENT_STRONG };
+        let color = if hole { theme::palette().warning } else { theme::palette().accent_strong };
         let viewer = &self.doc.viewer;
         let Some(at) = viewer.to_screen(rect, point) else {
             return;
@@ -487,7 +487,7 @@ fn toolbar(ui: &mut egui::Ui, tool: Tool, selected: usize) -> Option<Action> {
     }
     let hole = ui.selectable_label(
         tool.hole,
-        RichText::new("Hole").color(if tool.hole { theme::WARNING } else { theme::TEXT }),
+        RichText::new("Hole").color(if tool.hole { theme::palette().warning } else { theme::palette().text }),
     );
     if hole.on_hover_text("Cut the next shape out of the object it is put on").clicked() {
         action = Some(Action::Hole);
@@ -527,7 +527,7 @@ fn toolbar(ui: &mut egui::Ui, tool: Tool, selected: usize) -> Option<Action> {
             format!("{name}: click on the plate or on a face · Shift-click: another · Esc: cancel")
         };
         ui.separator();
-        ui.label(RichText::new(hint).size(12.0).color(theme::TEXT_DIM));
+        ui.label(RichText::new(hint).size(12.0).color(theme::palette().text_dim));
     }
     action
 }

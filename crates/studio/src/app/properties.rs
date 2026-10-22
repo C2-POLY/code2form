@@ -971,7 +971,7 @@ fn shown(value: &Value) -> String {
 
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(10.0);
-    ui.label(RichText::new(title).strong().size(13.0).color(theme::TEXT));
+    ui.label(RichText::new(title).strong().size(13.0).color(theme::palette().text));
     ui.add_space(2.0);
 }
 
@@ -980,13 +980,13 @@ fn show_model(ui: &mut egui::Ui, model: &Model) -> Vec<Action> {
     let mut actions = Vec::new();
     let call = &model.call;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&call.name).monospace().strong().size(14.0).color(theme::CODE_MODULE));
+        ui.label(RichText::new(&call.name).monospace().strong().size(14.0).color(theme::palette().code_module));
     });
     if model.unknown && !call.args.is_empty() {
         ui.label(
             RichText::new("The definition of this module is not found: only its written arguments are listed.")
                 .size(11.5)
-                .color(theme::TEXT_FAINT),
+                .color(theme::palette().text_faint),
         );
     }
     let base = Id::new(("properties", call.statement.start, &call.name));
@@ -998,7 +998,7 @@ fn show_model(ui: &mut egui::Ui, model: &Model) -> Vec<Action> {
             ui.add_space(3.0);
         }
     } else if model.unknown {
-        ui.label(RichText::new("No arguments.").color(theme::TEXT_DIM));
+        ui.label(RichText::new("No arguments.").color(theme::palette().text_dim));
     }
 
     section(ui, "Placement");
@@ -1009,7 +1009,7 @@ fn show_model(ui: &mut egui::Ui, model: &Model) -> Vec<Action> {
             Transform::Scale => "Scale",
         };
         ui.horizontal_top(|ui| {
-            row_label(ui, name, theme::TEXT_DIM, false);
+            row_label(ui, name, theme::palette().text_dim, false);
             match value {
                 Ok(v) => {
                     let width = (ui.available_width() / 3.0 - 4.0).clamp(40.0, 80.0);
@@ -1024,7 +1024,7 @@ fn show_model(ui: &mut egui::Ui, model: &Model) -> Vec<Action> {
                     }
                 }
                 Err(why) => {
-                    ui.add(Label::new(RichText::new(why).size(11.5).color(theme::TEXT_FAINT)).wrap());
+                    ui.add(Label::new(RichText::new(why).size(11.5).color(theme::palette().text_faint)).wrap());
                 }
             }
         });
@@ -1047,7 +1047,7 @@ fn show_model(ui: &mut egui::Ui, model: &Model) -> Vec<Action> {
 
 fn field_row(ui: &mut egui::Ui, id: Id, i: usize, field: &Field, actions: &mut Vec<Action>) {
     let absent = matches!(field.state, State::Absent(_));
-    let label_color = if absent { theme::TEXT_FAINT } else { theme::TEXT_DIM };
+    let label_color = if absent { theme::palette().text_faint } else { theme::palette().text_dim };
     let label = |ui: &mut egui::Ui, drag| row_label(ui, &field.label, label_color, drag);
     let edit = |change| Action::Edit(i, change);
     let hover = |r: egui::Response| {
@@ -1060,9 +1060,9 @@ fn field_row(ui: &mut egui::Ui, id: Id, i: usize, field: &Field, actions: &mut V
             label(ui, false);
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(&c.code).monospace().color(theme::CODE_TEXT));
+                    ui.label(RichText::new(&c.code).monospace().color(theme::palette().code_text));
                     if let Some(v) = &c.value {
-                        ui.label(RichText::new(format!("= {}", shown(v))).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(format!("= {}", shown(v))).color(theme::palette().text_dim));
                     }
                 });
                 ui.horizontal_wrapped(|ui| {
@@ -1156,7 +1156,7 @@ fn field_row(ui: &mut egui::Ui, id: Id, i: usize, field: &Field, actions: &mut V
 fn dimmed<R>(ui: &mut egui::Ui, dim: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.scope(|ui| {
         if dim {
-            ui.visuals_mut().override_text_color = Some(theme::TEXT_FAINT);
+            ui.visuals_mut().override_text_color = Some(theme::palette().text_faint);
         }
         add(ui)
     })
@@ -1190,24 +1190,24 @@ fn edges_section(
     let primitive = match edges {
         Ok(p) => *p,
         Err(why) => {
-            ui.add(Label::new(RichText::new(why).size(11.5).color(theme::TEXT_FAINT)).wrap());
+            ui.add(Label::new(RichText::new(why).size(11.5).color(theme::palette().text_faint)).wrap());
             return;
         }
     };
     let id = Id::new("properties-edges");
     let mut s: EdgeSettings = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     ui.horizontal(|ui| {
-        row_label(ui, "Kind", theme::TEXT_DIM, false);
+        row_label(ui, "Kind", theme::palette().text_dim, false);
         ui.selectable_value(&mut s.fillet, true, "Fillet");
         ui.selectable_value(&mut s.fillet, false, "Chamfer");
     });
     ui.horizontal(|ui| {
-        row_label(ui, if s.fillet { "Radius" } else { "Distance" }, theme::TEXT_DIM, false);
+        row_label(ui, if s.fillet { "Radius" } else { "Distance" }, theme::palette().text_dim, false);
         let size = DragValue::new(&mut s.size).speed(0.05).range(0.0..=f64::MAX).max_decimals(3);
         ui.add_sized([80.0, 20.0], size.custom_formatter(|n, _| code_edit::number(n)));
     });
     ui.horizontal(|ui| {
-        row_label(ui, "Edges", theme::TEXT_DIM, false);
+        row_label(ui, "Edges", theme::palette().text_dim, false);
         match primitive {
             Primitive::Cube { .. } => {
                 let names = [
@@ -1297,22 +1297,22 @@ impl StudioApp {
             .default_width(280.0)
             .width_range(230.0..=(width * 0.4).max(250.0))
             .show(ctx, |ui| {
-                ui.label(RichText::new("Properties").strong().size(14.0).color(theme::TEXT));
+                ui.label(RichText::new("Properties").strong().size(14.0).color(theme::palette().text));
                 ui.add_space(6.0);
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match &content {
                     None => {
-                        ui.label(RichText::new("Updating…").color(theme::TEXT_FAINT));
+                        ui.label(RichText::new("Updating…").color(theme::palette().text_faint));
                     }
                     Some(Content::Call(model, _)) => actions = show_model(ui, model),
                     Some(Content::Note(head, why)) => {
-                        ui.label(RichText::new(head).monospace().color(theme::CODE_TEXT));
+                        ui.label(RichText::new(head).monospace().color(theme::palette().code_text));
                         ui.add_space(4.0);
-                        ui.add(Label::new(RichText::new(why).color(theme::TEXT_DIM)).wrap());
+                        ui.add(Label::new(RichText::new(why).color(theme::palette().text_dim)).wrap());
                     }
                     Some(Content::Many(n)) => {
-                        ui.label(RichText::new(format!("{n} objects selected")).color(theme::TEXT));
+                        ui.label(RichText::new(format!("{n} objects selected")).color(theme::palette().text));
                         ui.add_space(4.0);
-                        ui.label(RichText::new("Select a single object to edit its properties.").color(theme::TEXT_DIM));
+                        ui.label(RichText::new("Select a single object to edit its properties.").color(theme::palette().text_dim));
                     }
                 });
             });

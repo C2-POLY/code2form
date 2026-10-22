@@ -277,7 +277,7 @@ fn an_agent_builds_the_grogu_circuit() {
     let library = temp_dir("library");
     std::fs::create_dir_all(library.join("electronics/sensors")).unwrap();
     std::fs::write(library.join("electronics/sensors/probe.c2f"), "// A probe, simplified.\n// @pin S [0, 0, 1] input 3.6V\ncube(1);\n").unwrap();
-    let mut server = Server::start_with(&[("OPENSCADPATH", library.as_os_str())]);
+    let mut server = Server::start_with(&[("C2F_LIBRARY_PATH", library.as_os_str())]);
     let (is_error, report) = server.report("library_parts", json!({}));
     assert!(!is_error, "{report}");
     let probe = report["parts"].as_array().unwrap().iter().find(|p| p["part"] == "electronics/sensors/probe.c2f");

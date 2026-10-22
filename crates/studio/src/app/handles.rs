@@ -716,7 +716,7 @@ impl StudioApp {
         match (&state.gesture, state.hot, pointer) {
             (Some(gesture), _, pos) if pos.or(by_handles).is_some() => {
                 let pos = pos.or(by_handles).unwrap_or_default();
-                crate::inspect::paint_bubble_in(&painter, rect, pos, &gesture.label, theme::TEXT);
+                crate::inspect::paint_bubble_in(&painter, rect, pos, &gesture.label, theme::palette().text);
                 ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
             }
             (None, Some(hot), Some(pos)) => {
@@ -739,7 +739,7 @@ fn settings_bar(ui: &mut egui::Ui, rect: Rect, settings: &mut Settings) -> Rect 
     let bar = |ui: &mut egui::Ui| {
         egui::Frame::new()
             .fill(Color32::from_rgba_unmultiplied(18, 20, 25, 215))
-            .stroke(Stroke::new(1.0, theme::BORDER))
+            .stroke(Stroke::new(1.0, theme::palette().border))
             .corner_radius(13)
             .inner_margin(egui::Margin::symmetric(8, 2))
             .show(ui, |ui| {
@@ -758,7 +758,7 @@ fn settings_bar(ui: &mut egui::Ui, rect: Rect, settings: &mut Settings) -> Rect 
                         settings.local = true;
                     }
                     ui.separator();
-                    ui.label(egui::RichText::new("Snap").color(theme::TEXT_DIM));
+                    ui.label(egui::RichText::new("Snap").color(theme::palette().text_dim));
                     ui.add(
                         egui::DragValue::new(&mut settings.step_mm)
                             .range(0.0..=100.0)
@@ -786,7 +786,7 @@ fn settings_bar(ui: &mut egui::Ui, rect: Rect, settings: &mut Settings) -> Rect 
 /// and thicker, the others faded while dragging.
 fn paint(painter: &egui::Painter, marks: &[(Handle, Mark)], hot: Option<Handle>, active: Option<Handle>) {
     for (handle, mark) in marks {
-        let base = handle.axis().map_or(theme::TEXT, |k| AXIS_COLORS[k]);
+        let base = handle.axis().map_or(theme::palette().text, |k| AXIS_COLORS[k]);
         let lit = Some(*handle) == hot || Some(*handle) == active;
         let color = match (lit, active.is_some()) {
             (true, _) => base.lerp_to_gamma(Color32::WHITE, 0.45),

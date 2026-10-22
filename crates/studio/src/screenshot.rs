@@ -6,10 +6,13 @@
 //! `assembly:7` shows the assembly mode at its seventh wire; and
 //! `rewire:xiao.5V>mic.VDD`, a new wire dragged from one pin to another;
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
-//! `mic` mid-drag at x 40, y 10. In a design, `code:cylinder(h = 7`
-//! selects the statement holding the first match of that text, and
+//! `mic` mid-drag at x 40, y 10; `settings:view` shows a page of the
+//! settings (`app-icon`, `editor`, `view`, `export`, `libraries`,
+//! `shortcuts`). In a design, `code:cylinder(h = 7` selects the statement
+//! holding the first match of that text, and
 //! `CODE2FORM_SCREENSHOT_HANDLE=turn-z:30` holds its handles mid-drag
-//! (`move-x:12`, `scale-y:1.5`, `scale:2`).
+//! (`move-x:12`, `scale-y:1.5`, `scale:2`). `CODE2FORM_APPEARANCE` picks
+//! the theme.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

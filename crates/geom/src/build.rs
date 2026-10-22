@@ -16,9 +16,9 @@ use crate::mesh::{RenderMesh, Rendered, Stats};
 use crate::offset;
 use crate::primitives::{self, TriMesh, fragments};
 
-/// The default preview colors of the reference implementation (its
-/// "Cornfield" scheme).
-const DEFAULT_COLOR: [f32; 4] = [0.976, 0.843, 0.173, 1.0];
+/// The color of the parts without `color()`: the default preview color of
+/// the reference implementation (its "Cornfield" scheme).
+pub const DEFAULT_COLOR: [f32; 4] = [0.976, 0.843, 0.173, 1.0];
 /// Surfaces cut by a `difference`. (0.318 is 81/255, not 1/π.)
 #[allow(clippy::approx_constant)]
 const CUT_COLOR: [f32; 4] = [0.616, 0.796, 0.318, 1.0];

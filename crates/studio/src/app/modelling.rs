@@ -41,7 +41,7 @@ impl StudioApp {
     /// sketches, shapes and holes, and what acts on the selection. Added
     /// after the side panels, it spans the view only.
     fn modelling_toolbar(&mut self, ctx: &egui::Context) {
-        let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(8, 4));
+        let frame = egui::Frame::new().fill(theme::palette().bg).inner_margin(egui::Margin::symmetric(8, 4));
         egui::TopBottomPanel::top("modelling-toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 self.sketch_entry(ctx, ui);

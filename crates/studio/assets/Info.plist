@@ -77,7 +77,7 @@
 			<string>AppIcon</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>org.openscad.scad</string>
+				<string>app.code2form.scad</string>
 			</array>
 			<key>CFBundleTypeExtensions</key>
 			<array>
@@ -131,7 +131,7 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>org.openscad.scad</string>
+			<string>app.code2form.scad</string>
 			<key>UTTypeDescription</key>
 			<string>SCAD design</string>
 			<key>UTTypeConformsTo</key>

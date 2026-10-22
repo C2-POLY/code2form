@@ -28,13 +28,15 @@ use crate::recent::RecentFiles;
 use crate::tabs::{self, Owners, Session, Shelf};
 use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
-use crate::settings::{self, Settings};
-use crate::theme;
+use crate::settings::{self, Placement, Settings};
+use crate::shortcuts::{self, Action, Shortcuts};
+use crate::theme::{self, Appearance};
 use crate::viewer::{self, PauseEdit, Viewer};
 use crate::inspect;
 use crate::mount::{self, Mount};
 use crate::pick::{self, Hit};
 use crate::prefs::WireMargin;
+use crate::window;
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
@@ -55,22 +57,10 @@ const PARAMETER_DEBOUNCE: Duration = Duration::from_millis(120);
 /// How often the file is checked for changes on disk.
 const POLL: Duration = Duration::from_secs(1);
 
-const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
-const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
-const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
-const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::S);
-const RENDER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F5);
-const EXPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F7);
+/// Outside the editor and the text fields, which have their own; the other
+/// shortcuts are the settings'.
 const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::Z);
-const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
-const FIND_REPLACE: KeyboardShortcut = KeyboardShortcut::new(Modifiers { alt: true, ..Modifiers::COMMAND }, Key::F);
-const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
-const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::G);
-const CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
-const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
-/// Hides or shows the code editor: the code-free mode.
-const CODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::E);
 
 /// The app icons in the settings, in points, and how many in a row.
 const ICON_CHOICE: f32 = 56.0;
@@ -78,22 +68,46 @@ const ICONS_PER_ROW: usize = 5;
 /// The height of the settings' pages, so that the window keeps its size.
 const SETTINGS_HEIGHT: f32 = 330.0;
 
+/// The model colors the settings offer, besides the color picker.
+const MODEL_COLORS: [(&str, [u8; 3]); 8] = [
+    ("Yellow", settings::MODEL_COLOR),
+    ("Orange", [240, 140, 50]),
+    ("Red", [214, 72, 66]),
+    ("Green", [96, 186, 98]),
+    ("Blue", [72, 140, 226]),
+    ("Violet", [150, 104, 214]),
+    ("Gray", [168, 174, 184]),
+    ("White", [238, 238, 236]),
+];
+
 /// The pages of the settings window.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
     AppIcon,
     Editor,
+    View,
+    Export,
     Libraries,
+    Shortcuts,
 }
 
 impl Section {
-    const ALL: [Section; 3] = [Section::AppIcon, Section::Editor, Section::Libraries];
+    const ALL: [Section; 6] =
+        [Section::AppIcon, Section::Editor, Section::View, Section::Export, Section::Libraries, Section::Shortcuts];
+
+    /// As a screenshot run names it.
+    fn id(self) -> String {
+        self.name().to_lowercase().replace(' ', "-")
+    }
 
     fn name(self) -> &'static str {
         match self {
             Section::AppIcon => "App Icon",
             Section::Editor => "Editor",
+            Section::View => "View",
+            Section::Export => "Export",
             Section::Libraries => "Libraries",
+            Section::Shortcuts => "Shortcuts",
         }
     }
 }
@@ -102,6 +116,20 @@ impl Section {
 enum FolderEdit {
     Add,
     Remove(usize),
+}
+
+/// A change asked for on the Shortcuts page.
+enum ShortcutEdit {
+    /// Records the next keys pressed for the action.
+    Record(Action),
+    Reset(Action),
+    ResetAll,
+}
+
+/// A change to the folder exports go to.
+enum ExportFolderEdit {
+    NextToTheDesign,
+    Choose,
 }
 
 /// Something that would lose the active tab's unsaved edits, waiting for
@@ -349,10 +377,19 @@ pub struct StudioApp {
     settings_store: Option<PathBuf>,
     settings_open: bool,
     settings_section: Section,
+    /// The action whose keys the Shortcuts page waits for, and why the
+    /// last keys pressed were refused.
+    recording: Option<Action>,
+    record_problem: Option<String>,
     /// The icons the settings offer, drawn when first shown.
     icon_choices: Vec<TextureHandle>,
     /// The icon at the toolbar's left, in the tint picked.
     logo: TextureHandle,
+    /// The window's size and place as last seen, and whether it is
+    /// maximized; the settings take it when they are saved.
+    window: Option<(Placement, bool)>,
+    /// The zoom of the last frame, which the window was measured with.
+    measured_zoom: f32,
     confirm: Option<Pending>,
     allow_close: bool,
     title: String,
@@ -366,6 +403,8 @@ impl StudioApp {
     /// line or the Finder), the last of them active.
     pub fn new(cc: &eframe::CreationContext<'_>, paths: Vec<PathBuf>, settings: Settings) -> Self {
         theme::apply(&cc.egui_ctx);
+        // ⌘+ and ⌘− change the interface size in the settings instead.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         open_events::wake(&cc.egui_ctx);
         // Launched by opening files in the Finder.
         let paths = paths.into_iter().chain(open_events::take()).collect();
@@ -414,7 +453,11 @@ impl StudioApp {
             settings_store: stores.settings,
             settings_open: false,
             settings_section: Section::AppIcon,
+            recording: None,
+            record_problem: None,
             icon_choices: Vec::new(),
+            window: None,
+            measured_zoom: ctx.zoom_factor(),
             confirm: None,
             allow_close: false,
             title: String::new(),
@@ -422,6 +465,12 @@ impl StudioApp {
             tree: tree::TreeState::default(),
         };
         app.apply_settings(ctx);
+        // A screenshot of a settings page, as `settings:shortcuts`.
+        let page = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("settings:"));
+        if let Some(section) = page.and_then(|page| Section::ALL.into_iter().find(|s| s.id() == page)) {
+            app.settings_open = true;
+            app.settings_section = section;
+        }
         // The tabs of the last session, quietly: a file gone since is
         // simply not reopened.
         let session = std::mem::take(&mut app.session);
@@ -461,11 +510,11 @@ impl StudioApp {
         self.shelf.push(&mut self.doc, tab);
     }
 
-    /// An untitled tab, its view as the settings say.
+    /// An untitled tab, its view and editor as the settings say.
     fn fresh_tab(&mut self) -> Tab {
         let mut tab = Tab::new(self.next_id, self.gl.as_ref());
         self.next_id += 1;
-        apply_view_settings(&self.settings, &mut tab.viewer);
+        apply_tab_settings(&self.settings, &mut tab);
         tab
     }
 
@@ -959,23 +1008,35 @@ impl StudioApp {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 Frame::new()
-                    .fill(Color32::from_black_alpha(200))
-                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
+                    .fill(theme::palette().veil(200))
+                    .stroke(Stroke::new(1.0, theme::palette().line(30)))
                     .corner_radius(CornerRadius::same(8))
                     .inner_margin(Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.set_max_width(rect.width() - 48.0);
                         ui.horizontal(|ui| {
                             toggled = ui.checkbox(&mut done, "").on_hover_text("Done").changed();
-                            ui.label(RichText::new(&instruction).strong().size(14.0).color(wiring::TEXT));
+                            ui.label(
+                                RichText::new(&instruction).strong().size(14.0).color(theme::palette().overlay_text),
+                            );
                             if let Some(label) = &label {
-                                ui.label(RichText::new(format!("· {label}")).size(13.0).color(wiring::TEXT_DIM));
+                                ui.label(
+                                    RichText::new(format!("· {label}"))
+                                        .size(13.0)
+                                        .color(theme::palette().overlay_text_dim),
+                                );
                             }
                         });
                         ui.horizontal(|ui| {
                             let count = names.len();
-                            ui.label(RichText::new(format!("{} / {count}", step + 1)).strong().color(wiring::TEXT));
-                            ui.label(RichText::new(format!("· {done_count} done")).color(wiring::TEXT_DIM));
+                            ui.label(
+                                RichText::new(format!("{} / {count}", step + 1))
+                                    .strong()
+                                    .color(theme::palette().overlay_text),
+                            );
+                            ui.label(
+                                RichText::new(format!("· {done_count} done")).color(theme::palette().overlay_text_dim),
+                            );
                             ui.add_space(8.0);
                             previous = ui
                                 .add_enabled(step > 0, Button::new("◀ Previous"))
@@ -1163,7 +1224,7 @@ impl StudioApp {
         // Without a pointer (a scripted screenshot), at the pin targeted.
         let held = rewire.target.and_then(|t| self.doc.viewer.to_screen(rect, place(t)));
         let Some(pointer) = pointer.or(held) else { return };
-        let color = if rewire.error.is_some() { theme::ERROR } else { theme::ACCENT_STRONG };
+        let color = if rewire.error.is_some() { theme::palette().error } else { theme::palette().accent_strong };
         if let Some(anchor) = self.doc.viewer.to_screen(rect, place(rewire.anchor)) {
             let to = rewire.target.and_then(|t| self.doc.viewer.to_screen(rect, place(t))).unwrap_or(pointer);
             painter.line_segment([anchor, to], Stroke::new(2.0, color));
@@ -1177,7 +1238,7 @@ impl StudioApp {
             }
             (None, None, None) => "Drop on a pin to wire it".to_string(),
         };
-        let color = if rewire.error.is_some() { theme::ERROR } else { wiring::TEXT };
+        let color = if rewire.error.is_some() { theme::palette().error } else { theme::palette().overlay_text };
         inspect::paint_bubble_in(painter, rect, pointer, &text, color);
     }
 
@@ -1580,7 +1641,9 @@ impl StudioApp {
             .set_title(format!("Export {name}"))
             .add_filter(name, &[extension])
             .set_file_name(format!("{stem}.{extension}"));
-        if let Some(dir) = self.doc.directory() {
+        // The folder picked in the settings, while it exists.
+        let folder = self.settings.export_folder.clone().filter(|folder| folder.is_dir());
+        if let Some(dir) = folder.or_else(|| self.doc.directory()) {
             dialog = dialog.set_directory(dir);
         }
         if let Some(target) = dialog.save_file() {
@@ -1589,7 +1652,7 @@ impl StudioApp {
             if self.exportable != Some(self.doc.id) {
                 self.render_now();
             }
-            self.worker.export(target, format);
+            self.worker.export(target, format, self.settings.binary_stl);
         }
     }
 
@@ -1680,48 +1743,55 @@ impl StudioApp {
         if self.confirm.is_some() {
             return;
         }
-        let [save_as, save, open, new, render, export, close, settings, code] = ctx.input_mut(|i| {
-            // Shift+Cmd+S first: Cmd+S also matches it.
-            [SAVE_AS, SAVE, OPEN, NEW, RENDER, EXPORT, CLOSE_TAB, SETTINGS, CODE].map(|s| i.consume_shortcut(&s))
-        });
-        if code {
-            self.toggle_code(ctx);
+        // The keys go to the shortcut being recorded, and to nothing else.
+        if self.recording.is_some() {
+            self.record_keys(ctx);
+            return;
         }
-        if settings {
-            self.settings_open = true;
+        let actions = ctx.input_mut(|i| self.settings.shortcuts.take(i));
+        let (mut zoom_steps, mut zoom_reset) = (0, false);
+        for action in actions {
+            // Closing a modified tab asks first: what follows waits.
+            if self.confirm.is_some() {
+                break;
+            }
+            match action {
+                Action::New => self.new_tab(ctx),
+                Action::Open => self.open_dialog(ctx),
+                Action::Save => {
+                    self.save();
+                }
+                Action::SaveAs => {
+                    self.save_as();
+                }
+                Action::CloseTab => self.close_tab(ctx, self.shelf.active()),
+                Action::NextTab | Action::PreviousTab => {
+                    let forward = action == Action::NextTab;
+                    self.select_tab(ctx, tabs::step(self.shelf.active(), self.shelf.len(), forward));
+                }
+                Action::Render => self.render_now(),
+                Action::Export => self.export(Format::Stl),
+                Action::Find | Action::FindReplace => {
+                    self.doc.editor.find(FindRequest::Open { replace: action == Action::FindReplace });
+                }
+                Action::FindNext | Action::FindPrevious => {
+                    self.doc.editor.find(FindRequest::Step { forward: action == Action::FindNext });
+                }
+                Action::ZoomIn => zoom_steps += 1,
+                Action::ZoomOut => zoom_steps -= 1,
+                Action::ZoomReset => zoom_reset = true,
+                Action::Settings => self.settings_open = true,
+                Action::ToggleCode => self.toggle_code(ctx),
+            }
         }
-        if save_as {
-            self.save_as();
-        } else if save {
-            self.save();
-        }
-        if open {
-            self.open_dialog(ctx);
-        }
-        if new {
-            self.new_tab(ctx);
-        }
-        if render {
-            self.render_now();
-        }
-        if export {
-            self.export(Format::Stl);
-        }
-        if close {
-            self.close_tab(ctx, self.shelf.active());
-        }
-        if let Some(forward) = ctx.input_mut(tab_step) {
-            self.select_tab(ctx, tabs::step(self.shelf.active(), self.shelf.len(), forward));
-        }
-
-        // Option+Cmd+F and Shift+Cmd+G first: their shorter forms match them.
-        let [replace, find, previous, next] =
-            ctx.input_mut(|i| [FIND_REPLACE, FIND, FIND_PREVIOUS, FIND_NEXT].map(|s| i.consume_shortcut(&s)));
-        if replace || find {
-            self.doc.editor.find(FindRequest::Open { replace });
-        }
-        if previous || next {
-            self.doc.editor.find(FindRequest::Step { forward: next });
+        let size = if zoom_reset {
+            Some(1.0)
+        } else {
+            (zoom_steps != 0).then(|| zoom_step(self.settings.interface_size, zoom_steps))
+        };
+        if let Some(size) = size.filter(|&size| size != self.settings.interface_size) {
+            self.settings.interface_size = size;
+            ctx.set_zoom_factor(size);
         }
 
         // Cmd+Z in the editor or a text field is theirs. Elsewhere, as after
@@ -1740,6 +1810,44 @@ impl StudioApp {
         }
     }
 
+    /// Gives the action being recorded the keys pressed, or says why not;
+    /// Escape gives up. Meanwhile no key reaches anything else.
+    fn record_keys(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.recording else { return };
+        let pressed = ctx.input_mut(|i| {
+            let mut pressed = None;
+            i.events.retain(|event| match event {
+                egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                    pressed = pressed.or(Some((*key, *modifiers)));
+                    false
+                }
+                egui::Event::Key { .. }
+                | egui::Event::Text(_)
+                | egui::Event::Copy
+                | egui::Event::Cut
+                | egui::Event::Paste(_) => false,
+                _ => true,
+            });
+            pressed
+        });
+        match pressed {
+            Some((Key::Escape, modifiers)) if modifiers.is_none() => self.stop_recording(),
+            Some((key, modifiers)) => match shortcuts::record(modifiers, key) {
+                Ok(keys) => {
+                    self.settings.shortcuts.set(action, keys);
+                    self.stop_recording();
+                }
+                Err(why) => self.record_problem = Some(why),
+            },
+            None => {}
+        }
+    }
+
+    fn stop_recording(&mut self) {
+        self.recording = None;
+        self.record_problem = None;
+    }
+
     fn update_title(&mut self, ctx: &egui::Context) {
         let title = format!("{}{} — Code2Form", if self.doc.is_dirty() { "● " } else { "" }, self.doc.file_name());
         if title != self.title {
@@ -1751,35 +1859,36 @@ impl StudioApp {
     // ---- Panels ----
 
     fn toolbar(&mut self, ctx: &egui::Context) {
-        let frame = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(12, 8));
+        let keys = self.settings.shortcuts.clone();
+        let frame = Frame::new().fill(theme::palette().bg).inner_margin(Margin::symmetric(12, 8));
         egui::TopBottomPanel::top("toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
-                ui.label(RichText::new("Code2Form").strong().color(theme::TEXT).size(14.5));
+                ui.label(RichText::new("Code2Form").strong().color(theme::palette().text).size(14.5));
                 ui.add_space(10.0);
                 toolbar_separator(ui);
 
-                if tool_button(ui, "New", "New file, in a new tab", Some(NEW)).clicked() {
+                if tool_button(ui, "New", "New file, in a new tab", Some(keys.get(Action::New))).clicked() {
                     self.new_tab(ctx);
                 }
-                if tool_button(ui, "Open…", "Open files, each in its tab", Some(OPEN)).clicked() {
+                if tool_button(ui, "Open…", "Open files, each in its tab", Some(keys.get(Action::Open))).clicked() {
                     self.open_dialog(ctx);
                 }
                 self.recent_menu(ui);
-                if tool_button(ui, "Save", "Save the file", Some(SAVE)).clicked() {
+                if tool_button(ui, "Save", "Save the file", Some(keys.get(Action::Save))).clicked() {
                     self.save();
                 }
-                if tool_button(ui, "Save As…", "Save under a new name", Some(SAVE_AS)).clicked() {
+                if tool_button(ui, "Save As…", "Save under a new name", Some(keys.get(Action::SaveAs))).clicked() {
                     self.save_as();
                 }
                 toolbar_separator(ui);
 
-                let render = Button::new(RichText::new("Render").color(Color32::WHITE).strong())
-                    .fill(theme::ACCENT)
+                let render = Button::new(RichText::new("Render").color(theme::palette().on_accent).strong())
+                    .fill(theme::palette().accent)
                     .stroke(Stroke::NONE)
                     .corner_radius(CornerRadius::same(6));
-                let shortcut = ctx.format_shortcut(&RENDER);
+                let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
                 if ui.add(render).on_hover_text(format!("Render now ({shortcut})")).clicked() {
                     self.render_now();
                 }
@@ -1787,8 +1896,9 @@ impl StudioApp {
                 let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
                     ui.menu_button("Export", |ui| {
                         // Solids above the separator, 2D models below.
+                        let stl = if self.settings.binary_stl { "A binary STL" } else { "An ASCII STL" };
                         let entries = [
-                            (Format::Stl, "An ASCII STL"),
+                            (Format::Stl, stl),
                             (Format::ThreeMf, "A 3MF package, in millimeters"),
                             (Format::Svg, "An SVG drawing, in millimeters"),
                             (Format::Dxf, "A DXF drawing of line segments"),
@@ -1799,9 +1909,10 @@ impl StudioApp {
                             }
                             let mut button = Button::new(format!("{}…", format.name()));
                             if format == Format::Stl {
-                                button = button.shortcut_text(ctx.format_shortcut(&EXPORT));
+                                button = button.shortcut_text(shortcuts::describe(ctx, &keys.get(Action::Export)));
                             }
-                            let disabled = if Format::SOLID.contains(&format) { "For 3D models" } else { "For 2D models" };
+                            let disabled =
+                                if Format::SOLID.contains(&format) { "For 3D models" } else { "For 2D models" };
                             let response = ui.add_enabled(formats.contains(&format), button);
                             if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
                                 self.export(format);
@@ -1814,7 +1925,7 @@ impl StudioApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if tool_button(ui, "Settings…", "Settings", Some(SETTINGS)).clicked() {
+                    if tool_button(ui, "Settings…", "Settings", Some(keys.get(Action::Settings))).clicked() {
                         self.settings_open = true;
                     }
                     toolbar_separator(ui);
@@ -1914,25 +2025,27 @@ impl StudioApp {
     }
 
     fn status_bar(&mut self, ctx: &egui::Context) {
-        let frame = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(12, 4));
+        let frame = Frame::new().fill(theme::palette().bg).inner_margin(Margin::symmetric(12, 4));
         egui::TopBottomPanel::bottom("status").frame(frame).exact_height(26.0).show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                let small = |text: String| RichText::new(text).size(12.0).color(theme::TEXT_DIM);
+                let small = |text: String| RichText::new(text).size(12.0).color(theme::palette().text_dim);
                 if self.doc.busy() {
-                    ui.add(egui::Spinner::new().size(11.0).color(theme::ACCENT_STRONG));
-                    ui.label(RichText::new("Rendering…").size(12.0).color(theme::ACCENT_STRONG));
+                    ui.add(egui::Spinner::new().size(11.0).color(theme::palette().accent_strong));
+                    ui.label(RichText::new("Rendering…").size(12.0).color(theme::palette().accent_strong));
                 } else if !self.settings.render_while_typing && self.doc.unrendered() {
-                    status_dot(ui, theme::WARNING);
-                    let shortcut = ctx.format_shortcut(&RENDER);
-                    ui.label(RichText::new(format!("Not rendered · {shortcut}")).size(12.0).color(theme::WARNING))
-                        .on_hover_text("Rendering as you type is off in the settings");
+                    status_dot(ui, theme::palette().warning);
+                    let shortcut = shortcuts::describe(ctx, &self.settings.shortcuts.get(Action::Render));
+                    ui.label(
+                        RichText::new(format!("Not rendered · {shortcut}")).size(12.0).color(theme::palette().warning),
+                    )
+                    .on_hover_text("Rendering as you type is off in the settings");
                 } else if self.doc.failed {
-                    status_dot(ui, theme::ERROR);
-                    ui.label(RichText::new("Render failed").size(12.0).color(theme::ERROR));
+                    status_dot(ui, theme::palette().error);
+                    ui.label(RichText::new("Render failed").size(12.0).color(theme::palette().error));
                 } else {
-                    status_dot(ui, theme::SUCCESS);
-                    ui.label(RichText::new("Ready").size(12.0).color(theme::TEXT));
+                    status_dot(ui, theme::palette().success);
+                    ui.label(RichText::new("Ready").size(12.0).color(theme::palette().text));
                 }
                 if let Some(elapsed) = self.doc.elapsed {
                     ui.label(small(format!("· {}", format_duration(elapsed))));
@@ -1956,9 +2069,10 @@ impl StudioApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if self.doc.is_dirty() {
-                        ui.label(RichText::new("●").size(12.0).color(theme::WARNING)).on_hover_text("Unsaved changes");
+                        ui.label(RichText::new("●").size(12.0).color(theme::palette().warning))
+                            .on_hover_text("Unsaved changes");
                     }
-                    let name = ui.label(RichText::new(self.doc.file_name()).size(12.0).color(theme::TEXT));
+                    let name = ui.label(RichText::new(self.doc.file_name()).size(12.0).color(theme::palette().text));
                     if let Some(path) = &self.doc.path {
                         name.on_hover_text(path.display().to_string());
                     }
@@ -1976,8 +2090,10 @@ impl StudioApp {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let arrow = if *open { "⏷" } else { "⏵" };
                 let toggle = ui.add(
-                    Button::new(RichText::new(format!("{arrow}  Console")).strong().size(12.5).color(theme::TEXT))
-                        .frame(false),
+                    Button::new(
+                        RichText::new(format!("{arrow}  Console")).strong().size(12.5).color(theme::palette().text),
+                    )
+                    .frame(false),
                 );
                 if toggle.clicked() {
                     *open = !*open;
@@ -1986,13 +2102,13 @@ impl StudioApp {
                 let warnings = console.count(Level::Warning);
                 let echoes = console.count(Level::Echo);
                 if errors > 0 {
-                    pill(ui, &format!("{errors} error{}", plural(errors)), theme::ERROR);
+                    pill(ui, &format!("{errors} error{}", plural(errors)), theme::palette().error);
                 }
                 if warnings > 0 {
-                    pill(ui, &format!("{warnings} warning{}", plural(warnings)), theme::WARNING);
+                    pill(ui, &format!("{warnings} warning{}", plural(warnings)), theme::palette().warning);
                 }
                 if echoes > 0 {
-                    pill(ui, &format!("{echoes} echo"), theme::TEXT_DIM);
+                    pill(ui, &format!("{echoes} echo"), theme::palette().text_dim);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.add_enabled(!console.is_empty(), Button::new(RichText::new("Clear").size(12.0))).clicked() {
@@ -2001,7 +2117,8 @@ impl StudioApp {
                 });
             });
         };
-        let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 6 });
+        let frame =
+            Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 6 });
         if self.console_open {
             egui::TopBottomPanel::bottom("console")
                 .frame(frame)
@@ -2012,7 +2129,7 @@ impl StudioApp {
                     header(ui, &mut self.console_open, &mut self.doc.console);
                     ui.add_space(2.0);
                     Frame::new()
-                        .fill(theme::EDITOR)
+                        .fill(theme::palette().editor)
                         .corner_radius(CornerRadius::same(6))
                         .inner_margin(Margin::symmetric(10, 6))
                         .show(ui, |ui| self.doc.console.show(ui));
@@ -2032,7 +2149,7 @@ impl StudioApp {
         }
         let width = ctx.screen_rect().width();
         egui::SidePanel::left("editor")
-            .frame(Frame::new().fill(theme::EDITOR))
+            .frame(Frame::new().fill(theme::palette().editor))
             .resizable(true)
             .default_width((width * 0.36).max(320.0))
             .width_range(260.0..=(width - 300.0).max(300.0))
@@ -2055,8 +2172,10 @@ impl StudioApp {
             .map(|(tab, name)| (tab.id, name, tab.is_dirty(), tab.path.as_ref().map(|p| p.display().to_string())))
             .collect();
         let active = self.shelf.active();
+        let new_keys = self.settings.shortcuts.get(Action::New);
         let (mut select, mut close, mut new) = (None, None, false);
-        let frame = Frame::new().fill(theme::BG).inner_margin(Margin { left: 8, right: 8, top: 4, bottom: 0 });
+        let frame =
+            Frame::new().fill(theme::palette().bg).inner_margin(Margin { left: 8, right: 8, top: 4, bottom: 0 });
         egui::TopBottomPanel::top("tabs").frame(frame).show_separator_line(false).show(ctx, |ui| {
             egui::ScrollArea::horizontal().auto_shrink([false, true]).show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -2073,8 +2192,9 @@ impl StudioApp {
                         }
                     }
                     ui.add_space(4.0);
-                    let shortcut = ctx.format_shortcut(&NEW);
-                    let plus = ui.add(Button::new(RichText::new("+").size(15.0).color(theme::TEXT_DIM)).frame(false));
+                    let shortcut = shortcuts::describe(ctx, &new_keys);
+                    let plus = ui
+                        .add(Button::new(RichText::new("+").size(15.0).color(theme::palette().text_dim)).frame(false));
                     new = plus.on_hover_text(format!("New file in a new tab ({shortcut})")).clicked();
                 });
             });
@@ -2108,7 +2228,7 @@ impl StudioApp {
 
     fn view_panel(&mut self, ctx: &egui::Context) {
         let mut remove_part = None;
-        egui::CentralPanel::default().frame(Frame::new().fill(theme::BG)).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
             // A sketch being drawn is something to show: no empty-state card
             // over it.
             let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty) || self.doc.sketch.active();
@@ -2240,23 +2360,35 @@ impl StudioApp {
         }
     }
 
-    /// Gives the app, the view and the render worker the settings.
+    /// Gives the app, the tabs and the render worker the settings.
     fn apply_settings(&mut self, ctx: &egui::Context) {
-        self.apply_view_settings();
+        self.apply_tab_settings();
         let settings = &self.settings;
         theme::set_code_size(ctx, settings.code_size);
+        theme::style_window(ctx, settings.appearance);
+        ctx.set_zoom_factor(settings.interface_size);
         self.worker.set_libraries(settings.library_folders.clone());
         self.catalogue.set_libraries(settings.library_folders.clone());
         c2f_geom::set_font_folders(settings.font_folders.clone());
     }
 
-    /// Gives every tab's view the grid, axes and layer height of the
-    /// settings.
-    fn apply_view_settings(&mut self) {
-        apply_view_settings(&self.settings, &mut self.doc.viewer);
+    /// Gives the views the theme's colors where they computed them: the
+    /// greyed-out parts and wires fade towards its grey.
+    fn restyle(&mut self) {
+        for index in 0..self.shelf.len() {
+            self.in_tab(index, |app| {
+                app.doc.viewer.restyle();
+                app.update_overlay();
+            });
+        }
+    }
+
+    /// Gives every tab the settings of its view and its editor.
+    fn apply_tab_settings(&mut self) {
+        apply_tab_settings(&self.settings, &mut self.doc);
         for index in 0..self.shelf.len() {
             if let Some(tab) = self.shelf.other_mut(index) {
-                apply_view_settings(&self.settings, &mut tab.viewer);
+                apply_tab_settings(&self.settings, tab);
             }
         }
     }
@@ -2269,15 +2401,37 @@ impl StudioApp {
         let view = (viewer.show_grid, viewer.show_axes, viewer.layer_height);
         if view != (self.settings.show_grid, self.settings.show_axes, self.settings.layer_height) {
             (self.settings.show_grid, self.settings.show_axes, self.settings.layer_height) = view;
-            self.apply_view_settings();
+            self.apply_tab_settings();
         }
+        // Kept aside, not to save the settings at each step of a move.
+        let zoom = ctx.zoom_factor();
+        if zoom == self.measured_zoom {
+            if let Some(window) = window::current(ctx) {
+                self.window = Some(window);
+            }
+        }
+        self.measured_zoom = zoom;
         if self.settings == self.saved_settings || ctx.input(|i| i.pointer.any_down()) {
             return;
         }
+        self.note_window();
         if let Err(err) = self.settings.save(self.settings_store.as_deref()) {
             self.doc.console.log(Level::Warning, format!("Cannot save the settings: {err}"));
         }
         self.saved_settings = self.settings.clone();
+    }
+
+    /// Gives the settings the window's size and place. A maximized window
+    /// keeps the size and place it had before.
+    fn note_window(&mut self) {
+        match self.window {
+            Some((placement, false)) => {
+                self.settings.window = Some(placement);
+                self.settings.window_maximized = false;
+            }
+            Some((_, true)) => self.settings.window_maximized = true,
+            None => {}
+        }
     }
 
     fn settings_dialog(&mut self, ctx: &egui::Context) {
@@ -2291,10 +2445,12 @@ impl StudioApp {
         let mut chosen = None;
         let mut libraries = None;
         let mut fonts = None;
+        let mut export_folder = None;
+        let mut shortcut_edit = None;
         let mut done = false;
         let before = self.settings.clone();
         let modal = egui::Modal::new(Id::new("settings")).show(ctx, |ui| {
-            ui.label(RichText::new("Settings").heading().color(theme::TEXT));
+            ui.label(RichText::new("Settings").heading().color(theme::palette().text));
             ui.add_space(10.0);
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
@@ -2302,34 +2458,42 @@ impl StudioApp {
                     for section in Section::ALL {
                         let selected = self.settings_section == section;
                         let label = egui::Button::selectable(selected, section.name()).min_size(Vec2::new(120.0, 28.0));
-                        if ui.add(label).clicked() {
+                        if ui.add(label).clicked() && self.settings_section != section {
                             self.settings_section = section;
+                            self.stop_recording();
                         }
                     }
                 });
                 ui.add_space(8.0);
                 let (line, _) = ui.allocate_exact_size(Vec2::new(1.0, SETTINGS_HEIGHT), Sense::hover());
-                ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, theme::BORDER));
+                ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, theme::palette().border));
                 ui.add_space(16.0);
                 ui.vertical(|ui| {
                     ui.set_width(440.0);
                     ui.set_min_height(SETTINGS_HEIGHT);
                     // The window is the controls' usual color: lift them off it.
                     let widgets = &mut ui.visuals_mut().widgets;
-                    widgets.inactive.bg_fill = theme::HOVER;
-                    widgets.inactive.weak_bg_fill = theme::HOVER;
-                    widgets.hovered.bg_fill = theme::BORDER_STRONG;
-                    widgets.hovered.weak_bg_fill = theme::BORDER_STRONG;
+                    widgets.inactive.bg_fill = theme::palette().hover;
+                    widgets.inactive.weak_bg_fill = theme::palette().hover;
+                    widgets.hovered.bg_fill = theme::palette().border_strong;
+                    widgets.hovered.weak_bg_fill = theme::palette().border_strong;
                     match self.settings_section {
                         Section::AppIcon => chosen = self.icon_page(ui),
                         Section::Editor => editor_page(ui, ctx, &mut self.settings),
+                        Section::View => view_page(ui, ctx, &mut self.settings),
+                        Section::Export => export_folder = export_page(ui, &mut self.settings),
                         Section::Libraries => (libraries, fonts) = libraries_page(ui, &self.settings),
+                        Section::Shortcuts => {
+                            let problem = self.record_problem.as_deref();
+                            shortcut_edit = shortcuts_page(ui, ctx, &self.settings.shortcuts, self.recording, problem);
+                        }
                     }
                 });
             });
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let button = Button::new(RichText::new("Done").color(Color32::WHITE).strong()).fill(theme::ACCENT);
+                let button = Button::new(RichText::new("Done").color(theme::palette().on_accent).strong())
+                    .fill(theme::palette().accent);
                 if ui.add(button).clicked() {
                     done = true;
                 }
@@ -2340,6 +2504,47 @@ impl StudioApp {
         }
         if self.settings.code_size != before.code_size {
             theme::set_code_size(ctx, self.settings.code_size);
+        }
+        if self.settings.interface_size != before.interface_size {
+            ctx.set_zoom_factor(self.settings.interface_size);
+        }
+        if self.settings.appearance != before.appearance {
+            theme::style_window(ctx, self.settings.appearance);
+            // The next frame shows it, from its start.
+            ctx.request_repaint();
+        }
+        match shortcut_edit {
+            Some(ShortcutEdit::Record(action)) if self.recording == Some(action) => self.stop_recording(),
+            Some(ShortcutEdit::Record(action)) => {
+                self.recording = Some(action);
+                self.record_problem = None;
+            }
+            Some(ShortcutEdit::Reset(action)) => {
+                self.settings.shortcuts.reset(action);
+                self.stop_recording();
+            }
+            Some(ShortcutEdit::ResetAll) => {
+                self.settings.shortcuts = Shortcuts::default();
+                self.stop_recording();
+            }
+            None => {}
+        }
+        let tab = |s: &Settings| (s.model_color, s.indent_width, s.shortcuts.clone());
+        if tab(&self.settings) != tab(&before) {
+            self.apply_tab_settings();
+        }
+        match export_folder {
+            Some(ExportFolderEdit::NextToTheDesign) => self.settings.export_folder = None,
+            Some(ExportFolderEdit::Choose) => {
+                let mut dialog = rfd::FileDialog::new().set_title("Export to this folder");
+                if let Some(folder) = self.settings.export_folder.as_deref().filter(|f| f.is_dir()) {
+                    dialog = dialog.set_directory(folder);
+                }
+                if let Some(folder) = dialog.pick_folder() {
+                    self.settings.export_folder = Some(folder);
+                }
+            }
+            None => {}
         }
         if !self.settings.render_while_typing {
             self.doc.render_deadline = None;
@@ -2359,6 +2564,7 @@ impl StudioApp {
         }
         if done || modal.should_close() {
             self.settings_open = false;
+            self.stop_recording();
         }
     }
 
@@ -2409,15 +2615,16 @@ impl StudioApp {
         let name = self.doc.file_name();
         let modal = egui::Modal::new(Id::new("confirm-unsaved")).show(ctx, |ui| {
             ui.set_width(400.0);
-            ui.label(RichText::new("Unsaved changes").heading().color(theme::TEXT));
+            ui.label(RichText::new("Unsaved changes").heading().color(theme::palette().text));
             ui.add_space(6.0);
             ui.label(
                 RichText::new(format!("Do you want to save the changes to {name} before {}?", action.verb()))
-                    .color(theme::TEXT_DIM),
+                    .color(theme::palette().text_dim),
             );
             ui.add_space(14.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let save = Button::new(RichText::new("Save").color(Color32::WHITE).strong()).fill(theme::ACCENT);
+                let save = Button::new(RichText::new("Save").color(theme::palette().on_accent).strong())
+                    .fill(theme::palette().accent);
                 if ui.add(save).clicked() {
                     choice = Some(Choice::Save);
                 }
@@ -2463,6 +2670,9 @@ impl StudioApp {
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if theme::follow(ctx, self.settings.appearance) {
+            self.restyle();
+        }
         // Not while a question about the active tab waits.
         if self.confirm.is_none() {
             for path in open_events::take() {
@@ -2512,6 +2722,7 @@ impl eframe::App for StudioApp {
 
     fn on_exit(&mut self, gl: Option<&glow::Context>) {
         self.save_session();
+        self.note_window();
         if self.settings != self.saved_settings {
             let _ = self.settings.save(self.settings_store.as_deref());
         }
@@ -2537,7 +2748,7 @@ enum TabClick {
 /// A tab of the tab bar: its name, and an × that shows on the active tab
 /// and under the pointer; a modified tab shows a dot there instead.
 fn tab(ui: &mut egui::Ui, id: u64, name: &str, active: bool, dirty: bool) -> TabClick {
-    let color = if active { theme::TEXT } else { theme::TEXT_DIM };
+    let color = if active { theme::palette().text } else { theme::palette().text_dim };
     let galley = ui.painter().layout_no_wrap(name.to_string(), egui::FontId::proportional(13.0), color);
     let size = Vec2::new(galley.size().x + 46.0, 30.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -2547,28 +2758,28 @@ fn tab(ui: &mut egui::Ui, id: u64, name: &str, active: bool, dirty: bool) -> Tab
     let painter = ui.painter_at(rect);
     let hovered = response.hovered() || close.hovered();
     let fill = if active {
-        theme::EDITOR
+        theme::palette().editor
     } else if hovered {
-        theme::RAISED
+        theme::palette().raised
     } else {
-        theme::BG
+        theme::palette().bg
     };
     painter.rect_filled(rect, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, fill);
     if active {
         painter.line_segment(
             [rect.left_top() + Vec2::new(6.0, 0.0), rect.right_top() - Vec2::new(6.0, 0.0)],
-            Stroke::new(2.0, theme::ACCENT),
+            Stroke::new(2.0, theme::palette().accent),
         );
     }
     painter.galley(egui::pos2(rect.left() + 14.0, rect.center().y - galley.size().y / 2.0), galley, color);
     if close.hovered() {
-        painter.rect_filled(close_rect, CornerRadius::same(4), theme::HOVER);
+        painter.rect_filled(close_rect, CornerRadius::same(4), theme::palette().hover);
     }
     if dirty && !close.hovered() {
-        painter.circle_filled(close_rect.center(), 3.5, theme::WARNING);
+        painter.circle_filled(close_rect.center(), 3.5, theme::palette().warning);
     } else if active || hovered {
         let font = egui::FontId::proportional(14.0);
-        let tint = if close.hovered() { theme::TEXT } else { theme::TEXT_DIM };
+        let tint = if close.hovered() { theme::palette().text } else { theme::palette().text_dim };
         painter.text(close_rect.center(), egui::Align2::CENTER_CENTER, "×", font, tint);
     }
     if close.clicked() || response.middle_clicked() {
@@ -2580,41 +2791,22 @@ fn tab(ui: &mut egui::Ui, id: u64, name: &str, active: bool, dirty: bool) -> Tab
     }
 }
 
-/// Shift+Cmd+[ and Shift+Cmd+]: whether to go to the next tab or the
-/// previous one. The brackets are also known by their place on the
-/// keyboard, for layouts where these keys type other signs.
-fn tab_step(input: &mut egui::InputState) -> Option<bool> {
-    let mut step = None;
-    input.events.retain(|event| {
-        let egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } = event else { return true };
-        if !(modifiers.command && modifiers.shift) {
-            return true;
-        }
-        let is = |bracket: Key, curly: Key| *key == bracket || *key == curly || *physical_key == Some(bracket);
-        let forward = if is(Key::CloseBracket, Key::CloseCurlyBracket) {
-            true
-        } else if is(Key::OpenBracket, Key::OpenCurlyBracket) {
-            false
-        } else {
-            return true;
-        };
-        step = Some(forward);
-        false
-    });
-    step
-}
-
-/// Gives `viewer` the grid, axes and layer height of `settings`.
-fn apply_view_settings(settings: &Settings, viewer: &mut Viewer) {
+/// Gives `tab` the grid, axes, layer height and model color of
+/// `settings`, and their indent width and find keys.
+fn apply_tab_settings(settings: &Settings, tab: &mut Tab) {
+    let viewer = &mut tab.viewer;
     viewer.show_grid = settings.show_grid;
     viewer.show_axes = settings.show_axes;
     viewer.layer_height = settings.layer_height;
+    viewer.model_color = color_floats(settings.model_color);
+    tab.editor.indent_width = settings.indent_width;
+    tab.editor.find_keys = [Action::FindNext, Action::FindPrevious].map(|a| settings.shortcuts.get(a));
 }
 
 /// A settings section's title and what it is for.
 fn section_heading(ui: &mut egui::Ui, title: &str, about: &str) {
-    ui.label(RichText::new(title).strong().color(theme::TEXT));
-    ui.label(RichText::new(about).color(theme::TEXT_DIM));
+    ui.label(RichText::new(title).strong().color(theme::palette().text));
+    ui.label(RichText::new(about).color(theme::palette().text_dim));
     ui.add_space(8.0);
 }
 
@@ -2630,8 +2822,15 @@ fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) 
             .trailing_fill(true);
         ui.add(slider);
     });
+    ui.horizontal(|ui| {
+        ui.label("Tab indents by");
+        for width in settings::INDENT_WIDTHS {
+            ui.selectable_value(&mut settings.indent_width, width, width.to_string());
+        }
+        ui.label("spaces");
+    });
     ui.add_space(14.0);
-    let shortcut = ctx.format_shortcut(&RENDER);
+    let shortcut = shortcuts::describe(ctx, &settings.shortcuts.get(Action::Render));
     section_heading(
         ui,
         "Rendering",
@@ -2648,10 +2847,163 @@ fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) 
             ui.add(slider);
         });
     });
+}
+
+/// The model's color, the interface's size and what else is kept.
+fn view_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
+    let system = if cfg!(target_os = "macos") { "macOS" } else { "the system" };
+    section_heading(ui, "Appearance", &format!("System follows {system} as it turns light or dark."));
+    ui.horizontal(|ui| {
+        for appearance in Appearance::ALL {
+            ui.selectable_value(&mut settings.appearance, appearance, appearance.name());
+        }
+    });
     ui.add_space(14.0);
-    ui.label(
-        RichText::new("The grid, the axes and the layer height are kept as you leave them.").color(theme::TEXT_DIM),
+    section_heading(ui, "Model color", "The color of the parts without color().");
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (name, color) in MODEL_COLORS {
+            if color_swatch(ui, color, settings.model_color == color).on_hover_text(name).clicked() {
+                settings.model_color = color;
+            }
+        }
+        ui.add_space(4.0);
+        egui::color_picker::color_edit_button_srgb(ui, &mut settings.model_color).on_hover_text("Any color");
+    });
+    ui.add_space(14.0);
+    let keys = format!(
+        "{} and {} change it too; {} sets it back to 100%.",
+        shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomIn)),
+        shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomOut)),
+        shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomReset))
     );
+    section_heading(ui, "Interface size", &keys);
+    ui.horizontal(|ui| {
+        // Eight sizes on one row.
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().button_padding.x = 5.0;
+        let (low, high) = (*settings::INTERFACE_SIZES.start(), *settings::INTERFACE_SIZES.end());
+        for tenths in (low * 10.0).round() as u32..=(high * 10.0).round() as u32 {
+            let size = tenths as f32 / 10.0;
+            let selected = (settings.interface_size - size).abs() < 0.01;
+            if ui.selectable_label(selected, format!("{}%", tenths * 10)).clicked() {
+                settings.interface_size = size;
+            }
+        }
+    });
+    ui.add_space(14.0);
+    let kept = "The grid, the axes, the layer height and the window's size and place are kept as you leave them.";
+    ui.label(RichText::new(kept).color(theme::palette().text_dim));
+}
+
+/// Each action's keys, which a click records anew, with the actions that
+/// share keys; the change asked for.
+fn shortcuts_page(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    shortcuts: &Shortcuts,
+    recording: Option<Action>,
+    problem: Option<&str>,
+) -> Option<ShortcutEdit> {
+    let p = theme::palette();
+    let mut edit = None;
+    section_heading(ui, "Keyboard shortcuts", "Click an action's keys, then press new ones; Escape gives up.");
+    let conflicts = shortcuts.conflicts();
+    let notes = conflicts.len() + usize::from(problem.is_some());
+    let height = SETTINGS_HEIGHT - 92.0 - 22.0 * notes as f32;
+    egui::ScrollArea::vertical().max_height(height.max(80.0)).auto_shrink([false, true]).show(ui, |ui| {
+        for action in Action::ALL {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(action.name()).color(p.text));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Room for the scroll bar.
+                    ui.add_space(10.0);
+                    let default = shortcuts::describe(ctx, &action.default_keys());
+                    let reset = ui.add_enabled(!shortcuts.is_default(action), Button::new("↺").small());
+                    if reset.on_hover_text(format!("Back to {default}")).clicked() {
+                        edit = Some(ShortcutEdit::Reset(action));
+                    }
+                    let sharing = shortcuts.sharing(action);
+                    let listening = recording == Some(action);
+                    let (text, color) = if listening {
+                        ("Type the keys…".to_string(), p.accent_strong)
+                    } else {
+                        let color = if sharing.is_empty() { p.text } else { p.warning };
+                        (shortcuts::describe(ctx, &shortcuts.get(action)), color)
+                    };
+                    let button = Button::new(RichText::new(text).color(color))
+                        .selected(listening)
+                        .min_size(Vec2::new(140.0, 0.0));
+                    let tip = if listening {
+                        "Press the new keys, or Escape to keep these".to_string()
+                    } else if sharing.is_empty() {
+                        "Click, then press new keys".to_string()
+                    } else {
+                        format!("Also the keys of {}", names(&sharing))
+                    };
+                    if ui.add(button).on_hover_text(tip).clicked() {
+                        edit = Some(ShortcutEdit::Record(action));
+                    }
+                });
+            });
+        }
+    });
+    ui.add_space(6.0);
+    if let Some(problem) = problem {
+        ui.label(RichText::new(problem).color(p.warning));
+    }
+    for group in &conflicts {
+        let keys = shortcuts::describe(ctx, &shortcuts.get(group[0]));
+        let note = format!("⚠ {} share {keys}: it does {}.", names(group), group[0].name());
+        ui.label(RichText::new(note).color(p.warning));
+    }
+    ui.add_space(4.0);
+    if ui.add_enabled(shortcuts.customized(), Button::new("Reset All")).clicked() {
+        edit = Some(ShortcutEdit::ResetAll);
+    }
+    edit
+}
+
+/// "Find, Render and Export".
+fn names(actions: &[Action]) -> String {
+    match actions {
+        [] => String::new(),
+        [one] => one.name().to_string(),
+        [rest @ .., last] => {
+            let rest: Vec<&str> = rest.iter().map(|a| a.name()).collect();
+            format!("{} and {}", rest.join(", "), last.name())
+        }
+    }
+}
+
+/// The STL format and where exports go; the change asked for in the folder.
+fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
+    section_heading(ui, "STL files", "3D printers' slicers read both.");
+    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
+    ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
+    ui.add_space(14.0);
+    section_heading(ui, "Export folder", "Where Export… opens.");
+    let mut edit = None;
+    if ui.radio(settings.export_folder.is_none(), "Next to the design").clicked() {
+        edit = Some(ExportFolderEdit::NextToTheDesign);
+    }
+    ui.horizontal(|ui| {
+        let folder = settings.export_folder.as_deref();
+        if ui.radio(folder.is_some(), "In this folder:").clicked() && folder.is_none() {
+            edit = Some(ExportFolderEdit::Choose);
+        }
+        if let Some(folder) = folder {
+            let missing = !folder.is_dir();
+            let color = if missing { theme::palette().warning } else { theme::palette().text };
+            let label = ui.add(egui::Label::new(RichText::new(display_folder(folder)).color(color)).truncate());
+            let note = if missing { " (not found: Export… opens next to the design)" } else { "" };
+            label.on_hover_text(format!("{}{note}", folder.display()));
+        }
+    });
+    if ui.button("Choose Folder…").clicked() {
+        edit = Some(ExportFolderEdit::Choose);
+    }
+    edit
 }
 
 /// The library and font folders; the change asked for in each list.
@@ -2659,14 +3011,14 @@ fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>
     section_heading(
         ui,
         "Library folders",
-        "Searched for include <…> and use <…> before ~/Documents/OpenSCAD/libraries, OPENSCADPATH and the app's own.",
+        "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
     );
     let libraries = folder_list(ui, "libraries", &settings.library_folders);
     ui.add_space(14.0);
     section_heading(
         ui,
         "Font folders",
-        "Searched for text()'s fonts, with their subfolders, before OPENSCAD_FONT_PATH, the app's and the system's.",
+        "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
     );
     let fonts = folder_list(ui, "fonts", &settings.font_folders);
     (libraries, fonts)
@@ -2675,11 +3027,12 @@ fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>
 /// A list of folders, each removable, and a button to add one.
 fn folder_list(ui: &mut egui::Ui, id: &str, folders: &[PathBuf]) -> Option<FolderEdit> {
     let mut edit = None;
-    let frame = Frame::new().fill(theme::EDITOR).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(8));
+    let frame =
+        Frame::new().fill(theme::palette().editor).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(8));
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         if folders.is_empty() {
-            ui.label(RichText::new("None").color(theme::TEXT_FAINT));
+            ui.label(RichText::new("None").color(theme::palette().text_faint));
         }
         for (i, folder) in folders.iter().enumerate() {
             ui.push_id((id, i), |ui| {
@@ -2689,7 +3042,7 @@ fn folder_list(ui: &mut egui::Ui, id: &str, folders: &[PathBuf]) -> Option<Folde
                         if ui.small_button("Remove").clicked() {
                             edit = Some(FolderEdit::Remove(i));
                         }
-                        let color = if missing { theme::WARNING } else { theme::TEXT };
+                        let color = if missing { theme::palette().warning } else { theme::palette().text };
                         let name = RichText::new(display_folder(folder)).color(color);
                         let label = ui.add(egui::Label::new(name).truncate());
                         let note = if missing { " (not found)" } else { "" };
@@ -2746,11 +3099,12 @@ fn icon_choice(ui: &mut egui::Ui, texture: &TextureHandle, tint: Tint, selected:
     let icon = Rect::from_center_size(center, Vec2::splat(ICON_CHOICE));
     let painter = ui.painter();
     if selected || response.hovered() {
-        let (color, width): (Color32, f32) = if selected { (theme::ACCENT, 2.5) } else { (theme::BORDER, 1.5) };
+        let (color, width): (Color32, f32) =
+            if selected { (theme::palette().accent, 2.5) } else { (theme::palette().border, 1.5) };
         painter.rect_stroke(icon.expand(4.0), CornerRadius::same(17), Stroke::new(width, color), StrokeKind::Outside);
     }
     egui::Image::new(texture).paint_at(ui, icon);
-    let color = if selected { theme::TEXT } else { theme::TEXT_DIM };
+    let color = if selected { theme::palette().text } else { theme::palette().text_dim };
     painter.text(
         rect.center_bottom() - Vec2::new(0.0, 2.0),
         egui::Align2::CENTER_BOTTOM,
@@ -2761,16 +3115,42 @@ fn icon_choice(ui: &mut egui::Ui, texture: &TextureHandle, tint: Tint, selected:
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// A model color the settings offer, ringed when picked.
+fn color_swatch(ui: &mut egui::Ui, color: [u8; 3], selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
+    let painter = ui.painter();
+    let [r, g, b] = color;
+    painter.rect_filled(rect.shrink(3.0), CornerRadius::same(5), Color32::from_rgb(r, g, b));
+    if selected || response.hovered() {
+        let (stroke, width): (Color32, f32) =
+            if selected { (theme::palette().accent, 2.0) } else { (theme::palette().border, 1.5) };
+        painter.rect_stroke(rect, CornerRadius::same(7), Stroke::new(width, stroke), StrokeKind::Inside);
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// sRGB bytes as the renderer's floats.
+fn color_floats(color: [u8; 3]) -> [f32; 3] {
+    color.map(|c| f32::from(c) / 255.0)
+}
+
+/// The interface size `steps` tenths up (or down), within the settings'
+/// range, in whole tenths as egui's own zoom keys.
+fn zoom_step(size: f32, steps: i32) -> f32 {
+    let size = ((size * 10.0).round() + steps as f32) / 10.0;
+    size.clamp(*settings::INTERFACE_SIZES.start(), *settings::INTERFACE_SIZES.end())
+}
+
 fn toolbar_separator(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 20.0), Sense::hover());
-    ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme::BORDER));
+    ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme::palette().border));
 }
 
 fn tool_button(ui: &mut egui::Ui, label: &str, help: &str, shortcut: Option<KeyboardShortcut>) -> egui::Response {
     let response = ui.button(label);
     match shortcut {
         Some(shortcut) => {
-            let keys = ui.ctx().format_shortcut(&shortcut);
+            let keys = shortcuts::describe(ui.ctx(), &shortcut);
             response.on_hover_text(format!("{help} ({keys})"))
         }
         None => response.on_hover_text(help),
@@ -2885,6 +3265,15 @@ mod tests {
     }
 
     #[test]
+    fn zoom_keys_step_in_tenths_within_the_range() {
+        assert_eq!(zoom_step(1.0, 1), 1.1);
+        assert_eq!(zoom_step(1.0, -1), 0.9);
+        assert_eq!(zoom_step(1.25, 1), 1.4, "back on a tenth");
+        assert_eq!(zoom_step(1.5, 1), 1.5);
+        assert_eq!(zoom_step(0.8, -1), 0.8);
+    }
+
+    #[test]
     fn formats_durations() {
         assert_eq!(format_duration(Duration::from_millis(42)), "42 ms");
         assert_eq!(format_duration(Duration::from_millis(1500)), "1.50 s");
@@ -2962,6 +3351,81 @@ mod tests {
         app.close_tab(&ctx, 0);
         assert_eq!(open_files(&app), (files(&[""]), 0));
         assert!(app.doc.is_blank());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_tab_takes_the_model_color_and_the_indent_width() {
+        let dir = folder("tab-settings");
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, None, vec![dir.join("a.c2f"), dir.join("b.c2f")]);
+        app.settings.model_color = [255, 0, 0];
+        app.settings.indent_width = 8;
+        app.apply_tab_settings();
+        // And a tab opened afterwards.
+        app.new_tab(&ctx);
+        assert_eq!(app.shelf.len(), 3);
+        for index in 0..3 {
+            let tab = tab(&app, index);
+            assert_eq!(tab.viewer.model_color, [1.0, 0.0, 0.0], "tab {index}");
+            assert_eq!(tab.editor.indent_width, 8, "tab {index}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A frame of the app's shortcuts, with presses of `keys`.
+    fn press(ctx: &egui::Context, app: &mut StudioApp, keys: &[(Modifiers, Key)]) {
+        let mac = cfg!(target_os = "macos");
+        let events = keys
+            .iter()
+            .map(|&(modifiers, key)| {
+                // As winit reports ⌘ on macOS, and Ctrl elsewhere.
+                let modifiers = Modifiers {
+                    mac_cmd: mac && modifiers.command,
+                    ctrl: modifiers.ctrl || (!mac && modifiers.command),
+                    ..modifiers
+                };
+                egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }
+            })
+            .collect();
+        let _ = ctx.run(egui::RawInput { events, ..Default::default() }, |ctx| app.shortcuts(ctx));
+    }
+
+    #[test]
+    fn recorded_keys_do_their_action_in_every_tab() {
+        let dir = folder("shortcuts");
+        let ctx = egui::Context::default();
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        let mut app = studio(&ctx, None, vec![dir.join("a.c2f"), dir.join("b.c2f")]);
+        let next_tab = (Modifiers { shift: true, ..Modifiers::COMMAND }, Key::CloseBracket);
+        press(&ctx, &mut app, &[next_tab]);
+        assert_eq!(app.shelf.active(), 0, "the default keys");
+
+        // Typing keys are refused; Escape gives up; ⌘K is taken.
+        app.recording = Some(Action::NextTab);
+        press(&ctx, &mut app, &[(Modifiers::NONE, Key::K)]);
+        assert!(app.record_problem.is_some());
+        assert_eq!(app.recording, Some(Action::NextTab), "still waiting");
+        press(&ctx, &mut app, &[(Modifiers::NONE, Key::Escape)]);
+        assert_eq!((app.recording, app.record_problem.as_ref()), (None, None));
+        assert!(app.settings.shortcuts.is_default(Action::NextTab));
+        app.recording = Some(Action::NextTab);
+        press(&ctx, &mut app, &[(Modifiers::COMMAND, Key::K)]);
+        assert_eq!(app.recording, None);
+        assert_eq!(app.settings.shortcuts.get(Action::NextTab), KeyboardShortcut::new(Modifiers::COMMAND, Key::K));
+
+        press(&ctx, &mut app, &[next_tab]);
+        assert_eq!(app.shelf.active(), 0, "the old keys do nothing now");
+        press(&ctx, &mut app, &[(Modifiers::COMMAND, Key::K)]);
+        assert_eq!(app.shelf.active(), 1);
+
+        // The find bar's tips show the keys in every tab.
+        let alt_f3 = KeyboardShortcut::new(Modifiers::ALT, Key::F3);
+        app.settings.shortcuts.set(Action::FindNext, alt_f3);
+        app.apply_tab_settings();
+        for index in 0..2 {
+            assert_eq!(tab(&app, index).editor.find_keys[0], alt_f3, "tab {index}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

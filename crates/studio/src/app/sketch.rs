@@ -196,11 +196,11 @@ impl SketchMode {
             Item::Entity(e) => self.report.entity_constrained.get(e.0).copied().unwrap_or(false),
         };
         if conflicting {
-            theme::ERROR
+            theme::palette().error
         } else if pinned {
-            theme::TEXT
+            theme::palette().text
         } else {
-            theme::ACCENT
+            theme::palette().accent
         }
     }
 
@@ -227,16 +227,16 @@ impl SketchMode {
     fn status(&self) -> (String, Color32) {
         if let Some(&c) = self.report.conflicting.first() {
             let what = self.sketch.constraints.get(c.0).map(describe).unwrap_or_default();
-            return (format!("Conflict: {what}"), theme::ERROR);
+            return (format!("Conflict: {what}"), theme::palette().error);
         }
         if self.sketch.entities.is_empty() {
-            return ("Empty sketch".into(), theme::TEXT_DIM);
+            return ("Empty sketch".into(), theme::palette().text_dim);
         }
         match self.report.dof {
-            0 if self.report.converged() => ("Fully constrained".into(), theme::SUCCESS),
-            0 => ("Cannot solve the constraints".into(), theme::ERROR),
-            1 => ("1 degree of freedom left".into(), theme::ACCENT),
-            n => (format!("{n} degrees of freedom left"), theme::ACCENT),
+            0 if self.report.converged() => ("Fully constrained".into(), theme::palette().success),
+            0 => ("Cannot solve the constraints".into(), theme::palette().error),
+            1 => ("1 degree of freedom left".into(), theme::palette().accent),
+            n => (format!("{n} degrees of freedom left"), theme::palette().accent),
         }
     }
 }
@@ -729,7 +729,7 @@ impl StudioApp {
                     let lift = |p: &Point| frame.to_world(*p) + n * *height as f32;
                     let base: Vec<Vec3> = l.points.iter().map(|p| frame.to_world(*p)).collect();
                     let top: Vec<Vec3> = l.points.iter().map(lift).collect();
-                    let color = theme::ACCENT_STRONG;
+                    let color = theme::palette().accent_strong;
                     paint_world_loop(viewer, rect, &painter, &base, Stroke::new(1.5, color));
                     paint_world_loop(viewer, rect, &painter, &top, Stroke::new(1.5, color));
                     let every = (l.points.len() / 24).max(1);
@@ -748,7 +748,7 @@ impl StudioApp {
                 }
                 if let (Some(a), Some(b)) = (base_screen, tip_screen) {
                     let hot = near_handle || *dragging;
-                    let color = if hot { theme::WARNING } else { theme::ACCENT_STRONG };
+                    let color = if hot { theme::palette().warning } else { theme::palette().accent_strong };
                     painter.line_segment([a, b], Stroke::new(2.0, color));
                     painter.circle(b, if hot { 7.0 } else { 6.0 }, color, Stroke::new(1.5, Color32::WHITE));
                     let text = format!("{} mm", number(*height));
@@ -757,7 +757,7 @@ impl StudioApp {
                         Align2::LEFT_BOTTOM,
                         text,
                         FontId::proportional(13.0),
-                        theme::TEXT,
+                        theme::palette().text,
                     );
                     if hot {
                         ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
@@ -789,9 +789,9 @@ impl StudioApp {
 fn panel_ui(ui: &mut egui::Ui, mode: &mut SketchMode) -> Option<Action> {
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Sketch").strong().size(15.0).color(theme::TEXT));
+        ui.label(RichText::new("Sketch").strong().size(15.0).color(theme::palette().text));
         if mode.reopened {
-            ui.label(RichText::new(module_name(&mode.name)).monospace().color(theme::TEXT_DIM));
+            ui.label(RichText::new(module_name(&mode.name)).monospace().color(theme::palette().text_dim));
         }
     });
     if !mode.reopened {
@@ -807,7 +807,7 @@ fn panel_ui(ui: &mut egui::Ui, mode: &mut SketchMode) -> Option<Action> {
         Plane::Yz => "YZ plane",
         Plane::Face { .. } => "a face",
     };
-    ui.label(RichText::new(format!("On {plane}")).color(theme::TEXT_DIM));
+    ui.label(RichText::new(format!("On {plane}")).color(theme::palette().text_dim));
     let (status, color) = mode.status();
     ui.label(RichText::new(status).color(color));
     ui.separator();
@@ -821,7 +821,7 @@ fn panel_ui(ui: &mut egui::Ui, mode: &mut SketchMode) -> Option<Action> {
 
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(title).strong().color(theme::TEXT_DIM));
+    ui.label(RichText::new(title).strong().color(theme::palette().text_dim));
 }
 
 fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Action>) {
@@ -902,7 +902,7 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
         }
     });
     if let Some(hint) = &mode.hint {
-        ui.label(RichText::new(hint).color(theme::WARNING));
+        ui.label(RichText::new(hint).color(theme::palette().warning));
     }
 
     // The dimensions, with their values to change.
@@ -920,7 +920,7 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
                     Some(name) => name,
                     None => short(constraint),
                 };
-                let color = if conflicting { theme::ERROR } else { theme::TEXT };
+                let color = if conflicting { theme::palette().error } else { theme::palette().text };
                 ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(label).color(color)).truncate())
                     .on_hover_text(describe(constraint));
                 let angle = matches!(constraint, Constraint::Angle(..));
@@ -959,7 +959,7 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
                 for i in others {
                     let bad = mode.report.conflicting.iter().chain(&mode.report.unsatisfied).any(|c| c.0 == i);
                     ui.horizontal(|ui| {
-                        let color = if bad { theme::ERROR } else { theme::TEXT_DIM };
+                        let color = if bad { theme::palette().error } else { theme::palette().text_dim };
                         ui.label(RichText::new(describe(&mode.sketch.constraints[i])).color(color));
                         if ui.small_button("🗑").on_hover_text("Remove this constraint").clicked() {
                             removed = Some(i);
@@ -1140,7 +1140,7 @@ fn prompt_ui(ctx: &egui::Context, mode: &mut SketchMode) {
                 ui.end_row();
             });
             if let Some(error) = &prompt.error {
-                ui.label(RichText::new(error).color(theme::ERROR));
+                ui.label(RichText::new(error).color(theme::palette().error));
             }
             ui.horizontal(|ui| {
                 ok = ui.button("OK").clicked();
@@ -1451,7 +1451,7 @@ fn paint_sketch(
         let entity = sketch.entities[e];
         let selected = mode.selection.contains(&item) || axis == Some(id);
         let hovered = mode.hover == Some(item);
-        let color = if selected { theme::WARNING } else { mode.color(item) };
+        let color = if selected { theme::palette().warning } else { mode.color(item) };
         let width = if selected || hovered {
             3.0
         } else if entity.construction {
@@ -1474,9 +1474,9 @@ fn paint_sketch(
         let Some(at) = screen(viewer, rect, frame, *p) else { continue };
         let selected = mode.selection.contains(&item);
         let hovered = mode.hover == Some(item);
-        let color = if selected { theme::WARNING } else { mode.color(item) };
+        let color = if selected { theme::palette().warning } else { mode.color(item) };
         let radius = if selected || hovered { 4.5 } else { 3.0 };
-        painter.circle(at, radius, color, Stroke::new(1.0, theme::BG));
+        painter.circle(at, radius, color, Stroke::new(1.0, theme::palette().bg));
     }
     paint_glyphs(viewer, rect, painter, mode);
 }
@@ -1507,7 +1507,7 @@ fn paint_glyphs(viewer: &crate::viewer::Viewer, rect: Rect, painter: &egui::Pain
             Constraint::Coincident(..) => "•",
             _ => continue,
         };
-        let color = if bad.contains(&i) { theme::ERROR } else { theme::TEXT_DIM };
+        let color = if bad.contains(&i) { theme::palette().error } else { theme::palette().text_dim };
         for item in view::constraint_items(sketch, c) {
             // Point constraints on a point; the others on their entities.
             let point_glyph = matches!(c, Constraint::Fixed(_) | Constraint::Coincident(..));
@@ -1607,10 +1607,10 @@ fn dimension_labels(
             _ => None,
         };
         let Some(at) = anchor else { continue };
-        let galley = painter.layout_no_wrap(text.clone(), FontId::proportional(12.0), theme::TEXT);
+        let galley = painter.layout_no_wrap(text.clone(), FontId::proportional(12.0), theme::palette().text);
         let size = galley.size() + Vec2::new(10.0, 4.0);
         let conflicting = mode.report.conflicting.iter().any(|k| k.0 == i);
-        let color = if conflicting { theme::ERROR } else { theme::TEXT };
+        let color = if conflicting { theme::palette().error } else { theme::palette().text };
         labels.push(Label { constraint: i, text, rect: Rect::from_center_size(at, size), color });
     }
     labels
@@ -1634,7 +1634,7 @@ fn paint_preview(
     frame: &PlaneFrame,
     preview: Preview,
 ) {
-    let stroke = Stroke::new(1.5, theme::ACCENT_STRONG.gamma_multiply(0.8));
+    let stroke = Stroke::new(1.5, theme::palette().accent_strong.gamma_multiply(0.8));
     let points = match preview {
         Preview::Line(a, b) => {
             if let Some(axis) = view::auto_axis(a, b) {
@@ -1645,7 +1645,7 @@ fn paint_preview(
                         Align2::LEFT_BOTTOM,
                         glyph,
                         FontId::proportional(11.0),
-                        theme::TEXT_DIM,
+                        theme::palette().text_dim,
                     );
                 }
             }
@@ -1661,7 +1661,7 @@ fn paint_preview(
 /// triangle on a midpoint, a cross on the origin.
 fn paint_pick(viewer: &crate::viewer::Viewer, rect: Rect, painter: &egui::Painter, frame: &PlaneFrame, pick: &Pick) {
     let Some(at) = screen(viewer, rect, frame, pick.at) else { return };
-    let stroke = Stroke::new(1.5, theme::WARNING);
+    let stroke = Stroke::new(1.5, theme::palette().warning);
     match pick.snap {
         Some(Target::Sketch(snap)) => match snap.kind {
             SnapKind::Endpoint => {
@@ -1685,14 +1685,14 @@ fn paint_pick(viewer: &crate::viewer::Viewer, rect: Rect, painter: &egui::Painte
             painter.line_segment([at + Vec2::new(-6.0, 6.0), at + Vec2::new(6.0, -6.0)], stroke);
         }
         None => {
-            painter.circle_filled(at, 2.0, theme::ACCENT_STRONG);
+            painter.circle_filled(at, 2.0, theme::palette().accent_strong);
         }
     }
 }
 
 /// A line of help at the bottom of the view.
 fn hint_bar(painter: &egui::Painter, rect: Rect, text: &str) {
-    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), theme::TEXT);
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), theme::palette().text);
     let size = galley.size() + Vec2::new(20.0, 8.0);
     let card = Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 22.0), size);
     painter.rect(
@@ -1702,7 +1702,7 @@ fn hint_bar(painter: &egui::Painter, rect: Rect, text: &str) {
         Stroke::new(1.0, Color32::from_white_alpha(28)),
         StrokeKind::Inside,
     );
-    painter.galley(card.min + Vec2::new(10.0, 4.0), galley, theme::TEXT);
+    painter.galley(card.min + Vec2::new(10.0, 4.0), galley, theme::palette().text);
 }
 
 // ---- words ----

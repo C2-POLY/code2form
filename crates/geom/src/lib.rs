@@ -14,7 +14,7 @@ mod offset;
 mod primitives;
 mod text;
 
-pub use build::{Model, render, render_in};
+pub use build::{DEFAULT_COLOR, Model, render, render_in};
 pub use collide::{Placement, TOUCHING, collisions};
 pub use image::VIEWS;
 pub use mesh::{Rendered, RenderMesh, Stats};

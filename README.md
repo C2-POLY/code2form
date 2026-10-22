@@ -15,8 +15,9 @@ they are. Written in Rust, it renders as you type.
 - **Settings** (⌘,): the app icon in ten tints (graphite by default,
   shown in the Dock and the Finder), the code's size, whether to render
   as you type and after what pause, and folders searched for libraries
-  and for `text()`'s fonts before the default ones. The grid, the axes
-  and the layer height are kept as left.
+  and for `text()`'s fonts before the default ones, a light or a dark
+  theme (or the system's, as it changes), and the keys of each shortcut.
+  The grid, the axes and the layer height are kept as left.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text
   fields, grouped by `/* [Group] */`; presets are saved next to the design

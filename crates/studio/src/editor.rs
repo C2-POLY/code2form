@@ -6,18 +6,21 @@ use std::sync::Arc;
 
 use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, CornerRadius, FontId, Frame, Galley, Id, Key, Layout, Margin, Modifiers, Pos2,
-    Rect, RichText, Shape, Stroke, TextBuffer, TextEdit, Vec2,
+    self, Align, Align2, Button, CornerRadius, FontId, Frame, Galley, Id, Key, KeyboardShortcut, Layout, Margin,
+    Modifiers, Pos2, Rect, RichText, Shape, Stroke, TextBuffer, TextEdit, Vec2,
 };
 
 use crate::find;
 use crate::highlight::Highlighter;
+use crate::shortcuts::{self, Action};
 use crate::theme;
-
-const INDENT: usize = 4;
 
 pub struct Editor {
     id: Id,
+    /// The spaces Tab indents by.
+    pub indent_width: usize,
+    /// The keys of Find Next and Find Previous, for the find bar's tips.
+    pub find_keys: [KeyboardShortcut; 2],
     highlighter: Highlighter,
     /// A line (0-based) to flag in the gutter, such as a syntax error.
     pub error_line: Option<usize>,
@@ -115,6 +118,8 @@ impl Editor {
     pub fn for_tab(tab: u64) -> Self {
         Editor {
             id: Id::new(("c2f-editor", tab)),
+            indent_width: 4,
+            find_keys: [Action::FindNext.default_keys(), Action::FindPrevious.default_keys()],
             highlighter: Highlighter::default(),
             error_line: None,
             cursor: None,
@@ -187,7 +192,13 @@ impl Editor {
                     if find_bar.open {
                         find_bar.refresh(buffer.as_str());
                         let (matches, current) = (&find_bar.matches, find_bar.current);
-                        find::mark(&mut job, matches, current, theme::FIND_MATCH, theme::FIND_CURRENT);
+                        find::mark(
+                            &mut job,
+                            matches,
+                            current,
+                            theme::palette().find_match,
+                            theme::palette().find_current,
+                        );
                     }
                     ui.fonts(|f| f.layout_job(job))
                 };
@@ -207,7 +218,7 @@ impl Editor {
                 let cursor_range = output.cursor_range;
                 if let (Some(direction), Some(range)) = (indent, cursor_range) {
                     let length = text.len();
-                    let new_range = apply_indent(text, range, direction);
+                    let new_range = apply_indent(text, range, direction, self.indent_width);
                     output.state.cursor.set_char_range(Some(new_range));
                     output.state.store(ui.ctx(), self.id);
                     changed |= text.len() != length;
@@ -296,7 +307,7 @@ impl Editor {
             ctx.memory_mut(|m| m.request_focus(query_id));
         }
 
-        let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(10, 6));
+        let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin::symmetric(10, 6));
         let bar = frame.show(ui, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
             // The buttons and the count are laid out first, from the right;
@@ -310,11 +321,13 @@ impl Editor {
                     actions.push(FindAction::Close);
                 }
                 let any = !self.find.matches.is_empty() && !self.find.query.is_empty();
-                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text("Next match (⌘G)");
+                let [next_keys, previous_keys] = self.find_keys.map(|k| shortcuts::describe(ui.ctx(), &k));
+                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text(format!("Next match ({next_keys})"));
                 if next.clicked() {
                     actions.push(FindAction::Step { forward: true });
                 }
-                let previous = ui.add_enabled(any, small_button("⏶")).on_hover_text("Previous match (⇧⌘G)");
+                let tip = format!("Previous match ({previous_keys})");
+                let previous = ui.add_enabled(any, small_button("⏶")).on_hover_text(tip);
                 if previous.clicked() {
                     actions.push(FindAction::Step { forward: false });
                 }
@@ -324,7 +337,7 @@ impl Editor {
                     self.find.refresh(text);
                     find::count_label(self.find.matches.len(), self.find.current)
                 };
-                let color = if self.find.matches.is_empty() { theme::ERROR } else { theme::TEXT_DIM };
+                let color = if self.find.matches.is_empty() { theme::palette().error } else { theme::palette().text_dim };
                 ui.add_sized([68.0, 20.0], egui::Label::new(RichText::new(count).size(12.0).color(color)));
                 ui.add_space(4.0);
                 let case = ui.toggle_value(&mut self.find.case_sensitive, RichText::new("Aa").size(12.5));
@@ -356,7 +369,7 @@ impl Editor {
             searched
         });
         let rect = bar.response.rect;
-        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::BORDER));
+        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::palette().border));
         if bar.inner {
             // Search as you type, from where the bar was opened.
             self.find.refresh(text);
@@ -509,7 +522,7 @@ impl Editor {
         font: &FontId,
     ) -> Vec<Shape> {
         let clip = ui.clip_rect();
-        let mut shapes = vec![Shape::rect_filled(gutter, CornerRadius::ZERO, theme::GUTTER)];
+        let mut shapes = vec![Shape::rect_filled(gutter, CornerRadius::ZERO, theme::palette().gutter)];
         let mut numbers = Vec::new();
         let mut line = 0;
         let mut starts_line = true;
@@ -519,23 +532,27 @@ impl Editor {
             if visible {
                 let band = Rect::from_x_y_ranges(gutter.left()..=text_rect.right(), rect.y_range());
                 if current_line == Some(line) {
-                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, theme::CURRENT_LINE));
+                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, theme::palette().current_line));
                 }
                 if self.error_line == Some(line) {
-                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, theme::ERROR.gamma_multiply(0.12)));
+                    shapes.push(Shape::rect_filled(
+                        band,
+                        CornerRadius::ZERO,
+                        theme::palette().error.gamma_multiply(0.12),
+                    ));
                     if starts_line {
                         let mark =
                             Rect::from_min_size(Pos2::new(gutter.left(), rect.top()), Vec2::new(3.0, rect.height()));
-                        shapes.push(Shape::rect_filled(mark, CornerRadius::ZERO, theme::ERROR));
+                        shapes.push(Shape::rect_filled(mark, CornerRadius::ZERO, theme::palette().error));
                     }
                 }
                 if starts_line {
                     let color = if self.error_line == Some(line) {
-                        theme::ERROR
+                        theme::palette().error
                     } else if current_line == Some(line) {
-                        theme::TEXT
+                        theme::palette().text
                     } else {
-                        theme::TEXT_FAINT
+                        theme::palette().text_faint
                     };
                     numbers.push((Pos2::new(gutter.right() - 12.0, rect.top()), line + 1, color));
                 }
@@ -554,7 +571,7 @@ impl Editor {
         });
         shapes.push(Shape::line_segment(
             [gutter.right_top() - Vec2::new(0.5, 0.0), gutter.right_bottom() - Vec2::new(0.5, 0.0)],
-            egui::Stroke::new(1.0, Color32::from_white_alpha(10)),
+            egui::Stroke::new(1.0, theme::palette().line(10)),
         ));
         shapes
     }
@@ -605,9 +622,11 @@ fn small_button(label: &str) -> Button<'_> {
     Button::new(RichText::new(label).size(12.0)).min_size(Vec2::new(24.0, 22.0)).frame(false)
 }
 
-/// Indents (or unindents) the selected lines, or inserts spaces up to the
-/// next tab stop at the cursor, and returns the new selection.
-fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent) -> CCursorRange {
+/// Indents (or unindents) the selected lines by `width` spaces, or inserts
+/// spaces up to the next tab stop at the cursor, and returns the new
+/// selection.
+fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent, width: usize) -> CCursorRange {
+    let width = width.max(1);
     let [first, last] = range.sorted_cursors();
     let (start, end) = (first.index, last.index);
     let start_byte = byte_index(text, start);
@@ -616,7 +635,7 @@ fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent) -> CC
 
     if start == end && direction == Indent::In {
         let column = text[first_line..start_byte].chars().count();
-        let spaces = INDENT - column % INDENT;
+        let spaces = width - column % width;
         text.insert_str(start_byte, &" ".repeat(spaces));
         return CCursorRange::one(CCursor::new(start + spaces));
     }
@@ -632,15 +651,15 @@ fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent) -> CC
     for &line_start in line_starts.iter().rev() {
         match direction {
             Indent::In => {
-                text.insert_str(line_start, &" ".repeat(INDENT));
-                deltas.push(INDENT as isize);
+                text.insert_str(line_start, &" ".repeat(width));
+                deltas.push(width as isize);
             }
             Indent::Out => {
                 let rest = &text.as_bytes()[line_start..];
                 let n = if rest.first() == Some(&b'\t') {
                     1
                 } else {
-                    rest.iter().take(INDENT).take_while(|&&b| b == b' ').count()
+                    rest.iter().take(width).take_while(|&&b| b == b' ').count()
                 };
                 text.replace_range(line_start..line_start + n, "");
                 deltas.push(-(n as isize));
@@ -679,9 +698,13 @@ mod tests {
     use super::*;
 
     fn run(text: &str, a: usize, b: usize, direction: Indent) -> (String, usize, usize) {
+        run_with(4, text, a, b, direction)
+    }
+
+    fn run_with(width: usize, text: &str, a: usize, b: usize, direction: Indent) -> (String, usize, usize) {
         let mut text = text.to_string();
         let range = CCursorRange::two(CCursor::new(a), CCursor::new(b));
-        let out = apply_indent(&mut text, range, direction);
+        let out = apply_indent(&mut text, range, direction, width);
         let [s, e] = out.sorted_cursors();
         (text, s.index, e.index)
     }
@@ -690,6 +713,16 @@ mod tests {
     fn tab_inserts_spaces_to_the_next_stop() {
         assert_eq!(run("ab", 2, 2, Indent::In), ("ab  ".into(), 4, 4));
         assert_eq!(run("x\ncube();", 2, 2, Indent::In), ("x\n    cube();".into(), 6, 6));
+    }
+
+    #[test]
+    fn other_widths_indent_by_their_own_stops() {
+        assert_eq!(run_with(2, "abc", 3, 3, Indent::In), ("abc ".into(), 4, 4));
+        assert_eq!(run_with(8, "ab", 2, 2, Indent::In), ("ab      ".into(), 8, 8));
+        assert_eq!(run_with(2, "a\nb", 0, 3, Indent::In), ("  a\n  b".into(), 2, 7));
+        // Unindents by at most a width, whatever indents the line.
+        assert_eq!(run_with(2, "     x", 6, 6, Indent::Out), ("   x".into(), 4, 4));
+        assert_eq!(run_with(8, "     x\n\ty", 0, 9, Indent::Out), ("x\ny".into(), 0, 3));
     }
 
     #[test]
@@ -784,7 +817,7 @@ mod tests {
             };
             let _ = ctx.run(input, |ctx| {
                 let panel = egui::SidePanel::left("editor")
-                    .frame(Frame::new().fill(theme::EDITOR))
+                    .frame(Frame::new().fill(theme::palette().editor))
                     .resizable(true)
                     .default_width(320.0)
                     .width_range(260.0..=900.0)

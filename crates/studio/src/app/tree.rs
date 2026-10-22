@@ -22,7 +22,7 @@ use eframe::egui::{
     TextEdit, Vec2,
 };
 
-use super::{CODE, StudioApp};
+use super::StudioApp;
 use crate::code_edit::{self, Modifier, NodeKind, Target, TreeNode};
 use crate::theme;
 
@@ -212,7 +212,7 @@ impl TreeState {
             );
             let target = Target::After(end.range.clone());
             if live && below.contains(p) && valid_drop(&nodes, &d.range, &target) {
-                ui.painter().hline(last.x_range(), last.bottom(), Stroke::new(2.0, theme::ACCENT));
+                ui.painter().hline(last.x_range(), last.bottom(), Stroke::new(2.0, theme::palette().accent));
                 if released {
                     egui::DragAndDrop::clear_payload(ui.ctx());
                     action = Some(Action::Move { range: d.range.clone(), target });
@@ -227,7 +227,7 @@ impl TreeState {
                 egui::Align2::LEFT_CENTER,
                 &d.name,
                 FontId::proportional(12.5),
-                theme::TEXT,
+                theme::palette().text,
             );
         }
         self.nodes = nodes;
@@ -250,37 +250,37 @@ impl TreeState {
     ) -> Option<Action> {
         let painter = ui.painter_at(rect);
         let fill = if selected {
-            theme::ACCENT_MUTED
+            theme::palette().accent_muted
         } else if live && response.hovered() {
-            theme::HOVER
+            theme::palette().hover
         } else if self.focus.as_ref() == Some(&node.range) {
-            theme::RAISED
+            theme::palette().raised
         } else {
             Color32::TRANSPARENT
         };
         painter.rect_filled(rect, CornerRadius::same(4), fill);
         match drop {
             Some(Target::Before(_)) => {
-                painter.hline(rect.x_range(), rect.top() + 1.0, Stroke::new(2.0, theme::ACCENT));
+                painter.hline(rect.x_range(), rect.top() + 1.0, Stroke::new(2.0, theme::palette().accent));
             }
             Some(Target::After(_)) => {
-                painter.hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(2.0, theme::ACCENT));
+                painter.hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(2.0, theme::palette().accent));
             }
             Some(Target::IntoBlock(_)) => {
-                let stroke = Stroke::new(1.5, theme::ACCENT);
+                let stroke = Stroke::new(1.5, theme::palette().accent);
                 painter.rect_stroke(rect.shrink(1.0), CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
             }
             None => {}
         }
         let dim = !live || hidden;
-        let text_color = if dim { theme::TEXT_FAINT } else { theme::TEXT };
+        let text_color = if dim { theme::palette().text_faint } else { theme::palette().text };
         let mut action = None;
 
         let left = rect.left() + 4.0 + depth as f32 * INDENT;
         if !node.children.is_empty() {
             let arrow = Rect::from_center_size(Pos2::new(left + 6.0, rect.center().y), Vec2::splat(14.0));
             let folded = self.collapsed.contains(path);
-            paint_arrow(&painter, arrow.center(), folded, theme::TEXT_DIM);
+            paint_arrow(&painter, arrow.center(), folded, theme::palette().text_dim);
             if ui.interact(arrow, response.id.with("fold"), Sense::click()).clicked() {
                 if folded {
                     self.collapsed.remove(path);
@@ -290,7 +290,7 @@ impl TreeState {
             }
         }
         let icon = Rect::from_center_size(Pos2::new(left + 21.0, rect.center().y), Vec2::splat(12.0));
-        paint_icon(&painter, icon, node.kind, if dim { theme::TEXT_FAINT } else { kind_color(node.kind) });
+        paint_icon(&painter, icon, node.kind, if dim { theme::palette().text_faint } else { kind_color(node.kind) });
 
         // The toggles, from the right end, each always in its place.
         let mut right = rect.right() - 4.0;
@@ -317,13 +317,13 @@ impl TreeState {
             let toggle = ui.interact(area, response.id.with(modifier.symbol()), Sense::click());
             let toggle = if live { toggle.on_hover_text(hint) } else { toggle };
             if live && toggle.hovered() {
-                painter.rect_filled(area, CornerRadius::same(3), theme::BORDER_STRONG);
+                painter.rect_filled(area, CornerRadius::same(3), theme::palette().border_strong);
             }
             let color = match (modifier, on) {
-                (Modifier::Disable, true) => theme::TEXT_FAINT,
-                (Modifier::Disable, false) => theme::TEXT_DIM,
-                (_, true) => theme::WARNING,
-                (_, false) => theme::TEXT_FAINT,
+                (Modifier::Disable, true) => theme::palette().text_faint,
+                (Modifier::Disable, false) => theme::palette().text_dim,
+                (_, true) => theme::palette().warning,
+                (_, false) => theme::palette().text_faint,
             };
             if modifier == Modifier::Disable {
                 paint_eye(&painter, area.center(), !on, color);
@@ -360,7 +360,7 @@ impl TreeState {
             let font = FontId::proportional(13.0);
             job.append(&node.name, 0.0, egui::TextFormat::simple(font.clone(), text_color));
             if node.label.is_some() {
-                let call = egui::TextFormat::simple(FontId::proportional(11.5), theme::TEXT_FAINT);
+                let call = egui::TextFormat::simple(FontId::proportional(11.5), theme::palette().text_faint);
                 job.append(&node.call, 6.0, call);
             }
             job.wrap = egui::text::TextWrapping::truncate_at_width(name_rect.width().max(0.0));
@@ -383,7 +383,7 @@ impl StudioApp {
         // Only while the view shows this code, which its selection's bytes
         // point into.
         let selected = self.selected_ranges().unwrap_or_default();
-        let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin { left: 6, right: 6, top: 8, bottom: 6 });
+        let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 6, right: 6, top: 8, bottom: 6 });
         let mut action = None;
         egui::SidePanel::left("tree")
             .frame(frame)
@@ -393,7 +393,7 @@ impl StudioApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Tree").strong().size(12.5).color(theme::TEXT));
+                    ui.label(RichText::new("Tree").strong().size(12.5).color(theme::palette().text));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let close = ui.add(egui::Button::new(RichText::new("×").size(14.0)).frame(false));
                         if close.on_hover_text("Hide the tree").clicked() {
@@ -403,11 +403,11 @@ impl StudioApp {
                 });
                 if let Some(why) = &self.tree.error {
                     let note = format!("The code does not read: the tree is as it last was.\n{why}");
-                    ui.label(RichText::new(note).size(11.5).color(theme::WARNING));
+                    ui.label(RichText::new(note).size(11.5).color(theme::palette().warning));
                 }
                 ui.add_space(4.0);
                 if self.tree.nodes.is_empty() && !self.tree.stale() {
-                    ui.label(RichText::new("No objects yet").size(12.0).color(theme::TEXT_FAINT));
+                    ui.label(RichText::new("No objects yet").size(12.0).color(theme::palette().text_faint));
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
@@ -462,7 +462,7 @@ impl StudioApp {
     /// out right to left.
     pub(super) fn tree_toggles(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let label = if self.settings.show_code { "Code" } else { "No code" };
-        let keys = ctx.format_shortcut(&CODE);
+        let keys = ctx.format_shortcut(&self.settings.shortcuts.get(crate::shortcuts::Action::ToggleCode));
         let hint = format!("Show or hide the code: without it, model with the view, the tree and the panels ({keys})");
         if ui.add(egui::Button::selectable(self.settings.show_code, label)).on_hover_text(hint).clicked() {
             self.toggle_code(ctx);
@@ -558,12 +558,12 @@ fn valid_drop(nodes: &[TreeNode], dragged: &Range<usize>, target: &Target) -> bo
 
 fn kind_color(kind: NodeKind) -> Color32 {
     match kind {
-        NodeKind::Boolean => theme::CODE_KEYWORD,
-        NodeKind::Transform => theme::CODE_FUNCTION,
-        NodeKind::Primitive => theme::CODE_MODULE,
-        NodeKind::Module => theme::CODE_DEFINITION,
-        NodeKind::Control => theme::CODE_NUMBER,
-        NodeKind::Other => theme::TEXT_DIM,
+        NodeKind::Boolean => theme::palette().code_keyword,
+        NodeKind::Transform => theme::palette().code_function,
+        NodeKind::Primitive => theme::palette().code_module,
+        NodeKind::Module => theme::palette().code_definition,
+        NodeKind::Control => theme::palette().code_number,
+        NodeKind::Other => theme::palette().text_dim,
     }
 }
 

@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::app_icon::Tint;
+use crate::shortcuts::Shortcuts;
+use crate::theme::Appearance;
 
 /// The range and default of the code's size, in points.
 pub const CODE_SIZES: std::ops::RangeInclusive<f32> = 10.0..=24.0;
@@ -16,6 +18,17 @@ const RENDER_DELAY: u32 = 400;
 /// The range and default of the layer view's layer height, in mm.
 pub const LAYER_HEIGHTS: std::ops::RangeInclusive<f32> = 0.05..=1.0;
 const LAYER_HEIGHT: f32 = 0.2;
+/// The range of the interface's size, as a zoom factor (1 is 100 %).
+pub const INTERFACE_SIZES: std::ops::RangeInclusive<f32> = 0.8..=1.5;
+/// The indent widths the editor offers, in spaces, and the default.
+pub const INDENT_WIDTHS: [usize; 3] = [2, 4, 8];
+const INDENT_WIDTH: usize = 4;
+/// The color of the parts without `color()`, as sRGB bytes: the
+/// reference's yellow (`c2f_geom::DEFAULT_COLOR`).
+pub const MODEL_COLOR: [u8; 3] = [249, 215, 44];
+/// The window's smallest and largest content size, in points.
+pub const MIN_WINDOW: [f32; 2] = [760.0, 480.0];
+const MAX_WINDOW: f32 = 100_000.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -39,6 +52,45 @@ pub struct Settings {
     pub show_code: bool,
     /// The tree of the program shows, between the editor and the view.
     pub show_tree: bool,
+    /// STL exports are binary rather than ASCII.
+    pub binary_stl: bool,
+    /// The folder Export… opens in; `None` for the design's own folder.
+    pub export_folder: Option<PathBuf>,
+    /// The color of the parts without `color()`.
+    pub model_color: [u8; 3],
+    /// The interface's zoom factor, which ⌘+ and ⌘− change too.
+    pub interface_size: f32,
+    /// The spaces Tab indents by.
+    pub indent_width: usize,
+    /// The window as last left; `None` the first time.
+    pub window: Option<Placement>,
+    pub window_maximized: bool,
+    /// Light, dark, or as the system.
+    pub appearance: Appearance,
+    /// Each action's keys.
+    pub shortcuts: Shortcuts,
+}
+
+/// Where the window is, in the screen's points: the top left corner of its
+/// frame, where winit places a window, and the size of its content.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+}
+
+impl Placement {
+    /// From `x y width height`; the size is kept within bounds.
+    fn parse(value: &str) -> Option<Self> {
+        let numbers: Vec<f32> = value.split_whitespace().map(finite).collect::<Option<_>>()?;
+        let &[x, y, width, height] = numbers.as_slice() else { return None };
+        // Beyond any screen: the value is broken, not just off screen.
+        if x.abs() > MAX_WINDOW || y.abs() > MAX_WINDOW {
+            return None;
+        }
+        let size = [clamp(width, &(MIN_WINDOW[0]..=MAX_WINDOW)), clamp(height, &(MIN_WINDOW[1]..=MAX_WINDOW))];
+        Some(Placement { position: [x, y], size })
+    }
 }
 
 impl Default for Settings {
@@ -55,6 +107,15 @@ impl Default for Settings {
             layer_height: LAYER_HEIGHT,
             show_code: true,
             show_tree: true,
+            binary_stl: false,
+            export_folder: None,
+            model_color: MODEL_COLOR,
+            interface_size: 1.0,
+            indent_width: INDENT_WIDTH,
+            window: None,
+            window_maximized: false,
+            appearance: Appearance::default(),
+            shortcuts: Shortcuts::default(),
         }
     }
 }
@@ -101,7 +162,23 @@ impl Settings {
                 "code" => set(&mut settings.show_code, value.parse().ok()),
                 "tree" => set(&mut settings.show_tree, value.parse().ok()),
                 "layer-height" => set(&mut settings.layer_height, finite(value).map(|v| clamp(v, &LAYER_HEIGHTS))),
-                _ => {}
+                "stl" => {
+                    set(&mut settings.binary_stl, ["ascii", "binary"].iter().position(|&f| f == value).map(|i| i == 1))
+                }
+                "export-folder" => set(&mut settings.export_folder, absolute_folder(value).map(Some)),
+                "model-color" => set(&mut settings.model_color, hex_color(value)),
+                "interface-size" => {
+                    set(&mut settings.interface_size, finite(value).map(|v| clamp(v, &INTERFACE_SIZES)))
+                }
+                "indent" => set(&mut settings.indent_width, value.parse().ok().filter(|w| INDENT_WIDTHS.contains(w))),
+                "window" => set(&mut settings.window, Placement::parse(value).map(Some)),
+                "window-maximized" => set(&mut settings.window_maximized, value.parse().ok()),
+                "appearance" => set(&mut settings.appearance, Appearance::from_id(value)),
+                key => {
+                    if let Some(action) = key.strip_prefix("shortcut-") {
+                        settings.shortcuts.read(action, value);
+                    }
+                }
             }
         }
         settings
@@ -122,6 +199,21 @@ impl Settings {
         text.push_str(&format!("layer-height = {}\n", self.layer_height));
         text.push_str(&format!("code = {}\n", self.show_code));
         text.push_str(&format!("tree = {}\n", self.show_tree));
+        text.push_str(&format!("stl = {}\n", if self.binary_stl { "binary" } else { "ascii" }));
+        let export_folder = self.export_folder.as_deref().and_then(Path::to_str);
+        if let Some(folder) = export_folder.filter(|f| !f.contains(['\n', '\r'])) {
+            text.push_str(&format!("export-folder = {folder}\n"));
+        }
+        let [r, g, b] = self.model_color;
+        text.push_str(&format!("model-color = #{r:02x}{g:02x}{b:02x}\n"));
+        text.push_str(&format!("interface-size = {}\n", self.interface_size));
+        text.push_str(&format!("indent = {}\n", self.indent_width));
+        if let Some(Placement { position: [x, y], size: [width, height] }) = self.window {
+            text.push_str(&format!("window = {x} {y} {width} {height}\n"));
+        }
+        text.push_str(&format!("window-maximized = {}\n", self.window_maximized));
+        text.push_str(&format!("appearance = {}\n", self.appearance.id()));
+        self.shortcuts.write(&mut text);
         text
     }
 }
@@ -157,15 +249,34 @@ fn clamp<T: PartialOrd + Copy>(value: T, range: &std::ops::RangeInclusive<T>) ->
 
 /// Adds an absolute folder once.
 fn push_folder(folders: &mut Vec<PathBuf>, value: &str) {
-    let folder = PathBuf::from(value);
-    if folder.is_absolute() && !folders.contains(&folder) {
-        folders.push(folder);
+    if let Some(folder) = absolute_folder(value) {
+        if !folders.contains(&folder) {
+            folders.push(folder);
+        }
     }
+}
+
+fn absolute_folder(value: &str) -> Option<PathBuf> {
+    Some(PathBuf::from(value)).filter(|folder| folder.is_absolute())
+}
+
+/// `#rrggbb` as bytes.
+fn hex_color(value: &str) -> Option<[u8; 3]> {
+    let hex = value.strip_prefix('#')?;
+    // `from_str_radix` would take a sign.
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
 #[cfg(test)]
 mod tests {
+    use eframe::egui::{Key, KeyboardShortcut, Modifiers};
+
     use super::*;
+    use crate::shortcuts::Action;
 
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("code2form-settings-{name}-{}", std::process::id()))
@@ -178,6 +289,10 @@ mod tests {
 
     #[test]
     fn survive_a_save_and_load() {
+        let mut shortcuts = Shortcuts::default();
+        let ctrl_r = KeyboardShortcut::new(Modifiers { ctrl: true, alt: true, ..Modifiers::NONE }, Key::R);
+        shortcuts.set(Action::Render, ctrl_r);
+        shortcuts.set(Action::ZoomIn, KeyboardShortcut::new(Modifiers::NONE, Key::F12));
         let dir = temp("round-trip");
         let store = dir.join("settings").join("settings.txt");
         assert_eq!(Settings::load(Some(&store)), Settings::default(), "no file yet");
@@ -193,6 +308,15 @@ mod tests {
             layer_height: 0.12,
             show_code: false,
             show_tree: false,
+            binary_stl: true,
+            export_folder: Some(absolute("exports")),
+            model_color: [0x12, 0xab, 0xef],
+            interface_size: 1.2,
+            indent_width: 2,
+            window: Some(Placement { position: [-1200.5, 40.0], size: [1440.0, 900.0] }),
+            window_maximized: true,
+            appearance: Appearance::Light,
+            shortcuts,
         };
         settings.save(Some(&store)).unwrap();
         assert_eq!(Settings::load(Some(&store)), settings);
@@ -214,6 +338,46 @@ mod tests {
         assert_eq!(settings.layer_height, LAYER_HEIGHT);
         assert_eq!(settings.library_folders, [a]);
         assert!(settings.show_grid);
+    }
+
+    #[test]
+    fn check_the_export_view_and_window_settings() {
+        let text = "stl = BINARY\nexport-folder = relative/folder\nmodel-color = #+f+f+f\ninterface-size = 3\n\
+                    indent = 3\nwindow = 10 20 30\nwindow-maximized = 1\n";
+        let settings = Settings::parse(text);
+        assert_eq!(settings, Settings { interface_size: 1.5, ..Settings::default() }, "only the size, clamped");
+
+        let text = "stl = binary\nmodel-color = #FF8000\ninterface-size = 0.1\nindent = 8\nwindow = 10 -20 300 9e9\n";
+        let settings = Settings::parse(text);
+        assert!(settings.binary_stl);
+        assert_eq!(settings.model_color, [255, 128, 0]);
+        assert_eq!(settings.interface_size, 0.8, "clamped");
+        assert_eq!(settings.indent_width, 8);
+        let window = Placement { position: [10.0, -20.0], size: [MIN_WINDOW[0], MAX_WINDOW] };
+        assert_eq!(settings.window, Some(window), "sizes clamped");
+
+        for broken in ["window = 1e9 0 800 600", "window = 0 0 800 NaN", "window = 0 0 800 600 1"] {
+            assert_eq!(Settings::parse(broken).window, None, "{broken}");
+        }
+    }
+
+    #[test]
+    fn check_the_appearance_and_the_shortcuts() {
+        let text = "appearance = sepia\nshortcut-render = F6\nshortcut-save = K\nshortcut-fly = Cmd+Y\n\
+                    shortcut-find = Cmd+Hyper\n";
+        let settings = Settings::parse(text);
+        assert_eq!(settings.appearance, Appearance::System, "the default");
+        let mut shortcuts = Shortcuts::default();
+        shortcuts.set(Action::Render, KeyboardShortcut::new(Modifiers::NONE, Key::F6));
+        assert_eq!(settings.shortcuts, shortcuts, "only F6: K alone types text");
+        assert_eq!(Settings::parse("appearance = dark\n").appearance, Appearance::Dark);
+        assert!(!Settings::default().format().contains("shortcut-"), "the default keys are not written");
+    }
+
+    #[test]
+    fn the_model_color_is_the_renderers_yellow() {
+        let bytes = c2f_geom::DEFAULT_COLOR.map(|c| (c * 255.0).round() as u8);
+        assert_eq!(MODEL_COLOR, bytes[..3]);
     }
 
     #[test]

@@ -242,22 +242,23 @@ fn push(out: &mut Vec<(Range<usize>, Kind)>, range: Range<usize>, kind: Kind) {
 }
 
 pub fn color(kind: Kind) -> Color32 {
+    let p = theme::palette();
     match kind {
-        Kind::Plain => theme::CODE_TEXT,
-        Kind::Keyword => theme::CODE_KEYWORD,
-        Kind::Module => theme::CODE_MODULE,
-        Kind::Function => theme::CODE_FUNCTION,
-        Kind::Number => theme::CODE_NUMBER,
-        Kind::Str => theme::CODE_STRING,
-        Kind::Comment => theme::CODE_COMMENT,
-        Kind::Special => theme::CODE_SPECIAL,
-        Kind::Operator => theme::CODE_OPERATOR,
-        Kind::Definition => theme::CODE_DEFINITION,
+        Kind::Plain => p.code_text,
+        Kind::Keyword => p.code_keyword,
+        Kind::Module => p.code_module,
+        Kind::Function => p.code_function,
+        Kind::Number => p.code_number,
+        Kind::Str => p.code_string,
+        Kind::Comment => p.code_comment,
+        Kind::Special => p.code_special,
+        Kind::Operator => p.code_operator,
+        Kind::Definition => p.code_definition,
     }
 }
 
 /// Remembers the last highlighted text, so typing does not re-lex the
-/// whole buffer on frames where nothing changed.
+/// whole buffer on frames where nothing changed (nor the theme).
 #[derive(Default)]
 pub struct Highlighter {
     source: String,
@@ -266,11 +267,19 @@ pub struct Highlighter {
     /// `#` starts a comment: the text is a circuit file.
     pub hash_comments: bool,
     highlighted_as: bool,
+    /// Whether the colors are the dark theme's.
+    dark: Option<bool>,
 }
 
 impl Highlighter {
     pub fn layout_job(&mut self, src: &str, font: &FontId, wrap_width: f32) -> LayoutJob {
-        if self.source != src || self.font.as_ref() != Some(font) || self.highlighted_as != self.hash_comments {
+        let dark = theme::palette().dark;
+        if self.source != src
+            || self.font.as_ref() != Some(font)
+            || self.highlighted_as != self.hash_comments
+            || self.dark != Some(dark)
+        {
+            self.dark = Some(dark);
             self.source.clear();
             self.source.push_str(src);
             self.font = Some(font.clone());
@@ -295,7 +304,7 @@ fn build_job(src: &str, font: &FontId, hash_comments: bool) -> LayoutJob {
         job.append(&src[range], 0.0, format);
     }
     if job.sections.is_empty() {
-        job.append("", 0.0, TextFormat::simple(font.clone(), theme::CODE_TEXT));
+        job.append("", 0.0, TextFormat::simple(font.clone(), theme::palette().code_text));
     }
     job
 }
