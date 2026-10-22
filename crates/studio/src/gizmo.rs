@@ -15,7 +15,7 @@
 //! change is written in the code is up to the app; here is only what it
 //! does to the points of the model, for the preview.
 //!
-//! Turns are OpenSCAD's: `rotate([x, y, z])` turns around X, then Y, then
+//! Turns are the language's: `rotate([x, y, z])` turns around X, then Y, then
 //! Z, all fixed axes, so its matrix is `Rz · Ry · Rx` ([`rotation`],
 //! [`euler`] going back).
 
@@ -283,7 +283,7 @@ pub fn scale_factor(start: f32, now: f32) -> f64 {
 
 // ---- turns ----
 
-/// The matrix of OpenSCAD's `rotate([x, y, z])` (degrees): around X, then
+/// The matrix of `rotate([x, y, z])` (degrees): around X, then
 /// Y, then Z.
 pub fn rotation(degrees: [f64; 3]) -> DMat3 {
     let [x, y, z] = degrees.map(f64::to_radians);

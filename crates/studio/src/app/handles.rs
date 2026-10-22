@@ -15,7 +15,7 @@
 //!
 //! The edits of [`crate::code_edit`] keep an object's transforms in the
 //! usual order, `translate(T) rotate(R) scale(S) object`, so that a point
-//! `p` of the object lands at `T + R·S·p`, `R` being OpenSCAD's turn
+//! `p` of the object lands at `T + R·S·p`, `R` being `rotate()`'s turn
 //! around X, then Y, then Z (see [`gizmo::rotation`]). The handles turn
 //! and scale about the centre `c` of the object's box, while the code turns
 //! and scales about `T`, so each such change also moves the object to put

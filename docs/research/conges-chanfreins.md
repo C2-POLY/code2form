@@ -113,8 +113,8 @@ On a retenu l'appel de bibliothèque :
   lignes.
 
 Le prix : le fichier dépend de la bibliothèque de Code2Form, qui est
-livrée avec l'application et trouvée par `cargo run`, mais qu'OpenSCAD
-n'a pas. Le fichier `rounded.c2f` est en OpenSCAD pur : il suffit de le
+livrée avec l'application et trouvée par `cargo run`, mais absente des
+autres outils. Le fichier `rounded.c2f` n'utilise que le langage de base : il suffit de le
 copier à côté du modèle pour l'ouvrir ailleurs.
 
 ### Limites

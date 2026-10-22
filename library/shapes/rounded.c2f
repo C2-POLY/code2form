@@ -2,7 +2,7 @@
 // keep the bounding box and the placement of the `cube()` or `cylinder()`
 // they replace: `rounded_cube([30, 20, 10], fillet = 2)` fills the same
 // box as `cube([30, 20, 10])`. The app's properties panel writes these
-// calls; they are plain OpenSCAD, so the file can be copied next to a
+// calls; they use only the base language, so the file can be copied next to a
 // design that has to open without Code2Form's library.
 //
 // Curves follow `$fn`, `$fa` and `$fs` as `circle()` does, rounded up to a
