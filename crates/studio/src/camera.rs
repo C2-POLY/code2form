@@ -20,6 +20,8 @@ const DEFAULT_PITCH: f32 = 28.0_f32.to_radians();
 const MAX_PITCH: f32 = 89.5_f32.to_radians();
 const MIN_DISTANCE: f32 = 1e-3;
 const MAX_DISTANCE: f32 = 1e7;
+/// How fast the turntable turns: one full turn in 12 seconds.
+const TURNTABLE_SPEED: f32 = 30.0_f32.to_radians();
 
 impl Default for Camera {
     fn default() -> Self {
@@ -69,6 +71,12 @@ impl Camera {
         let speed = 0.45_f32.to_radians();
         self.yaw = (self.yaw - delta.x * speed).rem_euclid(std::f32::consts::TAU);
         self.pitch = (self.pitch + delta.y * speed).clamp(-MAX_PITCH, MAX_PITCH);
+    }
+
+    /// Turns the camera around Z for `dt` seconds of turntable, keeping
+    /// the elevation, distance and target.
+    pub fn spin(&mut self, dt: f32) {
+        self.yaw = (self.yaw + dt * TURNTABLE_SPEED).rem_euclid(std::f32::consts::TAU);
     }
 
     /// Moves the view by `delta` points in a viewport `height` points high,
@@ -123,5 +131,34 @@ impl Camera {
     pub fn look_from(&mut self, yaw_degrees: f32, pitch_degrees: f32) {
         self.yaw = yaw_degrees.to_radians();
         self.pitch = pitch_degrees.to_radians().clamp(-MAX_PITCH, MAX_PITCH);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spin_turns_only_the_yaw_at_constant_speed() {
+        let mut camera = Camera { target: Vec3::new(1.0, 2.0, 3.0), distance: 50.0, yaw: 1.0, ..Camera::default() };
+        let before = camera;
+        camera.spin(1.0);
+        assert!((camera.yaw - before.yaw - TURNTABLE_SPEED).abs() < 1e-5);
+        assert_eq!((camera.pitch, camera.distance, camera.target), (before.pitch, before.distance, before.target));
+
+        // The same time in small frames turns the same angle.
+        let mut stepped = before;
+        for _ in 0..60 {
+            stepped.spin(1.0 / 60.0);
+        }
+        assert!((stepped.yaw - camera.yaw).abs() < 1e-4);
+    }
+
+    #[test]
+    fn spin_wraps_after_a_full_turn() {
+        let mut camera = Camera::default();
+        camera.spin(std::f32::consts::TAU / TURNTABLE_SPEED);
+        assert!((camera.yaw - DEFAULT_YAW.rem_euclid(std::f32::consts::TAU)).abs() < 1e-3);
+        assert!((0.0..std::f32::consts::TAU).contains(&camera.yaw));
     }
 }
