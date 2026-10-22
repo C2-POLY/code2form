@@ -399,7 +399,7 @@ enclosure and the wires at a height.
 ### Hover, click, double-click
 
 - **Hover** a pin, a wire or a part: a bubble names it, as "xiao · 5V ·
-  USB 5 V; or 5 V in" or "Red wire · 5 V: xiao.5V ➡ amp.VIN".
+  VUSB: USB 5 V; or 5 V in" or "Red wire · 5 V: xiao.5V ➡ amp.VIN".
 - **Click a pin**: its whole net stands out and the other wires grey
   out. A card gives the pin's type, voltage and `reserved`, and the
   other pins of its net (for `xiao.5V`, "Net: amp.VIN, cap.+, driver.EEP, driver.VCC
@@ -537,7 +537,7 @@ The wiring list, to print and solder from (the first rows of Grogu's):
 ```console
 $ c2f circuit wires examples/grogu/grogu.c2fc
 step  from                                          to                                        color   length  label
-   1  xiao.5V (USB 5 V; or 5 V in)                  amp.VIN (2.5 to 5.5 V)                    red      32 mm  5 V
+   1  xiao.5V (VUSB: USB 5 V; or 5 V in)            amp.VIN (2.5 to 5.5 V)                    red      32 mm  5 V
    2  xiao.GND                                      amp.GND                                   black    35 mm
    3  cap.+ (longer lead)                           amp.VIN (2.5 to 5.5 V)                    red      44 mm  decoupling
    4  cap.- (striped side)                          amp.GND                                   black    43 mm

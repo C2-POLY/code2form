@@ -115,9 +115,10 @@ fn parts_are_used_from_the_library_folders() {
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
     let rendered = c2f_geom::render_in(&output.nodes, &dir);
     let (min, max) = rendered.bounds().unwrap();
-    // The board with its headers' pins under it.
-    assert!((max[0] - 17.8).abs() < 1e-6 && (max[1] - 21.0).abs() < 1e-6, "{max:?}");
-    assert!((min[2] + 8.5).abs() < 1e-6, "{min:?}");
+    // The board, its USB-C 1.5 mm over its edge, with its headers' pins
+    // under it; the board sits 0.04 mm up, on its pads.
+    assert!((max[0] - 17.8).abs() < 1e-6 && (max[1] - 22.5).abs() < 1e-6, "{max:?}");
+    assert!((min[2] + 8.46).abs() < 1e-6, "{min:?}");
     // The repository's library is on the default path, for `cargo run`.
     let library = library().canonicalize().unwrap();
     assert!(c2f_eval::default_library_paths().iter().any(|p| p.canonicalize().is_ok_and(|p| p == library)));

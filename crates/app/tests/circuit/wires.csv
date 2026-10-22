@@ -1,5 +1,5 @@
 step,from,from_label,to,to_label,color,label,length_mm
-1,xiao.5V,USB 5 V; or 5 V in,amp.VIN,2.5 to 5.5 V,red,5 V,32.0
+1,xiao.5V,VUSB: USB 5 V; or 5 V in,amp.VIN,2.5 to 5.5 V,red,5 V,32.0
 2,xiao.GND,,amp.GND,,black,,35.4
 3,cap.+,longer lead,amp.VIN,2.5 to 5.5 V,red,decoupling,44.5
 4,cap.-,striped side,amp.GND,,black,,43.1
