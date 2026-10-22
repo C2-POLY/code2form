@@ -9,7 +9,9 @@ they are. Written in Rust, it renders as you type.
 - **Editor and live 3D view**: syntax highlighting, errors marked on their
   line, re-render 400 ms after the last keystroke, orbit, pan and zoom,
   and a turntable that turns the view around the model;
-  Open Recent lists the last ten files opened or saved.
+  Open Recent lists the last ten files opened or saved; each file opens in
+  a tab of its own, with its view, console and undo history, and the tabs
+  come back at the next launch.
 - **Settings** (⌘,): the app icon in ten tints (graphite by default,
   shown in the Dock and the Finder), the code's size, whether to render
   as you type and after what pause, and folders searched for libraries
