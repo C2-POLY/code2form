@@ -537,10 +537,10 @@ The wiring list, to print and solder from (the first rows of Grogu's):
 ```console
 $ c2f circuit wires examples/grogu/grogu.c2fc
 step  from                                          to                                        color   length  label
-   1  xiao.5V (VUSB: USB 5 V; or 5 V in)            amp.VIN (2.5 to 5.5 V)                    red      32 mm  5 V
+   1  xiao.5V (VUSB: USB 5 V; or 5 V in)            amp.VIN (Vin: 2.5 to 5.5 V)               red      32 mm  5 V
    2  xiao.GND                                      amp.GND                                   black    35 mm
-   3  cap.+ (longer lead)                           amp.VIN (2.5 to 5.5 V)                    red      44 mm  decoupling
-   4  cap.- (striped side)                          amp.GND                                   black    43 mm
+   3  cap.+ (longer lead)                           amp.VIN (Vin: 2.5 to 5.5 V)               red      43 mm  decoupling
+   4  cap.- (striped side)                          amp.GND                                   black    42 mm
 ```
 
 The length is that of the curve drawn in the app, from pin to pin, plus

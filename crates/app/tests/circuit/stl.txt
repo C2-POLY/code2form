@@ -1,1 +1,1 @@
-21538 triangles, 10809 vertices, volume 11631.167873047061
+35950 triangles, 18091 vertices, volume 11638.157016849998

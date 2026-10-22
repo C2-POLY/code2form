@@ -1,19 +1,19 @@
 step  from                                          to                                        color   length  label
-   1  xiao.5V (VUSB: USB 5 V; or 5 V in)            amp.VIN (2.5 to 5.5 V)                    red      32 mm  5 V
+   1  xiao.5V (VUSB: USB 5 V; or 5 V in)            amp.VIN (Vin: 2.5 to 5.5 V)               red      32 mm  5 V
    2  xiao.GND                                      amp.GND                                   black    35 mm
-   3  cap.+ (longer lead)                           amp.VIN (2.5 to 5.5 V)                    red      44 mm  decoupling
-   4  cap.- (striped side)                          amp.GND                                   black    43 mm
-   5  amp.VIN (2.5 to 5.5 V)                        driver.VCC (motor supply, 2.7 to 10.8 V)  red      65 mm  5 V
-   6  amp.GND                                       driver.GND                                black    69 mm
+   3  cap.+ (longer lead)                           amp.VIN (Vin: 2.5 to 5.5 V)               red      43 mm  decoupling
+   4  cap.- (striped side)                          amp.GND                                   black    42 mm
+   5  amp.VIN (Vin: 2.5 to 5.5 V)                   driver.VCC (motor supply, 2.7 to 10.8 V)  red      63 mm  5 V
+   6  amp.GND                                       driver.GND                                black    68 mm
    7  driver.VCC (motor supply, 2.7 to 10.8 V)      driver.EEP (nSLEEP: high to run)          red      35 mm  keep the driver awake
    8  xiao.3V3 (regulator output)                   mic.VDD (1.62 to 3.63 V)                  orange   66 mm  3.3 V
    9  xiao.GND                                      mic.GND                                   black    70 mm
   10  mic.L/R (channel: GND for left)               mic.GND                                   black    19 mm  left channel
   11  xiao.D3 (GPIO4, A3, touch 4)                  amp.BCLK (I2S bit clock)                  blue     67 mm  speaker I2S
   12  xiao.D4 (GPIO5, A4, SDA, touch 5)             amp.LRC (LRCLK: I2S word select)          green    71 mm  speaker I2S
-  13  xiao.D5 (GPIO6, A5, SCL, touch 6)             amp.DIN (I2S data)                        yellow   66 mm  speaker I2S
-  14  amp.+ (speaker +)                             speaker.+ (red wire)                      red      49 mm
-  15  amp.- (speaker -)                             speaker.- (black wire)                    black    44 mm
+  13  xiao.D5 (GPIO6, A5, SCL, touch 6)             amp.DIN (I2S data)                        yellow   65 mm  speaker I2S
+  14  amp.+ (speaker +)                             speaker.+ (red wire)                      red      53 mm
+  15  amp.- (speaker -)                             speaker.- (black wire)                    black    41 mm
   16  xiao.D8 (GPIO7, A8, SCK, touch 7)             mic.SCK (I2S bit clock)                   blue     55 mm  mic I2S
   17  xiao.D9 (GPIO8, A9, MISO, touch 8)            mic.WS (I2S word select)                  green    56 mm  mic I2S
   18  mic.SD (I2S data)                             xiao.D10 (GPIO9, A10, MOSI, touch 9)      yellow   61 mm  mic I2S

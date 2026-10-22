@@ -1,19 +1,19 @@
 step,from,from_label,to,to_label,color,label,length_mm
-1,xiao.5V,VUSB: USB 5 V; or 5 V in,amp.VIN,2.5 to 5.5 V,red,5 V,32.0
-2,xiao.GND,,amp.GND,,black,,35.4
-3,cap.+,longer lead,amp.VIN,2.5 to 5.5 V,red,decoupling,44.5
-4,cap.-,striped side,amp.GND,,black,,43.1
-5,amp.VIN,2.5 to 5.5 V,driver.VCC,"motor supply, 2.7 to 10.8 V",red,5 V,64.6
-6,amp.GND,,driver.GND,,black,,68.8
+1,xiao.5V,VUSB: USB 5 V; or 5 V in,amp.VIN,Vin: 2.5 to 5.5 V,red,5 V,31.8
+2,xiao.GND,,amp.GND,,black,,35.0
+3,cap.+,longer lead,amp.VIN,Vin: 2.5 to 5.5 V,red,decoupling,43.4
+4,cap.-,striped side,amp.GND,,black,,41.9
+5,amp.VIN,Vin: 2.5 to 5.5 V,driver.VCC,"motor supply, 2.7 to 10.8 V",red,5 V,63.4
+6,amp.GND,,driver.GND,,black,,67.6
 7,driver.VCC,"motor supply, 2.7 to 10.8 V",driver.EEP,nSLEEP: high to run,red,keep the driver awake,35.0
 8,xiao.3V3,regulator output,mic.VDD,1.62 to 3.63 V,orange,3.3 V,65.5
 9,xiao.GND,,mic.GND,,black,,70.3
 10,mic.L/R,channel: GND for left,mic.GND,,black,left channel,18.8
-11,xiao.D3,"GPIO4, A3, touch 4",amp.BCLK,I2S bit clock,blue,speaker I2S,67.3
-12,xiao.D4,"GPIO5, A4, SDA, touch 5",amp.LRC,LRCLK: I2S word select,green,speaker I2S,71.1
-13,xiao.D5,"GPIO6, A5, SCL, touch 6",amp.DIN,I2S data,yellow,speaker I2S,65.9
-14,amp.+,speaker +,speaker.+,red wire,red,,48.8
-15,amp.-,speaker -,speaker.-,black wire,black,,43.9
+11,xiao.D3,"GPIO4, A3, touch 4",amp.BCLK,I2S bit clock,blue,speaker I2S,66.8
+12,xiao.D4,"GPIO5, A4, SDA, touch 5",amp.LRC,LRCLK: I2S word select,green,speaker I2S,70.7
+13,xiao.D5,"GPIO6, A5, SCL, touch 6",amp.DIN,I2S data,yellow,speaker I2S,65.3
+14,amp.+,speaker +,speaker.+,red wire,red,,53.2
+15,amp.-,speaker -,speaker.-,black wire,black,,41.0
 16,xiao.D8,"GPIO7, A8, SCK, touch 7",mic.SCK,I2S bit clock,blue,mic I2S,54.7
 17,xiao.D9,"GPIO8, A9, MISO, touch 8",mic.WS,I2S word select,green,mic I2S,56.3
 18,mic.SD,I2S data,xiao.D10,"GPIO9, A10, MOSI, touch 9",yellow,mic I2S,61.4
