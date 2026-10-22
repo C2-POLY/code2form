@@ -35,7 +35,7 @@ pub fn save(store: Option<&Path>, tint: Tint) -> std::io::Result<()> {
 pub fn icon_data(tint: Tint) -> egui::IconData {
     let (size, layout) = if cfg!(target_os = "macos") { (1024, Layout::MacIcon) } else { (256, Layout::Full) };
     let image = app_icon::render(tint, size, layout);
-    egui::IconData { rgba: image.unmultiplied(), width: size as u32, height: size as u32 }
+    egui::IconData { rgba: image.unmultiplied(), width: image.size as u32, height: image.size as u32 }
 }
 
 /// Shows `tint` from now on. On macOS the Dock shows it while the app runs
