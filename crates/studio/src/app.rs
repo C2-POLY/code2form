@@ -1469,13 +1469,6 @@ impl StudioApp {
                         if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
                             self.set_mount(!self.mount.active);
                         }
-                        if self.viewer.has_enclosure() {
-                            let mut shown = self.viewer.shows_enclosure();
-                            let toggle = ui.toggle_value(&mut shown, "Enclosure");
-                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
-                                self.viewer.set_show_enclosure(shown);
-                            }
-                        }
                         toolbar_separator(ui);
                     }
                     // A circuit has no parameters: room for its own toggles.
@@ -1506,6 +1499,19 @@ impl StudioApp {
                                 ui.close();
                             }
                         }
+                        ui.separator();
+                        ui.checkbox(&mut self.viewer.turntable, "Turntable")
+                            .on_hover_text("Turn the view around the model (a drag in the view stops it)");
+                        // A circuit's enclosure: a view setting, kept off the
+                        // toolbar, which a circuit fills.
+                        if self.is_circuit() && self.viewer.has_enclosure() {
+                            ui.separator();
+                            let mut shown = self.viewer.shows_enclosure();
+                            let toggle = ui.checkbox(&mut shown, "Enclosure");
+                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
+                                self.viewer.set_show_enclosure(shown);
+                            }
+                        }
                     });
                     if ui
                         .button("Reset view")
@@ -1514,8 +1520,6 @@ impl StudioApp {
                     {
                         self.viewer.reset();
                     }
-                    ui.toggle_value(&mut self.viewer.turntable, "Turntable")
-                        .on_hover_text("Turn the view around the model (a drag in the view stops it)");
                 });
             });
         });
