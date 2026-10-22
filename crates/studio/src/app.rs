@@ -23,7 +23,9 @@ use crate::recent::RecentFiles;
 use crate::screenshot::Screenshot;
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
-use crate::wiring::{self, Look, Wiring};
+use crate::inspect;
+use crate::pick::{self, Hit};
+use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
@@ -104,8 +106,11 @@ pub struct StudioApp {
     /// The wires of the circuit on screen, when the file is one, as last
     /// read.
     wiring: Option<Wiring>,
-    /// How its wires and pins show.
-    look: Look,
+    /// What is under the pointer in the view, and what was clicked.
+    hover: Option<Hit>,
+    selection: Option<Hit>,
+    /// The box around each part of the circuit, as last rendered.
+    part_boxes: Vec<Option<(glam::Vec3, glam::Vec3)>>,
     /// The generation it was read for.
     circuit_generation: u64,
     /// The circuit's part files and their modification times, to render
@@ -149,7 +154,9 @@ impl StudioApp {
             model: None,
             frame_next: true,
             wiring: None,
-            look: Look::default(),
+            hover: None,
+            selection: None,
+            part_boxes: Vec::new(),
             circuit_generation: 0,
             part_files: Vec::new(),
             editor: Editor::new(),
@@ -261,7 +268,10 @@ impl StudioApp {
                                 empty,
                                 parts: scene.parts.len(),
                             });
+                            self.part_boxes = part_boxes(&scene);
                             self.viewer.set_scene(scene, frame);
+                            // The new solid comes in its own colors.
+                            self.update_overlay();
                         }
                         Err(line) => {
                             self.failed = true;
@@ -275,6 +285,10 @@ impl StudioApp {
                     }
                     self.circuit_generation = generation;
                     self.set_circuit(Some(circuit));
+                    if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()) {
+                        self.selection = self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, &target));
+                        self.update_overlay();
+                    }
                 }
                 Reply::Exported { target, result } => match result {
                     Ok(message) => self.console.log(Level::Info, message),
@@ -302,18 +316,101 @@ impl StudioApp {
             })
             .collect();
         self.wiring = found.map(Wiring::new);
-        self.look = Look::default();
+        // A selection outlives an edit when what it names is still there.
+        let valid = |hit: Option<Hit>| match (hit, &self.wiring) {
+            (Some(Hit::Pin(end)), Some(w)) => {
+                w.circuit.parts.get(end.part).is_some_and(|p| end.pin < p.annotations.pins.len())
+            }
+            (Some(Hit::Wire(i)), Some(w)) => i < w.circuit.wires.len(),
+            (Some(Hit::Part(i)), Some(w)) => i < w.circuit.parts.len(),
+            _ => false,
+        };
+        if !valid(self.selection) {
+            self.selection = None;
+        }
+        self.hover = self.hover.filter(|&h| valid(Some(h)));
+        if self.wiring.is_none() {
+            self.part_boxes.clear();
+        }
         self.update_overlay();
+    }
+
+    /// How the wires, pins and parts show: what a selection picks out
+    /// stands out, the rest is greyed out.
+    fn look(&self) -> Look {
+        let (Some(wiring), Some(selection)) = (&self.wiring, self.selection) else { return Look::default() };
+        let circuit = &wiring.circuit;
+        let pick_out = |on: bool| if on { Emphasis::Strong } else { Emphasis::Dim };
+        let shown = |on: bool| if on { Emphasis::Normal } else { Emphasis::Dim };
+        let (wires, strong_pins, parts): (Vec<Emphasis>, _, Vec<Emphasis>) = match selection {
+            Hit::Pin(end) => {
+                let (pins, wires) = pick::net(circuit, end);
+                let parts = (0..circuit.parts.len()).map(|p| shown(pins.iter().any(|e| e.part == p))).collect();
+                ((0..circuit.wires.len()).map(|i| pick_out(wires.contains(&i))).collect(), pins, parts)
+            }
+            Hit::Wire(index) => {
+                let wire = &circuit.wires[index];
+                let parts = (0..circuit.parts.len()).map(|p| shown(p == wire.from.part || p == wire.to.part)).collect();
+                ((0..circuit.wires.len()).map(|i| pick_out(i == index)).collect(), [wire.from, wire.to].into(), parts)
+            }
+            Hit::Part(part) => {
+                let touches = |i: usize| circuit.wires[i].from.part == part || circuit.wires[i].to.part == part;
+                let pins = circuit.wires.iter().flat_map(|w| [w.from, w.to]).filter(|e| e.part == part).collect();
+                let parts = (0..circuit.parts.len()).map(|p| pick_out(p == part)).collect();
+                ((0..circuit.wires.len()).map(|i| shown(touches(i))).collect(), pins, parts)
+            }
+        };
+        Look { wires, strong_pins, dim_pins: true, pulse: None, parts }
     }
 
     /// Sends the wires and pins, as they now look, to the view.
     fn update_overlay(&mut self) {
+        let look = self.look();
         match &self.wiring {
             Some(wiring) => {
-                let (wires, pins) = wiring.meshes(&self.look);
+                let (wires, pins) = wiring.meshes(&look);
                 self.viewer.set_overlay(wires, pins, wiring.bounds());
             }
             None => self.viewer.set_overlay(Default::default(), Default::default(), None),
+        }
+        self.viewer.set_part_emphasis(&look.parts);
+    }
+
+    /// Selects something of the circuit, or nothing; a wire also puts the
+    /// editor on its line.
+    fn select(&mut self, ctx: &egui::Context, hit: Option<Hit>) {
+        if hit == self.selection {
+            return;
+        }
+        self.selection = hit;
+        if let (Some(Hit::Wire(index)), Some(wiring)) = (hit, &self.wiring) {
+            let offset = wiring.circuit.wires[index].span.start as usize;
+            self.editor.go_to(ctx, &self.text, offset);
+        }
+        self.update_overlay();
+    }
+
+    /// Hovering, clicks and Escape over the view of a circuit.
+    fn circuit_input(&mut self, ctx: &egui::Context, response: &egui::Response) {
+        let Some(wiring) = &self.wiring else { return };
+        if !response.dragged() {
+            self.hover = response.hover_pos().and_then(|pos| {
+                pick::pick(wiring, &self.part_boxes, &self.viewer.ray(response.rect, pos))
+            });
+        }
+        if response.double_clicked() {
+            if let Some(Hit::Part(index)) = self.hover {
+                let path = wiring.circuit.parts[index].path.clone();
+                self.guard(Pending::OpenPath(path));
+                return;
+            }
+        }
+        if response.clicked() {
+            self.select(ctx, self.hover);
+        }
+        let escape = ctx.input(|i| i.key_pressed(Key::Escape)) && ctx.memory(|m| m.focused().is_none());
+        if escape && self.selection.is_some() {
+            self.select(ctx, None);
         }
     }
 
@@ -908,10 +1005,24 @@ impl StudioApp {
                     viewer::empty_hint(!self.text.trim().is_empty())
                 },
             };
+            // A double-click on a part opens it rather than framing the view.
+            self.viewer.frame_on_double_click = !matches!(self.hover, Some(Hit::Part(_)));
             let response = self.viewer.show(ui, &status);
+            self.circuit_input(ctx, &response);
             if let Some(wiring) = &self.wiring {
+                let painter = ui.painter_at(response.rect);
                 let right = if self.viewer.layer_view { 70.0 } else { 12.0 };
-                wiring::paint_legend(&ui.painter_at(response.rect), response.rect, right, &wiring.legend());
+                wiring::paint_legend(&painter, response.rect, right, &wiring.legend());
+                if let Some(selection) = self.selection {
+                    let (title, lines) = inspect::card(&wiring.circuit, selection, &self.text);
+                    inspect::paint_card(&painter, response.rect, &title, &lines);
+                }
+                if let (Some(hover), Some(pos)) = (self.hover, response.hover_pos()) {
+                    if !response.dragged() {
+                        inspect::paint_bubble(&painter, response.rect, pos, &inspect::bubble(&wiring.circuit, hover));
+                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                }
             }
         });
         if let Some(edit) = self.viewer.take_pause_edit() {
@@ -1132,6 +1243,35 @@ fn display_folder(dir: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
     }
+}
+
+/// Something of a circuit named as `part.pin`, `part` or `wire:7` (from 1).
+fn find_hit(circuit: &c2f_circuit::Circuit, name: &str) -> Option<Hit> {
+    if let Some(number) = name.strip_prefix("wire:") {
+        let index = number.parse::<usize>().ok()?.checked_sub(1)?;
+        return (index < circuit.wires.len()).then_some(Hit::Wire(index));
+    }
+    let part_named = |n: &str| circuit.parts.iter().position(|p| p.name == n);
+    match name.split_once('.') {
+        Some((part, pin)) => {
+            let part = part_named(part)?;
+            Some(Hit::Pin(c2f_circuit::End { part, pin: circuit.parts[part].pin(pin)? }))
+        }
+        None => part_named(name).map(Hit::Part),
+    }
+}
+
+/// The box around each part of a circuit's scene.
+fn part_boxes(scene: &crate::worker::Scene) -> Vec<Option<(glam::Vec3, glam::Vec3)>> {
+    scene
+        .parts
+        .iter()
+        .map(|range| {
+            let points = &scene.solid.positions[range.clone()];
+            let first = glam::Vec3::from(*points.first()?);
+            Some(points.iter().fold((first, first), |(lo, hi), &p| (lo.min(p.into()), hi.max(p.into()))))
+        })
+        .collect()
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {

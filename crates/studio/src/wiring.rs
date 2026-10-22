@@ -50,6 +50,8 @@ pub struct Look {
     pub dim_pins: bool,
     /// The strong pins pulse: 0 to 1, the share of their extra size.
     pub pulse: Option<f32>,
+    /// By part index; missing ones are normal.
+    pub parts: Vec<Emphasis>,
 }
 
 impl Look {
@@ -105,7 +107,13 @@ impl Wiring {
         let mut wires = RenderMesh::default();
         for (index, path) in self.paths.iter().enumerate() {
             let emphasis = look.wire(index);
-            let radius = if emphasis == Emphasis::Strong { WIRE_RADIUS * 1.4 } else { WIRE_RADIUS };
+            // Thicker when picked out, thinner when greyed out: a black
+            // wire picked out stays apart from the grey ones.
+            let radius = match emphasis {
+                Emphasis::Strong => WIRE_RADIUS * 1.6,
+                Emphasis::Dim => WIRE_RADIUS * 0.6,
+                Emphasis::Normal => WIRE_RADIUS,
+            };
             let color = shade(self.colors[index], emphasis);
             push_indexed(&mut wires, &route::tube(path, radius, SIDES), color);
         }
@@ -209,8 +217,8 @@ pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, entries: &[
 }
 
 /// Light text on the view's dark overlays.
-const TEXT: Color32 = Color32::from_rgb(0xec, 0xee, 0xf2);
-const TEXT_DIM: Color32 = Color32::from_rgb(0xa8, 0xb0, 0xbe);
+pub const TEXT: Color32 = Color32::from_rgb(0xec, 0xee, 0xf2);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0xa8, 0xb0, 0xbe);
 
 /// A wire's color, or the default for none or one not understood.
 pub fn wire_color(name: Option<&str>) -> [f32; 4] {

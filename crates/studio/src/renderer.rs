@@ -142,6 +142,9 @@ pub struct Renderer {
     pending_scene: Option<Scene>,
     pending_grid: Option<Grid>,
     pending_overlay: Option<(RenderMesh, RenderMesh)>,
+    /// The solid as uploaded, to upload again in other colors.
+    solid_mesh: RenderMesh,
+    pending_colors: Option<Vec<[f32; 4]>>,
 }
 
 impl Renderer {
@@ -208,6 +211,8 @@ impl Renderer {
                 pending_scene: None,
                 pending_grid: None,
                 pending_overlay: None,
+                solid_mesh: RenderMesh::default(),
+                pending_colors: None,
             })
         }
     }
@@ -215,6 +220,12 @@ impl Renderer {
     /// Replaces the meshes on the next paint.
     pub fn set_scene(&mut self, scene: Scene) {
         self.pending_scene = Some(scene);
+    }
+
+    /// Recolors the solid on the next paint, one color per vertex, as a
+    /// circuit greys out the parts behind a selection.
+    pub fn set_solid_colors(&mut self, colors: Vec<[f32; 4]>) {
+        self.pending_colors = Some(colors);
     }
 
     /// Replaces a circuit's wires and pin dots on the next paint.
@@ -251,6 +262,19 @@ impl Renderer {
                     let heights: Vec<f32> = scene.pauses.iter().map(|p| p.z as f32).collect();
                     self.pause_planes = upload_mesh(gl, &pause_planes(&heights, footprint));
                     self.pause_outlines = upload_lines(gl, &pause_outlines(&heights, footprint));
+                }
+                // Only a circuit recolors its solid.
+                self.solid_mesh = if scene.parts.is_empty() { RenderMesh::default() } else { scene.solid };
+            }
+        }
+        if let Some(colors) = self.pending_colors.take() {
+            if colors.len() == self.solid_mesh.positions.len() && !colors.is_empty() {
+                self.solid_mesh.colors = colors;
+                unsafe {
+                    if let Some(buffer) = self.solid.take() {
+                        delete(gl, buffer);
+                    }
+                    self.solid = upload_mesh(gl, &self.solid_mesh);
                 }
             }
         }

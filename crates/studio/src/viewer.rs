@@ -13,6 +13,8 @@ use glam::{Mat4, Vec2 as GVec2, Vec3, Vec4};
 
 use crate::camera::Camera;
 use crate::pause_edit;
+use crate::pick::Ray;
+use crate::wiring::{Emphasis, shade};
 use crate::renderer::{self, Grid, Renderer};
 use crate::theme;
 use crate::worker::Scene;
@@ -88,6 +90,13 @@ pub struct Viewer {
     bounds: Option<(Vec3, Vec3)>,
     /// The box around a circuit's wires and pins, framed with the model.
     overlay_bounds: Option<(Vec3, Vec3)>,
+    /// A circuit's parts: the vertices of each in the solid, and the
+    /// solid's colors as rendered.
+    part_ranges: Vec<std::ops::Range<usize>>,
+    solid_colors: Vec<[f32; 4]>,
+    /// A double-click frames the view; the app turns it off while the
+    /// pointer is over something a double-click opens.
+    pub frame_on_double_click: bool,
     pauses: Vec<PauseMark>,
     /// The text the scene was rendered from.
     scene_source: String,
@@ -125,6 +134,9 @@ impl Viewer {
             turntable: false,
             bounds: None,
             overlay_bounds: None,
+            part_ranges: Vec::new(),
+            solid_colors: Vec::new(),
+            frame_on_double_click: true,
             pauses: Vec::new(),
             scene_source: String::new(),
             dragging: None,
@@ -156,6 +168,8 @@ impl Viewer {
             None => Vec::new(),
         };
         self.scene_source = scene.source.clone();
+        self.part_ranges = scene.parts.clone();
+        self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
         self.menu = None;
@@ -179,6 +193,40 @@ impl Viewer {
                 r.set_overlay(wires, pins);
             }
         }
+    }
+
+    /// Shows each part of a circuit as `emphasis` says, by part index;
+    /// parts left out show as rendered.
+    pub fn set_part_emphasis(&mut self, emphasis: &[Emphasis]) {
+        if self.solid_colors.is_empty() {
+            return;
+        }
+        let mut colors = self.solid_colors.clone();
+        for (range, &e) in self.part_ranges.iter().zip(emphasis) {
+            if e != Emphasis::Normal {
+                for color in &mut colors[range.clone()] {
+                    *color = shade(*color, e);
+                }
+            }
+        }
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_solid_colors(colors);
+            }
+        }
+    }
+
+    /// The ray from the eye through `pos` in the view's `rect`.
+    pub fn ray(&self, rect: Rect, pos: Pos2) -> Ray {
+        let ndc = GVec2::new(
+            (pos.x - rect.left()) / rect.width() * 2.0 - 1.0,
+            1.0 - (pos.y - rect.top()) / rect.height() * 2.0,
+        );
+        let origin = self.camera.eye();
+        let direction = (self.camera.point_at(ndc, rect.width() / rect.height().max(1.0)) - origin).normalize_or(Vec3::Z);
+        // Five points either way, at a distance of one.
+        let slack = 5.0 * 2.0 * (self.camera.fov_y * 0.5).tan() / rect.height().max(1.0);
+        Ray { origin, direction, slack }
     }
 
     /// The model's box and the overlay's, together.
@@ -370,7 +418,7 @@ impl Viewer {
         if response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
-        if response.double_clicked() {
+        if response.double_clicked() && self.frame_on_double_click {
             self.view_all();
         }
         if response.hovered() {
