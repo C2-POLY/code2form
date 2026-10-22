@@ -239,6 +239,20 @@ fn export_writes_files() {
     assert!(bytes.starts_with(b"PK\x03\x04"));
     assert_eq!(report["written"]["bytes"], bytes.len());
 
+    let gltf = dir.join("part.glb");
+    let (is_error, report) =
+        server.report("export", json!({ "code": "color(\"red\") cube(10);", "output": gltf, "scale": 1 }));
+    assert!(!is_error, "{report}");
+    assert_eq!((report["written"]["format"].clone(), report["triangles"].clone()), (json!("glTF"), json!(12)));
+    let bytes = std::fs::read(&gltf).unwrap();
+    assert!(bytes.starts_with(b"glTF"));
+    let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let document: Value = serde_json::from_slice(&bytes[20..20 + length]).unwrap();
+    assert_eq!(document["nodes"][0]["name"], "part");
+    assert_eq!(document["accessors"][0]["max"], json!([10.0, 10.0, 0.0]));
+    let (is_error, _) = server.call("export", json!({ "code": "cube(1);", "output": gltf, "scale": 0 }));
+    assert!(is_error);
+
     let (is_error, report) = server.report("export", json!({ "code": "square(10);", "output": dir.join("plate.svg") }));
     assert!(!is_error, "{report}");
     assert!(std::fs::read_to_string(dir.join("plate.svg")).unwrap().contains("<svg"));

@@ -1,0 +1,407 @@
+//! glTF 2.0 export, as a binary `.glb`: the format Godot 4 imports as it
+//! is and Unity through glTFast or UnityGLTF. glTF counts in meters with
+//! Y up, where a design counts in millimeters with Z up: positions are
+//! scaled ([`GltfOptions::scale`]) and turned a quarter turn about X, so
+//! that +Z becomes +Y and +Y becomes -Z.
+//!
+//! Each `color()` becomes a PBR material and a primitive of its own.
+//! Normals are smoothed across the facets of a curved surface and split
+//! along sharp edges, so a cylinder reads round and a cube stays crisp.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use c2f_eval::node::Node;
+use manifold_rust::manifold::Manifold;
+use serde_json::{Value, json};
+
+use crate::build::{CUT_COLOR, DEFAULT_COLOR, Model, render_in};
+
+/// How a model is written to glTF.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GltfOptions {
+    /// Meters per model unit: 0.001 keeps a millimeter design at its real
+    /// size, 1 makes each unit a meter.
+    pub scale: f64,
+    /// The name of the scene's root node.
+    pub name: String,
+    /// The color of the parts without `color()`, in sRGB. The faces a
+    /// `difference()` cuts take it too, rather than the preview's green.
+    pub color: [f32; 3],
+}
+
+impl Default for GltfOptions {
+    fn default() -> Self {
+        let [r, g, b, _] = DEFAULT_COLOR;
+        GltfOptions { scale: 0.001, name: "Code2Form".into(), color: [r, g, b] }
+    }
+}
+
+/// A `.glb` file and what went into it.
+#[derive(Clone, Debug, Default)]
+pub struct Glb {
+    pub bytes: Vec<u8>,
+    pub warnings: Vec<String>,
+    /// Triangles, across all primitives.
+    pub triangles: usize,
+    /// Vertices written: a corner shared by facets that meet at a sharp
+    /// edge or in two colors is written once for each.
+    pub vertices: usize,
+}
+
+/// Facets that meet at more than this angle keep their own normals.
+const SHARP_DEGREES: f64 = 35.0;
+
+/// Renders `nodes` and writes them as a `.glb`. Data files are read
+/// relative to `base_dir`, as [`render_in`] reads them. An empty or 2D
+/// model has no glTF.
+pub fn glb(nodes: &[Node], base_dir: &Path, options: &GltfOptions) -> Result<Glb, String> {
+    let rendered = render_in(nodes, base_dir);
+    let mut warnings = rendered.warnings;
+    let manifold = match rendered.model {
+        Model::Solid(manifold) if !manifold.is_empty() => manifold,
+        Model::Flat(_) => return Err("the model is 2D; glTF holds solids".into()),
+        _ => return Err("the model is empty; no glTF written".into()),
+    };
+    let mut writer = Writer::new(options);
+    let mesh = writer.mesh(&options.name, &manifold);
+    let mut node = json!({ "name": options.name });
+    if let Some(mesh) = mesh {
+        node["mesh"] = json!(mesh);
+    }
+    writer.nodes.push(node);
+    let (bytes, triangles, vertices) = writer.finish(vec![0]);
+    warnings.dedup();
+    Ok(Glb { bytes, warnings, triangles, vertices })
+}
+
+/// The glTF document being written, and its binary buffer.
+struct Writer {
+    scale: f64,
+    /// For the parts without `color()`.
+    plain: [f32; 3],
+    bin: Vec<u8>,
+    views: Vec<Value>,
+    accessors: Vec<Value>,
+    meshes: Vec<Value>,
+    nodes: Vec<Value>,
+    materials: Vec<Value>,
+    /// The material of each color, by its bits.
+    material_of: HashMap<[u32; 4], usize>,
+    triangles: usize,
+    vertices: usize,
+}
+
+const ARRAY_BUFFER: u32 = 34962;
+const ELEMENT_ARRAY_BUFFER: u32 = 34963;
+const FLOAT: u32 = 5126;
+const UNSIGNED_INT: u32 = 5125;
+
+impl Writer {
+    fn new(options: &GltfOptions) -> Self {
+        Writer {
+            scale: options.scale,
+            plain: options.color,
+            bin: Vec::new(),
+            views: Vec::new(),
+            accessors: Vec::new(),
+            meshes: Vec::new(),
+            nodes: Vec::new(),
+            materials: Vec::new(),
+            material_of: HashMap::new(),
+            triangles: 0,
+            vertices: 0,
+        }
+    }
+
+    /// Appends `bytes` as a buffer view, 4-byte aligned, and returns its
+    /// index.
+    fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
+        while self.bin.len() % 4 != 0 {
+            self.bin.push(0);
+        }
+        let mut view = json!({ "buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len() });
+        if let Some(target) = target {
+            view["target"] = json!(target);
+        }
+        self.bin.extend_from_slice(bytes);
+        self.views.push(view);
+        self.views.len() - 1
+    }
+
+    /// An accessor of `f32` items of `width` components (`kind` is
+    /// `SCALAR`, `VEC3`...), with their bounds when `bounded`.
+    fn floats(&mut self, values: &[f32], width: usize, kind: &str, target: Option<u32>, bounded: bool) -> usize {
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let view = self.view(&bytes, target);
+        let count = values.len() / width;
+        let mut accessor = json!({ "bufferView": view, "componentType": FLOAT, "count": count, "type": kind });
+        if bounded && count > 0 {
+            let mut lo = vec![f32::INFINITY; width];
+            let mut hi = vec![f32::NEG_INFINITY; width];
+            for item in values.chunks(width) {
+                for (k, &v) in item.iter().enumerate() {
+                    lo[k] = lo[k].min(v);
+                    hi[k] = hi[k].max(v);
+                }
+            }
+            accessor["min"] = json!(lo);
+            accessor["max"] = json!(hi);
+        }
+        self.accessors.push(accessor);
+        self.accessors.len() - 1
+    }
+
+    fn indices(&mut self, values: &[u32]) -> usize {
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let view = self.view(&bytes, Some(ELEMENT_ARRAY_BUFFER));
+        self.accessors.push(json!({ "bufferView": view, "componentType": UNSIGNED_INT, "count": values.len(), "type": "SCALAR" }));
+        self.accessors.len() - 1
+    }
+
+    /// The material for a color from `color()`, made on first use.
+    fn material(&mut self, rgba: [f32; 4]) -> usize {
+        let key = rgba.map(f32::to_bits);
+        if let Some(&material) = self.material_of.get(&key) {
+            return material;
+        }
+        let [r, g, b] = [rgba[0], rgba[1], rgba[2]].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+        // `color()` takes sRGB values; glTF's factor is linear.
+        let factor = [linear(rgba[0]), linear(rgba[1]), linear(rgba[2]), rgba[3].clamp(0.0, 1.0)];
+        let mut material = json!({
+            "name": format!("#{r:02x}{g:02x}{b:02x}"),
+            "pbrMetallicRoughness": { "baseColorFactor": factor, "metallicFactor": 0.0, "roughnessFactor": 0.6 },
+        });
+        if rgba[3] < 1.0 {
+            material["alphaMode"] = json!("BLEND");
+        }
+        self.materials.push(material);
+        self.material_of.insert(key, self.materials.len() - 1);
+        self.materials.len() - 1
+    }
+
+    /// Writes `manifold` as a mesh named `name`, a primitive per color,
+    /// and returns its index; `None` when it has no triangles.
+    fn mesh(&mut self, name: &str, manifold: &Manifold) -> Option<usize> {
+        let surfaces = surfaces(manifold, self.scale, self.plain);
+        if surfaces.is_empty() {
+            return None;
+        }
+        let mut primitives = Vec::new();
+        for surface in surfaces {
+            self.triangles += surface.indices.len() / 3;
+            self.vertices += surface.positions.len() / 3;
+            let position = self.floats(&surface.positions, 3, "VEC3", Some(ARRAY_BUFFER), true);
+            let normal = self.floats(&surface.normals, 3, "VEC3", Some(ARRAY_BUFFER), false);
+            let indices = self.indices(&surface.indices);
+            let material = self.material(surface.color);
+            primitives.push(json!({
+                "attributes": { "POSITION": position, "NORMAL": normal },
+                "indices": indices,
+                "material": material,
+            }));
+        }
+        self.meshes.push(json!({ "name": name, "primitives": primitives }));
+        Some(self.meshes.len() - 1)
+    }
+
+    /// The `.glb` of a scene whose root nodes are `roots`, with its triangle
+    /// and vertex counts.
+    fn finish(self, roots: Vec<usize>) -> (Vec<u8>, usize, usize) {
+        let mut document = json!({
+            "asset": { "version": "2.0", "generator": concat!("Code2Form ", env!("CARGO_PKG_VERSION")) },
+            "scene": 0,
+            "scenes": [{ "nodes": roots }],
+            "nodes": self.nodes,
+        });
+        if !self.meshes.is_empty() {
+            document["meshes"] = json!(self.meshes);
+            document["materials"] = json!(self.materials);
+            document["accessors"] = json!(self.accessors);
+            document["bufferViews"] = json!(self.views);
+            document["buffers"] = json!([{ "byteLength": self.bin.len() }]);
+        }
+        let bytes = container(&serde_json::to_vec(&document).expect("glTF JSON"), &self.bin);
+        (bytes, self.triangles, self.vertices)
+    }
+}
+
+/// sRGB to linear, as the glTF factors take colors.
+fn linear(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+/// The GLB container: a 12-byte header, the JSON chunk padded with
+/// spaces, then the binary chunk padded with zeros.
+fn container(json: &[u8], bin: &[u8]) -> Vec<u8> {
+    let pad = |n: usize| (4 - n % 4) % 4;
+    let json_length = json.len() + pad(json.len());
+    let bin_length = bin.len() + pad(bin.len());
+    let total = 12 + 8 + json_length + if bin.is_empty() { 0 } else { 8 + bin_length };
+    let mut out = Vec::with_capacity(total);
+    out.extend(b"glTF");
+    out.extend(2u32.to_le_bytes());
+    out.extend((total as u32).to_le_bytes());
+    out.extend((json_length as u32).to_le_bytes());
+    out.extend(b"JSON");
+    out.extend(json);
+    out.extend(std::iter::repeat_n(b' ', pad(json.len())));
+    if !bin.is_empty() {
+        out.extend((bin_length as u32).to_le_bytes());
+        out.extend(b"BIN\0");
+        out.extend(bin);
+        out.extend(std::iter::repeat_n(0, pad(bin.len())));
+    }
+    out
+}
+
+/// The triangles of one color, ready for a glTF primitive: positions in
+/// meters with Y up, unit normals, and indices.
+struct Surface {
+    color: [f32; 4],
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<u32>,
+}
+
+/// From Z up to Y up: a quarter turn about X.
+fn y_up([x, y, z]: [f64; 3]) -> [f64; 3] {
+    [x, z, -y]
+}
+
+fn cross(u: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+}
+
+fn dot(u: [f64; 3], v: [f64; 3]) -> f64 {
+    u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
+    let length = dot(v, v).sqrt();
+    (length > 0.0 && length.is_finite()).then(|| v.map(|c| c / length))
+}
+
+/// The solid's triangles, grouped by color in order of first use. Each
+/// corner's normal averages, weighted by their angles there, the facets
+/// around its vertex that turn by at most [`SHARP_DEGREES`] from its own.
+fn surfaces(manifold: &Manifold, scale: f64, [r, g, b]: [f32; 3]) -> Vec<Surface> {
+    let mesh = manifold.get_mesh_gl64(-1);
+    let stride = mesh.num_prop as usize;
+    let count = mesh.vert_properties.len() / stride.max(1);
+    // Colors split vertices; the merge lists say which copies are one.
+    let mut merged: Vec<usize> = (0..count).collect();
+    for (&from, &to) in mesh.merge_from_vert.iter().zip(&mesh.merge_to_vert) {
+        merged[from as usize] = to as usize;
+    }
+    let point = |i: usize| {
+        let p = &mesh.vert_properties[i * stride..i * stride + 3];
+        [p[0], p[1], p[2]]
+    };
+    let triangles: Vec<[usize; 3]> =
+        mesh.tri_verts.chunks(3).map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect();
+    let normal: Vec<Option<[f64; 3]>> = triangles
+        .iter()
+        .map(|&[a, b, c]| unit(cross(sub(point(b), point(a)), sub(point(c), point(a)))))
+        .collect();
+    // The angle of a facet at its corner `k`: weighted by it, the facets
+    // around a vertex give the same normal however they are split.
+    let angle = |t: usize, k: usize| {
+        let corners = triangles[t];
+        let at = point(corners[k]);
+        let (u, v) = (unit(sub(point(corners[(k + 1) % 3]), at)), unit(sub(point(corners[(k + 2) % 3]), at)));
+        u.zip(v).map_or(0.0, |(u, v)| dot(u, v).clamp(-1.0, 1.0).acos())
+    };
+    let mut around: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (t, corners) in triangles.iter().enumerate() {
+        for &i in corners {
+            around[merged[i]].push(t);
+        }
+    }
+    let sharp = SHARP_DEGREES.to_radians().cos();
+
+    let mut surfaces: Vec<Surface> = Vec::new();
+    let mut surface_of: HashMap<[u32; 4], usize> = HashMap::new();
+    // Each written vertex, by surface, vertex and normal.
+    let mut written: HashMap<(usize, usize, [i64; 3]), u32> = HashMap::new();
+    for (t, corners) in triangles.iter().enumerate() {
+        let Some(own) = normal[t] else { continue };
+        let color = match &mesh.vert_properties[corners[0] * stride..] {
+            p if stride >= 7 => [p[3] as f32, p[4] as f32, p[5] as f32, p[6] as f32],
+            _ => DEFAULT_COLOR,
+        };
+        let color = if color == DEFAULT_COLOR || color == CUT_COLOR { [r, g, b, 1.0] } else { color };
+        let s = *surface_of.entry(color.map(f32::to_bits)).or_insert_with(|| {
+            surfaces.push(Surface { color, positions: Vec::new(), normals: Vec::new(), indices: Vec::new() });
+            surfaces.len() - 1
+        });
+        for &i in corners {
+            let v = merged[i];
+            let mut sum = [0.0; 3];
+            for &other in &around[v] {
+                let Some(n) = normal[other].filter(|&n| dot(n, own) >= sharp) else { continue };
+                let k = (0..3).find(|&k| merged[triangles[other][k]] == v).expect("a facet around its vertex");
+                let weight = angle(other, k);
+                sum = [sum[0] + weight * n[0], sum[1] + weight * n[1], sum[2] + weight * n[2]];
+            }
+            let n = y_up(unit(sum).unwrap_or(own));
+            // Normals that round alike are one vertex.
+            let key = (s, v, n.map(|c| (c * 1e5).round() as i64));
+            let surface = &mut surfaces[s];
+            let index = *written.entry(key).or_insert_with(|| {
+                let p = y_up(point(v));
+                surface.positions.extend(p.map(|c| (c * scale) as f32));
+                surface.normals.extend(n.map(|c| c as f32));
+                (surface.positions.len() / 3 - 1) as u32
+            });
+            surface.indices.push(index);
+        }
+    }
+    surfaces.retain(|s| !s.indices.is_empty());
+    surfaces
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The JSON and binary chunks of a `.glb`, checked as the container
+    /// lays them out.
+    pub(crate) fn chunks(glb: &[u8]) -> (Value, Vec<u8>) {
+        assert_eq!(&glb[..4], b"glTF");
+        let word = |at: usize| u32::from_le_bytes(glb[at..at + 4].try_into().unwrap()) as usize;
+        assert_eq!(word(4), 2, "version");
+        assert_eq!(word(8), glb.len(), "length");
+        let json_length = word(12);
+        assert_eq!(&glb[16..20], b"JSON");
+        assert_eq!(json_length % 4, 0);
+        let json = serde_json::from_slice(&glb[20..20 + json_length]).unwrap();
+        let at = 20 + json_length;
+        if at == glb.len() {
+            return (json, Vec::new());
+        }
+        assert_eq!(&glb[at + 4..at + 8], b"BIN\0");
+        (json, glb[at + 8..at + 8 + word(at)].to_vec())
+    }
+
+    #[test]
+    fn container_pads_its_chunks() {
+        let glb = container(b"{}", &[1, 2, 3, 4, 5]);
+        assert_eq!(glb.len(), 12 + 8 + 4 + 8 + 8);
+        assert_eq!(&glb[20..24], b"{}  ");
+        assert_eq!(&glb[32..40], &[1, 2, 3, 4, 5, 0, 0, 0]);
+        assert_eq!(chunks(&glb).1.len(), 8);
+    }
+
+    #[test]
+    fn colors_are_linear() {
+        assert_eq!(linear(0.0), 0.0);
+        assert_eq!(linear(1.0), 1.0);
+        assert!((linear(0.5) - 0.214).abs() < 1e-3);
+    }
+}

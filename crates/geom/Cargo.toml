@@ -16,6 +16,8 @@ clipper2-rust = "1.2"
 miniz_oxide = "0.8"
 ttf-parser = "0.25"
 rustybuzz = "0.20"
+# The glTF export's JSON part.
+serde_json = "1"
 
 [dev-dependencies]
 c2f-lang.workspace = true

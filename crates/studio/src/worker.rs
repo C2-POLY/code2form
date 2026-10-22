@@ -3,7 +3,7 @@
 //!
 //! The geometry (`c2f_geom::Rendered`) stays on the worker thread; the UI
 //! gets plain triangles back, and asks the worker for exports of the model
-//! it shows: STL or 3MF for a solid, SVG or DXF for a 2D model.
+//! it shows: STL, 3MF or glTF for a solid, SVG or DXF for a 2D model.
 //!
 //! A circuit (`.c2fc`) is read first, and the circuit goes back at once so
 //! that its wires show; then its parts render, several at a time, into one
@@ -94,28 +94,45 @@ pub enum Reply {
 
 enum Request {
     Render { generation: u64, source: String, path: PathBuf, values: Vec<(String, Literal)> },
-    Export { target: PathBuf, format: Format, binary_stl: bool },
+    Export { target: PathBuf, format: Format, options: ExportOptions },
     Libraries(Vec<PathBuf>),
 }
 
-/// The file formats a model exports to: STL and 3MF for a solid, SVG and
-/// DXF for a 2D model.
+/// How the formats that have settings are written.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExportOptions {
+    /// An STL in binary rather than ASCII.
+    pub binary_stl: bool,
+    pub gltf: c2f_geom::GltfOptions,
+}
+
+/// The model on screen, for exports: its geometry, and its program for
+/// the glTF, which is written from the evaluated nodes.
+struct Shown {
+    rendered: Rendered,
+    program: c2f_eval::Program,
+}
+
+/// The file formats a model exports to: STL, 3MF and glTF for a solid,
+/// SVG and DXF for a 2D model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Stl,
     ThreeMf,
+    Glb,
     Svg,
     Dxf,
 }
 
 impl Format {
-    pub const SOLID: &'static [Format] = &[Format::Stl, Format::ThreeMf];
+    pub const SOLID: &'static [Format] = &[Format::Stl, Format::ThreeMf, Format::Glb];
     pub const FLAT: &'static [Format] = &[Format::Svg, Format::Dxf];
 
     pub fn name(self) -> &'static str {
         match self {
             Format::Stl => "STL",
             Format::ThreeMf => "3MF",
+            Format::Glb => "glTF",
             Format::Svg => "SVG",
             Format::Dxf => "DXF",
         }
@@ -125,6 +142,7 @@ impl Format {
         match self {
             Format::Stl => "stl",
             Format::ThreeMf => "3mf",
+            Format::Glb => "glb",
             Format::Svg => "svg",
             Format::Dxf => "dxf",
         }
@@ -176,10 +194,9 @@ impl Worker {
         let _ = self.requests.send(Request::Libraries(folders));
     }
 
-    /// Writes the last good model to `target` in `format`; an STL in
-    /// binary with `binary_stl`, otherwise in ASCII.
-    pub fn export(&self, target: PathBuf, format: Format, binary_stl: bool) {
-        let _ = self.requests.send(Request::Export { target, format, binary_stl });
+    /// Writes the last good model to `target` in `format`, with `options`.
+    pub fn export(&self, target: PathBuf, format: Format, options: ExportOptions) {
+        let _ = self.requests.send(Request::Export { target, format, options });
     }
 
     pub fn latest(&self) -> u64 {
@@ -195,7 +212,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
     let defaults = c2f_eval::default_library_paths();
     let mut library_paths = defaults.clone();
     // The geometry of the model on screen, for exports.
-    let mut shown: Option<Rendered> = None;
+    let mut shown: Option<Shown> = None;
     let mut parts = PartCache::default();
     while let Ok(first) = requests.recv() {
         // Only the newest render matters; exports are all honored.
@@ -204,7 +221,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         for request in std::iter::once(first).chain(requests.try_iter()) {
             match request {
                 Request::Render { generation, source, path, values } => render = Some((generation, source, path, values)),
-                Request::Export { target, format, binary_stl } => exports.push((target, format, binary_stl)),
+                Request::Export { target, format, options } => exports.push((target, format, options)),
                 Request::Libraries(folders) => {
                     library_paths = folders.into_iter().chain(defaults.iter().cloned()).collect()
                 }
@@ -242,8 +259,8 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
                 }
             }
         }
-        for (target, format, binary_stl) in exports {
-            let result = export(shown.as_ref(), &target, format, binary_stl);
+        for (target, format, options) in exports {
+            let result = export(shown.as_ref(), &target, format, &options);
             if replies.send(Reply::Exported { target, result }).is_err() {
                 return;
             }
@@ -258,7 +275,7 @@ fn render_source(
     path: &Path,
     values: &[(String, Literal)],
     library_paths: &[PathBuf],
-) -> (RenderOutcome, Option<Rendered>) {
+) -> (RenderOutcome, Option<Shown>) {
     let start = Instant::now();
     let mut console = Vec::new();
     let mut parameters = None;
@@ -272,8 +289,8 @@ fn render_source(
             Err(None)
         },
     );
-    let (result, rendered) = match result {
-        Ok(mut rendered) => {
+    let (result, shown) = match result {
+        Ok((mut rendered, program)) => {
             let scene = Scene {
                 solid: std::mem::take(&mut rendered.solid),
                 highlights: std::mem::take(&mut rendered.highlights),
@@ -287,12 +304,12 @@ fn render_source(
                 parts: Vec::new(),
                 enclosure: 0..0,
             };
-            (Ok(scene), Some(rendered))
+            (Ok(scene), Some(Shown { rendered, program }))
         }
         Err(line) => (Err(line), None),
     };
     let watch = circuit_files(source, path, library_paths);
-    (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters, annotation_error, watch }, rendered)
+    (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters, annotation_error, watch }, shown)
 }
 
 /// The circuit a design names in `// @circuit`, and its part files.
@@ -374,7 +391,7 @@ pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> Part
     });
     let console = circuit::label_lines(console, path);
     match result {
-        Ok(rendered) => PartRender {
+        Ok((rendered, _)) => PartRender {
             triangles: rendered.stats.triangles,
             solid: rendered.solid,
             highlights: rendered.highlights,
@@ -452,7 +469,7 @@ fn pipeline(
     console: &mut Vec<Line>,
     parameters: &mut Option<Vec<Parameter>>,
     annotation_error: &mut Option<usize>,
-) -> Result<Rendered, Option<usize>> {
+) -> Result<(Rendered, c2f_eval::Program), Option<usize>> {
     let mut program = match c2f_eval::Program::load(source, path, library_paths) {
         Ok(program) => program,
         Err(err) => {
@@ -486,15 +503,19 @@ fn pipeline(
     let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")))
         .with_pauses(output.pauses);
     console.extend(rendered.warnings.iter().map(|text| Line::new(Level::Warning, text.clone())));
-    Ok(rendered)
+    Ok((rendered, program))
 }
 
-fn export(shown: Option<&Rendered>, target: &Path, format: Format, binary_stl: bool) -> Result<String, String> {
-    let rendered = shown.ok_or("there is no model to export yet")?;
+fn export(shown: Option<&Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
+    let Shown { rendered, program } = shown.ok_or("there is no model to export yet")?;
+    if format == Format::Glb {
+        return export_gltf(program, target, &options.gltf);
+    }
     let bytes = catch_unwind(AssertUnwindSafe(|| match format {
-        Format::Stl if binary_stl => rendered.stl_binary(),
+        Format::Stl if options.binary_stl => rendered.stl_binary(),
         Format::Stl => rendered.stl().map(String::into_bytes),
         Format::ThreeMf => rendered.three_mf(),
+        Format::Glb => None,
         Format::Svg => rendered.svg().map(String::into_bytes),
         Format::Dxf => rendered.dxf().map(String::into_bytes),
     }))
@@ -506,6 +527,26 @@ fn export(shown: Option<&Rendered>, target: &Path, format: Format, binary_stl: b
     std::fs::write(target, bytes).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
     let (count, what) = if rendered.is_2d { (rendered.stats.vertices, "vertices") } else { (rendered.stats.triangles, "triangles") };
     Ok(format!("Exported {} {what} to {}", group_digits(count), target.display()))
+}
+
+/// Writes the program's model as a `.glb`, its root node named after the
+/// file.
+fn export_gltf(program: &c2f_eval::Program, target: &Path, options: &c2f_geom::GltfOptions) -> Result<String, String> {
+    let mut options = options.clone();
+    if let Some(stem) = target.file_stem() {
+        options.name = stem.to_string_lossy().into_owned();
+    }
+    let glb = catch_unwind(AssertUnwindSafe(|| {
+        let output = c2f_eval::evaluate(program);
+        c2f_geom::glb(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")), &options)
+    }))
+    .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))??;
+    std::fs::write(target, &glb.bytes).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
+    let mut message = format!("Exported {} triangles to {}", group_digits(glb.triangles), target.display());
+    for warning in &glb.warnings {
+        message.push_str(&format!("\nWarning: {warning}"));
+    }
+    Ok(message)
 }
 
 fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
@@ -575,7 +616,7 @@ mod tests {
         assert!(!scene.is_2d && scene.formats == Format::SOLID && scene.stats.triangles > 0);
         assert_eq!(scene.solid.positions.len(), scene.solid.normals.len());
 
-        for (format, magic) in [(Format::Stl, &b"solid"[..]), (Format::ThreeMf, &b"PK\x03\x04"[..])] {
+        for (format, magic) in [(Format::Stl, &b"solid"[..]), (Format::ThreeMf, &b"PK\x03\x04"[..]), (Format::Glb, &b"glTF"[..])] {
             let (result, bytes) = export_with(&worker, format, false);
             assert!(result.is_ok(), "{result:?}");
             assert!(bytes.starts_with(magic), "{}", format.name());
@@ -589,12 +630,13 @@ mod tests {
     /// Exports the shown model in `format`: the reply, and the file written.
     /// Each call gets its own file, since tests run in parallel in one process.
     fn export_with(worker: &Worker, format: Format, binary_stl: bool) -> (Result<String, String>, Vec<u8>) {
+        let options = ExportOptions { binary_stl, ..ExportOptions::default() };
         static CALLS: AtomicU64 = AtomicU64::new(0);
         let call = CALLS.fetch_add(1, Ordering::Relaxed);
         let name = format!("code2form-test-{}-{call}.{}", std::process::id(), format.extension());
         let target = std::env::temp_dir().join(name);
         let _ = std::fs::remove_file(&target);
-        worker.export(target.clone(), format, binary_stl);
+        worker.export(target.clone(), format, options);
         let start = Instant::now();
         let result = loop {
             if let Some(Reply::Exported { result, .. }) = worker.poll().into_iter().next() {
@@ -626,6 +668,9 @@ mod tests {
         }
         let (result, bytes) = export_with(&worker, Format::Stl, true);
         assert_eq!(result, Err("the model is empty or 2D, so there is nothing to export as STL".to_string()));
+        assert!(bytes.is_empty());
+        let (result, bytes) = export_with(&worker, Format::Glb, false);
+        assert_eq!(result, Err("the model is 2D; glTF holds solids".to_string()));
         assert!(bytes.is_empty());
     }
 

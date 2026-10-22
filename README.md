@@ -28,6 +28,9 @@ they are. Written in Rust, it renders as you type.
 - **Export** of solids to STL and 3MF (in millimeters), checked with
   PrusaSlicer's own loader, and of 2D models to SVG and DXF, laid out as
   the reference implementation (release 2021.01) writes them.
+- **Game engines**: solids export to glTF 2.0 (`.glb`), which Godot 4
+  imports as it is and Unity through glTFast or UnityGLTF, with their
+  colors as materials (see [Game engines](#game-engines-gltf)).
 - **Print pauses**: `pause(z, message);` asks the 3D print to stop once it
   is done up to height `z`, before the layer that covers it, to drop
   magnets, nuts or weights into closed cavities. The 3MF carries the
@@ -70,8 +73,8 @@ they are. Written in Rust, it renders as you type.
   (`// @circuit grogu.c2fc`) gets `standoffs_for()`, `holes_for()`,
   `cutout_for()` and `circuit_part()`, which follow the circuit's parts,
   as `examples/grogu/grogu_plate.c2f` does.
-- **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
-  SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
+- **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, a
+  glTF, an SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
   checks a circuit, prints its wiring list and bill of materials, and
   exports its assembled parts (see the
@@ -102,7 +105,7 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 | `render` | The error that stops the model, with its file, line and column; the echo output and warnings; whether it is 3D or 2D, its triangles, volume (area in 2D) and bounding box |
 | `parameters` | The customizer parameters: name, group, description, default and widget |
 | `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report |
-| `export` | Writes a solid as STL or 3MF, or a 2D model as SVG or DXF, to `output`, in the `format` its extension gives |
+| `export` | Writes a solid as STL, 3MF or glTF (`.glb`, with `scale` in meters per unit), or a 2D model as SVG or DXF, to `output`, in the `format` its extension gives |
 
 For electronics, the agent finds parts and describes a circuit (`.c2fc`).
 The circuit tools take the circuit's text as `code` (its part files
@@ -132,6 +135,29 @@ no screen or GPU: the app's colors, lighting and framing, with outlines
 and creases drawn darker. A 2D model shows as the 1 mm slab the app
 draws, best seen from `top`.
 
+## Game engines (glTF)
+
+File > Export > glTF… (or `c2f glb design.c2f > design.glb`, or the MCP
+`export` tool) writes the model as a binary glTF 2.0 file, the open
+format Godot 4 imports as it is and Unity through the glTFast or
+UnityGLTF packages. The file passes the Khronos glTF-Validator.
+
+- **Size**: glTF counts in meters. By default a millimeter stays a
+  millimeter, so a 40 mm cube is 4 cm in the engine. Settings > Export >
+  glTF models (or `--scale 1`, the `scale` argument of the MCP tool)
+  makes each unit a meter instead, for levels and scenery modeled in
+  meters.
+- **Axes**: glTF has Y up where a design has Z up. The model is turned a
+  quarter turn about X: the design's Z is the engine's Y, and its Y the
+  engine's -Z, so the model stands as in the app.
+- **Colors**: each `color()` becomes a material (PBR, not metallic), and
+  a color with an alpha below 1 blends. The parts without `color()` take
+  the model color picked in the settings, as do the faces a
+  `difference()` cuts, which the preview shows in green.
+- **Shading**: normals are smoothed across the facets of a curved surface
+  and kept apart where faces meet at more than 35°, so a cylinder reads
+  round and a cube keeps its edges.
+
 ## Compatibility
 
 Code2Form opens `.scad` files. Its parser, evaluator and geometry are
@@ -157,6 +183,7 @@ Rust 1.85 or later.
 cargo run --release -p code2form -- design.c2f   # the desktop app
 cargo run --release -p c2f-cli -- stl design.c2f > design.stl
 cargo run --release -p c2f-cli -- 3mf design.c2f > design.3mf
+cargo run --release -p c2f-cli -- glb design.c2f > design.glb  # game engines
 cargo run --release -p c2f-cli -- svg plate.c2f > plate.svg     # 2D models
 cargo run --release -p c2f-cli -- dxf plate.c2f > plate.dxf
 cargo run --release -p c2f-cli -- circuit check examples/grogu/grogu.c2fc
@@ -184,7 +211,7 @@ names.
 |---|---|
 | `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, electronics annotations, AST dump |
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
-| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, SVG and DXF exports, PNG pictures |
+| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, glTF, SVG and DXF exports, PNG pictures |
 | `crates/circuit` (`c2f-circuit`) | Circuit files: parts placed in space and the wires between their pins |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |

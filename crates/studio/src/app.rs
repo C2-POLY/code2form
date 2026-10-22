@@ -28,7 +28,7 @@ use crate::recent::RecentFiles;
 use crate::tabs::{self, Owners, Session, Shelf};
 use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
-use crate::settings::{self, Placement, Settings};
+use crate::settings::{self, GLTF_SCALES, Placement, Settings};
 use crate::shortcuts::{self, Action, Shortcuts};
 use crate::theme::{self, Appearance};
 use crate::viewer::{self, PauseEdit, Viewer};
@@ -38,7 +38,7 @@ use crate::pick::{self, Hit};
 use crate::prefs::WireMargin;
 use crate::window;
 use crate::wiring::{self, Emphasis, Look, Wiring};
-use crate::worker::{Format, Reply, Worker, group_digits};
+use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
@@ -1582,7 +1582,7 @@ impl StudioApp {
             let why = match formats.first() {
                 None => "the model is empty".to_string(),
                 Some(other) if Format::FLAT.contains(other) => "the model is 2D; export it as SVG or DXF".to_string(),
-                Some(_) => "the model is 3D; export it as STL or 3MF".to_string(),
+                Some(_) => "the model is 3D; export it as STL, 3MF or glTF".to_string(),
             };
             self.doc.console.log(Level::Warning, format!("Nothing to export as {}: {why}", format.name()));
             return;
@@ -1609,7 +1609,9 @@ impl StudioApp {
             if self.exportable != Some(self.doc.id) {
                 self.render_now();
             }
-            self.worker.export(target, format, self.settings.binary_stl);
+            let [r, g, b] = self.settings.model_color.map(|c| f32::from(c) / 255.0);
+            let gltf = c2f_geom::GltfOptions { scale: self.settings.gltf_scale, color: [r, g, b], ..Default::default() };
+            self.worker.export(target, format, ExportOptions { binary_stl: self.settings.binary_stl, gltf });
         }
     }
 
@@ -1856,6 +1858,7 @@ impl StudioApp {
                         let entries = [
                             (Format::Stl, stl),
                             (Format::ThreeMf, "A 3MF package, in millimeters"),
+                            (Format::Glb, "A glTF model for game engines (Godot, Unity), with its colors"),
                             (Format::Svg, "An SVG drawing, in millimeters"),
                             (Format::Dxf, "A DXF drawing of line segments"),
                         ];
@@ -2924,6 +2927,10 @@ fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolde
     section_heading(ui, "STL files", "3D printers' slicers read both.");
     ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, as OpenSCAD writes it");
     ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
+    ui.add_space(14.0);
+    section_heading(ui, "glTF models", "For game engines: Godot, Unity. glTF counts in meters.");
+    ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[0], "Real size: a millimeter is a millimeter");
+    ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[1], "A unit is a meter: for levels and scenery");
     ui.add_space(14.0);
     section_heading(ui, "Export folder", "Where Export… opens.");
     let mut edit = None;

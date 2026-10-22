@@ -27,6 +27,10 @@ const INDENT_WIDTH: usize = 4;
 /// reference's yellow (`c2f_geom::DEFAULT_COLOR`).
 pub const MODEL_COLOR: [u8; 3] = [249, 215, 44];
 /// The window's smallest and largest content size, in points.
+/// The glTF scales offered: a model in millimeters at its size, or a unit
+/// to a meter.
+pub const GLTF_SCALES: [f64; 2] = [0.001, 1.0];
+
 pub const MIN_WINDOW: [f32; 2] = [760.0, 480.0];
 const MAX_WINDOW: f32 = 100_000.0;
 
@@ -51,6 +55,8 @@ pub struct Settings {
     pub binary_stl: bool,
     /// The folder Export… opens in; `None` for the design's own folder.
     pub export_folder: Option<PathBuf>,
+    /// Meters per model unit in glTF exports.
+    pub gltf_scale: f64,
     /// The color of the parts without `color()`.
     pub model_color: [u8; 3],
     /// The interface's zoom factor, which ⌘+ and ⌘− change too.
@@ -102,6 +108,7 @@ impl Default for Settings {
             layer_height: LAYER_HEIGHT,
             binary_stl: false,
             export_folder: None,
+            gltf_scale: GLTF_SCALES[0],
             model_color: MODEL_COLOR,
             interface_size: 1.0,
             indent_width: INDENT_WIDTH,
@@ -157,6 +164,7 @@ impl Settings {
                     set(&mut settings.binary_stl, ["ascii", "binary"].iter().position(|&f| f == value).map(|i| i == 1))
                 }
                 "export-folder" => set(&mut settings.export_folder, absolute_folder(value).map(Some)),
+                "gltf-scale" => set(&mut settings.gltf_scale, value.parse().ok().filter(|s| GLTF_SCALES.contains(s))),
                 "model-color" => set(&mut settings.model_color, hex_color(value)),
                 "interface-size" => {
                     set(&mut settings.interface_size, finite(value).map(|v| clamp(v, &INTERFACE_SIZES)))
@@ -193,6 +201,7 @@ impl Settings {
         if let Some(folder) = export_folder.filter(|f| !f.contains(['\n', '\r'])) {
             text.push_str(&format!("export-folder = {folder}\n"));
         }
+        text.push_str(&format!("gltf-scale = {}\n", self.gltf_scale));
         let [r, g, b] = self.model_color;
         text.push_str(&format!("model-color = #{r:02x}{g:02x}{b:02x}\n"));
         text.push_str(&format!("interface-size = {}\n", self.interface_size));
@@ -297,6 +306,7 @@ mod tests {
             layer_height: 0.12,
             binary_stl: true,
             export_folder: Some(absolute("exports")),
+            gltf_scale: 1.0,
             model_color: [0x12, 0xab, 0xef],
             interface_size: 1.2,
             indent_width: 2,
@@ -325,6 +335,8 @@ mod tests {
         assert_eq!(settings.layer_height, LAYER_HEIGHT);
         assert_eq!(settings.library_folders, [a]);
         assert!(settings.show_grid);
+        // Only the scales offered.
+        assert_eq!(Settings::parse("gltf-scale = 0.5\n").gltf_scale, 0.001);
     }
 
     #[test]
