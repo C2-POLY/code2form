@@ -1,6 +1,7 @@
-//! The app icon: three rounded squares, each smaller one turned a little
-//! further, on a dark tile, in one of ten tints the user picks in the
-//! settings. Graphite is the default and the icon the app bundle ships.
+//! The app icon: a tile and two rounded squares on it, each smaller one
+//! turned a little further, lit from above with the squares' shadows on
+//! the tile, in one of ten tints the user picks in the settings. Graphite
+//! is the default and the icon the app bundle ships.
 //!
 //! Drawn here rather than kept as pictures, so that the bundle's icon, the
 //! Dock and the settings all come from one drawing, at any size.
@@ -21,11 +22,10 @@ pub enum Tint {
     Pink,
 }
 
-/// The tile and the three squares, darkest to lightest.
+/// The tile and the two squares, darkest to lightest.
 struct Palette {
     tile: [u8; 3],
     outer: [u8; 3],
-    middle: [u8; 3],
     inner: [u8; 3],
 }
 
@@ -33,8 +33,8 @@ const fn hex(rgb: u32) -> [u8; 3] {
     [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
 }
 
-const fn palette(tile: u32, outer: u32, middle: u32, inner: u32) -> Palette {
-    Palette { tile: hex(tile), outer: hex(outer), middle: hex(middle), inner: hex(inner) }
+const fn palette(tile: u32, outer: u32, inner: u32) -> Palette {
+    Palette { tile: hex(tile), outer: hex(outer), inner: hex(inner) }
 }
 
 impl Tint {
@@ -88,16 +88,16 @@ impl Tint {
 
     fn palette(self) -> Palette {
         match self {
-            Tint::Graphite => palette(0x101113, 0x2b2e35, 0x8a909c, 0xe6e8ec),
-            Tint::Green => palette(0x07140d, 0x0f3d24, 0x22c55e, 0xa7f3c4),
-            Tint::Red => palette(0x1a0809, 0x5c1418, 0xef3b45, 0xffb3b8),
-            Tint::Orange => palette(0x1a0d05, 0x5c2a0e, 0xff7a1a, 0xffc79a),
-            Tint::Amber => palette(0x171204, 0x5a4108, 0xf5b800, 0xffe58a),
-            Tint::Teal => palette(0x041513, 0x0d4a44, 0x14b8a6, 0x9ef0e4),
-            Tint::Cyan => palette(0x04121a, 0x0b3d5c, 0x0ea5e9, 0xa5e4ff),
-            Tint::Indigo => palette(0x0c0b22, 0x26216e, 0x6366f1, 0xc4c6ff),
-            Tint::Violet => palette(0x120a1f, 0x3b1a6b, 0x9b5cf6, 0xdcc6ff),
-            Tint::Pink => palette(0x1a0712, 0x5e1440, 0xec4899, 0xffc1e0),
+            Tint::Graphite => palette(0x464952, 0x8a909c, 0xe6e8ec),
+            Tint::Green => palette(0x146334, 0x22c55e, 0xa7f3c4),
+            Tint::Red => palette(0x851f25, 0xef3b45, 0xffb3b8),
+            Tint::Orange => palette(0x8a4011, 0xff7a1a, 0xffc79a),
+            Tint::Amber => palette(0x856206, 0xf5b800, 0xffe58a),
+            Tint::Teal => palette(0x0f695f, 0x14b8a6, 0x9ef0e4),
+            Tint::Cyan => palette(0x0c5a83, 0x0ea5e9, 0xa5e4ff),
+            Tint::Indigo => palette(0x373493, 0x6366f1, 0xc4c6ff),
+            Tint::Violet => palette(0x562c92, 0x9b5cf6, 0xdcc6ff),
+            Tint::Pink => palette(0x862359, 0xec4899, 0xffc1e0),
         }
     }
 }
@@ -137,12 +137,23 @@ impl Image {
 /// The drawing, in a 1024-unit square, y down: the tile's corner radius,
 /// then each square's edge, corner radius and turn in degrees.
 const TILE_RADIUS: f32 = 230.0;
-const SQUARES: [(f32, f32, f32); 3] = [(720.0, 86.0, 0.0), (528.0, 64.0, 15.0), (336.0, 41.0, 30.0)];
+const SQUARES: [(f32, f32, f32); 2] = [(660.0, 80.0, 15.0), (420.0, 52.0, 30.0)];
+
+/// The light from above: how far each shape goes towards white at its top
+/// and towards black at its bottom, the tile first.
+const LIGHT: [(f32, f32); 3] = [(0.18, 0.30), (0.15, 0.12), (0.35, 0.06)];
+/// The white rim along the tile's top edge: its alpha and width.
+const RIM: (f32, f32) = (0.30, 10.0);
+/// The squares' shadows on what is under them: how far down, how soft
+/// and how dark.
+const SHADOW_DROP: f32 = 18.0;
+const SHADOW_BLUR: f32 = 34.0;
+const SHADOW_ALPHA: f32 = 0.45;
 
 /// Draws the icon `size` pixels square.
 pub fn render(tint: Tint, size: usize, layout: Layout) -> Image {
     let palette = tint.palette();
-    let colors = [palette.outer, palette.middle, palette.inner];
+    let colors = [palette.outer, palette.inner];
     // Design units per pixel, and where pixel (0, 0) falls in the design.
     let (scale, origin) = match layout {
         Layout::Full => (1024.0 / size as f32, 0.0),
@@ -155,10 +166,24 @@ pub fn render(tint: Tint, size: usize, layout: Layout) -> Image {
             let p = (origin + (x as f32 + 0.5) * scale, origin + (y as f32 + 0.5) * scale);
             // Premultiplied color and alpha, built up shape over shape.
             layer.fill(0.0);
-            let tile = coverage(rounded_square(p, 1024.0, TILE_RADIUS, 0.0), scale);
-            over(&mut layer, palette.tile, tile);
-            for (&(edge, radius, turn), color) in SQUARES.iter().zip(colors) {
-                over(&mut layer, color, coverage(rounded_square(p, edge, radius, turn), scale));
+            let tile_distance = rounded_square(p, 1024.0, TILE_RADIUS, 0.0);
+            let tile = coverage(tile_distance, scale);
+            if tile > 0.0 {
+                let (light, dark) = LIGHT[0];
+                over(&mut layer, lit(palette.tile, light, dark, p.1 / 1024.0), tile);
+                let rim = RIM.0 * top_rim(p, (1024.0, TILE_RADIUS, 0.0), tile_distance, RIM.1, scale);
+                over(&mut layer, [255; 3], rim);
+                for ((&square, color), &(light, dark)) in SQUARES.iter().zip(colors).zip(&LIGHT[1..]) {
+                    let (edge, radius, turn) = square;
+                    let shadow = rounded_square((p.0, p.1 - SHADOW_DROP), edge, radius, turn);
+                    let shadow = SHADOW_ALPHA * (1.0 - smoothstep(-SHADOW_BLUR, SHADOW_BLUR, shadow));
+                    over(&mut layer, [0; 3], shadow * tile);
+                    // The gradient spans a little more than the square, so
+                    // that its turned corners are not pure white or black.
+                    let top = 512.0 - edge * 0.6;
+                    let color = lit(color, light, dark, (p.1 - top) / (edge * 1.2));
+                    over(&mut layer, color, coverage(rounded_square(p, edge, radius, turn), scale));
+                }
             }
             let i = (y * size + x) * 4;
             for c in 0..4 {
@@ -167,6 +192,35 @@ pub fn render(tint: Tint, size: usize, layout: Layout) -> Image {
         }
     }
     Image { size, premultiplied }
+}
+
+/// `color` as the light from above leaves it `t` of the way down a shape,
+/// 0 at its top and 1 at its bottom: `light` of the way to white at the
+/// top, `dark` of the way to black at the bottom.
+fn lit(color: [u8; 3], light: f32, dark: f32, t: f32) -> [u8; 3] {
+    let t = t.clamp(0.0, 1.0);
+    color.map(|c| {
+        let c = c as f32;
+        let top = c + (255.0 - c) * light;
+        let bottom = c * (1.0 - dark);
+        (top + (bottom - top) * t).round() as u8
+    })
+}
+
+/// How much of a rim `width` units wide, inside a rounded square at
+/// signed distance `distance`, covers the pixel at `p`: all of it where
+/// the edge faces up, none where it faces down.
+fn top_rim(p: (f32, f32), (edge, radius, turn): (f32, f32, f32), distance: f32, width: f32, scale: f32) -> f32 {
+    let inside = coverage(distance, scale) * (1.0 - smoothstep(0.0, width, -distance));
+    // Where the edge faces up, the shape moved down is further away.
+    let below = rounded_square((p.0, p.1 + 4.0), edge, radius, turn);
+    inside * ((below - distance) / 4.0).clamp(0.0, 1.0)
+}
+
+/// 0 below `from`, 1 above `to`, and a smooth step between.
+fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
+    let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Paints `color` with alpha `a` over `dst`, all premultiplied, 0 to 1.
@@ -220,12 +274,31 @@ mod tests {
     fn draws_the_tile_and_the_center_square() {
         let image = render(Tint::Green, 64, Layout::Full);
         let palette = Tint::Green.palette();
-        // The tile, near a corner but inside its rounding.
-        assert_eq!(pixel(&image, 32, 2)[..3], palette.tile);
-        // The lightest square at the center.
-        assert_eq!(pixel(&image, 32, 32)[..3], palette.inner);
+        // The tile, near the top but under its rim, as lit there: pixel 2
+        // is design units 32 to 48.
+        let (light, dark) = LIGHT[0];
+        assert_eq!(pixel(&image, 32, 2)[..3], lit(palette.tile, light, dark, 40.0 / 1024.0));
+        // The lightest square at the center, 504 units of gradient from
+        // its top at 260.
+        let (light, dark) = LIGHT[2];
+        assert_eq!(pixel(&image, 32, 32)[..3], lit(palette.inner, light, dark, (520.0 - 260.0) / 504.0));
         // Outside the rounded corner.
         assert_eq!(pixel(&image, 0, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn lights_from_above() {
+        let image = render(Tint::Amber, 1024, Layout::Full);
+        let luma = |[r, g, b, _]: [u8; 4]| 2126 * r as u32 + 7152 * g as u32 + 722 * b as u32;
+        // The tile, and the outer square at its left corner, lighter at
+        // the top than at the bottom.
+        assert!(luma(pixel(&image, 512, 60)) > luma(pixel(&image, 512, 960)));
+        assert!(luma(pixel(&image, 300, 300)) > luma(pixel(&image, 300, 700)));
+        // The rim along the tile's top edge.
+        assert!(luma(pixel(&image, 512, 4)) > luma(pixel(&image, 512, 60)));
+        // The outer square's shadow, just below it, against the tile at
+        // the same height away from it.
+        assert!(luma(pixel(&image, 512, 866)) < luma(pixel(&image, 60, 866)));
     }
 
     #[test]
@@ -234,7 +307,11 @@ mod tests {
         // The margin is 100 of 1024.
         assert_eq!(pixel(&image, 512, 50)[3], 0);
         assert_eq!(pixel(&image, 512, 110)[3], 255);
-        assert_eq!(pixel(&image, 512, 512)[..3], Tint::Graphite.palette().inner);
+        // The center, 512 of the design, at 512 pixels as well.
+        let (light, dark) = LIGHT[2];
+        let palette = Tint::Graphite.palette();
+        let center = -100.0 * 1024.0 / 824.0 + 512.5 * 1024.0 / 824.0;
+        assert_eq!(pixel(&image, 512, 512)[..3], lit(palette.inner, light, dark, (center - 260.0) / 504.0));
     }
 
     #[test]
