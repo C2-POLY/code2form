@@ -9,7 +9,7 @@ use c2f_lang::annotations::{self, PortSize};
 use serde_json::{Value, json};
 
 use super::{IMAGE_SIZE, Tool, base64, pretty, schema_of, text, view_and_size};
-use crate::circuit::{assemble, bom, wires};
+use crate::circuit::{DEFAULT_MARGIN, assemble, bom, wires};
 
 /// The library folder parts are listed from.
 const ELECTRONICS: &str = "electronics";
@@ -81,7 +81,7 @@ pub fn tools() -> Vec<Value> {
             "name": "circuit_wires",
             "title": "Wiring list",
             "description": "The wires in the order to lay them: step, each pin and its label, color, label, and the length \
-                            of the curve drawn, in millimeters.",
+                            of wire to cut, in millimeters: the curve drawn plus 10 mm for the stripped ends.",
             "inputSchema": schema_of(circuit(), &[]),
         }),
         json!({
@@ -274,7 +274,7 @@ fn check_circuit(args: &Value) -> Result<Vec<Value>, String> {
 
 fn circuit_wires(args: &Value) -> Result<Vec<Value>, String> {
     let (circuit, _, _) = load(args)?;
-    Ok(vec![text(pretty(&json!({ "wires": objects(&wires(&circuit)) })))])
+    Ok(vec![text(pretty(&json!({ "wires": objects(&wires(&circuit, DEFAULT_MARGIN)) })))])
 }
 
 fn circuit_bom(args: &Value) -> Result<Vec<Value>, String> {

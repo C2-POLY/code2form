@@ -4,6 +4,9 @@
 //! Parts render on the worker, several at a time, and are kept by their
 //! file, parameters and text: a part used twice renders once, and an edit
 //! to the circuit re-renders only the parts it changed.
+//!
+//! The enclosure the circuit names shows around the parts, see-through,
+//! and a part that runs into it or into another part shows in red.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -11,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use c2f_circuit::{Circuit, Instance};
-use c2f_geom::{RenderMesh, Stats};
+use c2f_geom::{Model, RenderMesh, Stats};
 
 use crate::console::{Level, Line};
 use crate::worker::Scene;
@@ -141,7 +144,26 @@ pub struct PartRender {
     pub triangles: usize,
     /// Echo lines, warnings and errors, prefixed with the file's name.
     pub console: Vec<Line>,
+    /// The solid, for collisions.
+    pub model: Model,
 }
+
+impl PartRender {
+    /// A part that did not render: nothing to draw.
+    pub fn failed(console: Vec<Line>) -> Self {
+        PartRender {
+            solid: RenderMesh::default(),
+            highlights: RenderMesh::default(),
+            backgrounds: RenderMesh::default(),
+            triangles: 0,
+            console,
+            model: Model::Empty,
+        }
+    }
+}
+
+/// What renders an enclosure: its file, its text, and the circuit's text.
+type EnclosureKey = (PathBuf, String, String);
 
 /// What renders a part: its file, and its text with the parameters set.
 type Key = (PathBuf, String);
@@ -154,6 +176,7 @@ fn key(instance: &Instance) -> Key {
 #[derive(Default)]
 pub struct PartCache {
     parts: HashMap<Key, Arc<PartRender>>,
+    enclosure: Option<(EnclosureKey, Arc<PartRender>)>,
 }
 
 impl PartCache {
@@ -211,12 +234,96 @@ impl PartCache {
         self.parts.retain(|key, _| used.contains(key));
         keys.iter().map(|key| self.parts[key].clone()).collect()
     }
+
+    /// The enclosure of the circuit whose text is `source`, rendered by
+    /// `render` from its file's text when that or the circuit changed.
+    pub fn enclosure(
+        &mut self,
+        circuit: &Circuit,
+        source: &str,
+        render: impl FnOnce(&str, &Path) -> PartRender,
+    ) -> Option<Arc<PartRender>> {
+        let Some(path) = &circuit.enclosure else {
+            self.enclosure = None;
+            return None;
+        };
+        let text = match c2f_eval::read_source(path) {
+            Ok(text) => text,
+            Err(err) => {
+                let line = Line::new(Level::Error, format!("Cannot read the enclosure {}: {err}", path.display()));
+                return Some(Arc::new(PartRender::failed(vec![line])));
+            }
+        };
+        let key = (path.clone(), text, source.to_string());
+        match &self.enclosure {
+            Some((known, render)) if *known == key => Some(render.clone()),
+            _ => {
+                let rendered = Arc::new(render(&key.1, path));
+                self.enclosure = Some((key, rendered.clone()));
+                Some(rendered)
+            }
+        }
+    }
 }
+
+/// Two solids of a circuit that share some volume.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Collision {
+    /// A part, by index.
+    pub part: usize,
+    /// The other part, or `None` for the enclosure.
+    pub other: Option<usize>,
+    /// In cubic millimeters.
+    pub volume: f64,
+}
+
+/// Where the parts, placed, run into each other or into the enclosure.
+pub fn collisions(circuit: &Circuit, parts: &[Arc<PartRender>], enclosure: Option<&PartRender>) -> Vec<Collision> {
+    const IDENTITY: c2f_geom::Placement =
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut solids: Vec<(&Model, c2f_geom::Placement)> =
+        circuit.parts.iter().zip(parts).map(|(instance, part)| (&part.model, instance.matrix())).collect();
+    if let Some(enclosure) = enclosure {
+        solids.push((&enclosure.model, IDENTITY));
+    }
+    c2f_geom::collisions(&solids)
+        .into_iter()
+        .map(|(a, b, volume)| Collision { part: a, other: (b < circuit.parts.len()).then_some(b), volume })
+        .collect()
+}
+
+/// A console warning for each collision.
+pub fn collision_lines(circuit: &Circuit, collisions: &[Collision]) -> Vec<Line> {
+    collisions
+        .iter()
+        .map(|c| {
+            let name = |i: usize| format!("`{}`", circuit.parts[i].name);
+            let what = match c.other {
+                Some(other) => format!("{} and {} overlap", name(c.part), name(other)),
+                None => format!("{} runs into the enclosure", name(c.part)),
+            };
+            Line::new(Level::Warning, format!("Collision: {what} by {:.2} mm³", c.volume))
+        })
+        .collect()
+}
+
+/// A part that collides, as it shows.
+const COLLIDING: [f32; 4] = [0.95, 0.16, 0.14, 1.0];
+/// An uncolored enclosure, and how much of it shows through.
+const ENCLOSURE: [f32; 4] = [0.74, 0.80, 0.88, 1.0];
+const ENCLOSURE_ALPHA: f32 = 0.28;
 
 /// The scene of a circuit: its parts placed, and where each one's
 /// triangles are in the solid. The console gets each part file's lines
 /// once.
-pub fn scene(circuit: &Circuit, parts: &[Arc<PartRender>], source: &str, console: &mut Vec<Line>) -> Scene {
+pub fn scene(
+    circuit: &Circuit,
+    parts: &[Arc<PartRender>],
+    enclosure: Option<&PartRender>,
+    collisions: &[Collision],
+    source: &str,
+    console: &mut Vec<Line>,
+) -> Scene {
     let mut solid = RenderMesh::default();
     let mut highlights = RenderMesh::default();
     let mut backgrounds = RenderMesh::default();
@@ -227,6 +334,11 @@ pub fn scene(circuit: &Circuit, parts: &[Arc<PartRender>], source: &str, console
         let matrix = instance.matrix();
         let start = solid.positions.len();
         place(&mut solid, &part.solid, &matrix, Some(part_tint(instance, index)));
+        if collisions.iter().any(|c| c.part == index || c.other == Some(index)) {
+            for color in &mut solid.colors[start..] {
+                *color = std::array::from_fn(|i| color[i] * 0.3 + COLLIDING[i] * 0.7);
+            }
+        }
         ranges.push(start..solid.positions.len());
         place(&mut highlights, &part.highlights, &matrix, None);
         place(&mut backgrounds, &part.backgrounds, &matrix, None);
@@ -235,6 +347,19 @@ pub fn scene(circuit: &Circuit, parts: &[Arc<PartRender>], source: &str, console
             console.extend(part.console.iter().cloned());
         }
     }
+    let start = solid.positions.len();
+    if let Some(enclosure) = enclosure {
+        const IDENTITY: [[f64; 4]; 4] =
+            [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        place(&mut solid, &enclosure.solid, &IDENTITY, Some(ENCLOSURE));
+        for color in &mut solid.colors[start..] {
+            color[3] *= ENCLOSURE_ALPHA;
+        }
+        triangles += enclosure.triangles;
+        console.extend(enclosure.console.iter().cloned());
+    }
+    let enclosure_range = start..solid.positions.len();
+    console.extend(collision_lines(circuit, collisions));
     let vertices = solid.positions.len();
     Scene {
         solid,
@@ -247,6 +372,7 @@ pub fn scene(circuit: &Circuit, parts: &[Arc<PartRender>], source: &str, console
         pauses: Vec::new(),
         source: source.to_string(),
         parts: ranges,
+        enclosure: enclosure_range,
     }
 }
 
@@ -335,7 +461,7 @@ to = "b.B"
         assert_eq!(cache.len(), 3);
 
         let mut console = Vec::new();
-        let scene = scene(&circuit, &parts, CIRCUIT, &mut console);
+        let scene = scene(&circuit, &parts, None, &[], CIRCUIT, &mut console);
         assert_eq!(scene.parts.len(), 4);
         let bounds = |i: usize| {
             let r = scene.parts[i].clone();
@@ -367,6 +493,45 @@ to = "b.B"
         cache.update(&circuit, &[], render_counted(&count));
         assert_eq!((count.load(Ordering::Relaxed), cache.len()), (3, 2));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The collisions of Grogu, its circuit's text changed by `edit`, in
+    /// its plate.
+    fn grogu_collisions(edit: impl Fn(&str) -> String) -> (Circuit, Vec<Collision>) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grogu/grogu.c2fc");
+        let path = std::fs::canonicalize(path).unwrap();
+        let source = edit(&std::fs::read_to_string(&path).unwrap());
+        let libraries = c2f_eval::default_library_paths();
+        let circuit = c2f_circuit::parse(&source, &path, &libraries).unwrap_or_else(|e| panic!("{}", e[0].render()));
+        let mut cache = PartCache::default();
+        let parts = cache.update(&circuit, &libraries, crate::worker::render_part);
+        for part in &parts {
+            assert!(!part.console.iter().any(|l| l.level == Level::Error), "{:?}", part.console);
+        }
+        let enclosure = cache
+            .enclosure(&circuit, &source, |text, file| {
+                crate::worker::render_enclosure(text, file, &path, &circuit, &libraries)
+            })
+            .expect("Grogu has an enclosure");
+        assert!(enclosure.triangles > 0, "{:?}", enclosure.console);
+        let found = collisions(&circuit, &parts, Some(&enclosure));
+        (circuit, found)
+    }
+
+    #[test]
+    fn grogu_sits_in_its_plate_without_collisions() {
+        let (_, found) = grogu_collisions(str::to_string);
+        assert_eq!(found, []);
+    }
+
+    #[test]
+    fn a_part_moved_into_the_plate_collides() {
+        // The touch plate sunk 1 mm into the plate.
+        let (circuit, found) = grogu_collisions(|text| text.replace("at = [22, 0, 0]", "at = [22, 0, -1]"));
+        let touch = circuit.parts.iter().position(|p| p.name == "touch").unwrap();
+        assert!(found.iter().any(|c| c.part == touch && c.other.is_none() && c.volume > 1.0), "{found:?}");
+        let lines = collision_lines(&circuit, &found);
+        assert!(lines.iter().any(|l| l.level == Level::Warning && l.text.contains("`touch` runs into the enclosure")));
     }
 
     #[test]

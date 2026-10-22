@@ -15,10 +15,39 @@ use crate::Export;
 
 const COMMANDS: [&str; 5] = ["check", "wires", "bom", "stl", "3mf"];
 
-/// `c2f circuit <command> [--csv] <file.c2fc>`.
+/// What `c2f circuit wires` adds to each wire's routed length by default,
+/// in millimeters: two stripped ends of 5 mm, as the app does.
+pub const DEFAULT_MARGIN: f64 = 10.0;
+
+/// `c2f circuit <command> [--csv] [--margin <mm>] <file.c2fc>`.
 pub fn run(args: &[String]) -> ExitCode {
     let csv = args.iter().any(|arg| arg == "--csv");
-    let rest: Vec<&str> = args.iter().map(String::as_str).filter(|arg| *arg != "--csv").collect();
+    let mut margin = None;
+    let mut rest: Vec<&str> = Vec::new();
+    let mut args_left = args.iter().map(String::as_str);
+    while let Some(arg) = args_left.next() {
+        let value = match arg.strip_prefix("--margin") {
+            Some("") => args_left.next(),
+            Some(inline) if inline.starts_with('=') => Some(&inline[1..]),
+            _ => {
+                if arg != "--csv" {
+                    rest.push(arg);
+                }
+                continue;
+            }
+        };
+        match value.and_then(|v| v.parse::<f64>().ok()).filter(|mm| mm.is_finite() && *mm >= 0.0) {
+            Some(mm) => margin = Some(mm),
+            None => {
+                eprintln!("error: --margin takes a length in millimeters, 0 or more");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if margin.is_some() && rest.first() != Some(&"wires") {
+        eprintln!("error: --margin goes with `c2f circuit wires`");
+        return ExitCode::from(2);
+    }
     let [command, file] = rest[..] else {
         eprintln!("{}", crate::USAGE);
         return ExitCode::from(2);
@@ -47,7 +76,7 @@ pub fn run(args: &[String]) -> ExitCode {
     };
     match command {
         "wires" => {
-            let rows = wires(&circuit);
+            let rows = wires(&circuit, margin.unwrap_or(DEFAULT_MARGIN));
             print!("{}", if csv { csv_table(&rows) } else { wires_text(&rows) });
             ExitCode::SUCCESS
         }
@@ -108,8 +137,14 @@ fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
     for finding in &findings {
         eprint!("{}", finding.render(src, path));
     }
+    // Collisions need every part: a part that failed is reported already.
+    let collisions = if assembly.errors.is_empty() { collisions(circuit, &assembly) } else { Vec::new() };
+    for collision in &collisions {
+        eprintln!("WARNING: {collision}");
+    }
     let count = |severity| findings.iter().filter(|f| f.severity == severity).count();
-    let (errors, warnings) = (assembly.errors.len() + count(Severity::Error), count(Severity::Warning));
+    let errors = assembly.errors.len() + count(Severity::Error);
+    let warnings = count(Severity::Warning) + collisions.len();
     let mut summary = format!("{}: {}, {}: ", path.display(), plural(circuit.parts.len(), "part"), plural(circuit.wires.len(), "wire"));
     summary += &match errors {
         0 => "no errors".to_string(),
@@ -124,6 +159,38 @@ fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
     }
     println!("{summary}");
     ExitCode::SUCCESS
+}
+
+/// Where the parts run into each other or into the enclosure, one line
+/// each: `` `touch` runs into the enclosure by 120.00 mm³ ``.
+fn collisions(circuit: &Circuit, assembly: &Assembly) -> Vec<String> {
+    const IDENTITY: c2f_geom::Placement =
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    // Each part's nodes are placed already.
+    let mut models: Vec<c2f_geom::Model> =
+        assembly.nodes.iter().map(|node| c2f_geom::render(std::slice::from_ref(node)).model).collect();
+    if let Some(enclosure) = &circuit.enclosure {
+        let library_paths = c2f_eval::default_library_paths();
+        let program = c2f_eval::read_source(enclosure)
+            .ok()
+            .and_then(|src| c2f_eval::Program::load(&src, enclosure, &library_paths).ok());
+        match program {
+            Some(program) => {
+                let output = c2f_eval::evaluate(&program);
+                models.push(c2f_geom::render_in(&output.nodes, enclosure.parent().unwrap_or(Path::new(""))).model);
+            }
+            None => return vec![format!("collisions: cannot load the enclosure {}", enclosure.display())],
+        }
+    }
+    let solids: Vec<_> = models.iter().map(|model| (model, IDENTITY)).collect();
+    let name = |i: usize| format!("`{}`", circuit.parts[i].name);
+    c2f_geom::collisions(&solids)
+        .into_iter()
+        .map(|(a, b, volume)| match b < circuit.parts.len() {
+            true => format!("collision: {} and {} overlap by {volume:.2} mm³", name(a), name(b)),
+            false => format!("collision: {} runs into the enclosure by {volume:.2} mm³", name(a)),
+        })
+        .collect()
 }
 
 pub fn plural(n: usize, word: &str) -> String {
@@ -236,8 +303,8 @@ fn rebase(node: &mut Node, dir: &Path) {
 
 /// The wiring list, a header and a row per wire in the order they are
 /// laid: step, each end and its pin's label, color, label, and the length
-/// of the curve the views draw.
-pub fn wires(circuit: &Circuit) -> Vec<Vec<String>> {
+/// to cut: the curve the views draw, plus `margin` millimeters.
+pub fn wires(circuit: &Circuit, margin: f64) -> Vec<Vec<String>> {
     let header = ["step", "from", "from_label", "to", "to_label", "color", "label", "length_mm"];
     let mut rows = vec![header.map(String::from).to_vec()];
     for (i, (wire, path)) in circuit.wires.iter().zip(route::paths(circuit)).enumerate() {
@@ -250,7 +317,7 @@ pub fn wires(circuit: &Circuit) -> Vec<Vec<String>> {
             label(wire.to),
             wire.color.clone().unwrap_or_default(),
             wire.label.clone().unwrap_or_default(),
-            format!("{:.1}", route::length_of(&path)),
+            format!("{:.1}", route::length_of(&path) + margin),
         ]);
     }
     rows

@@ -7,7 +7,7 @@ mod mcp;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
-       c2f circuit <command> [--csv] <file.c2fc>
+       c2f circuit <command> [--csv] [--margin <mm>] <file.c2fc>
        c2f mcp
 
 commands:
@@ -29,15 +29,19 @@ circuit commands, on a `.c2fc` circuit:
           errors (a supply above what a pin takes, supplies tied
           together or to ground, a supply or ground left open, a
           wired nc pin) fail it; warnings (no common ground, a wired
-          reserved pin, two outputs on a net) do not
+          reserved pin, two outputs on a net, parts that run into
+          each other or into the enclosure) do not
   wires   print the wiring list in the order to lay the wires: step,
-          from pin to pin (with their labels), color, length and label
+          from pin to pin (with their labels), color, length and label;
+          the length is the routed curve's plus a margin
   bom     print the bill of materials: the parts by file and params,
           their quantity and the instances' names
   stl     the parts, placed and evaluated with their params, as one
           ASCII STL (wires are not exported)
   3mf     the same, as a 3MF package (binary: redirect it to a file)
   --csv   wires and bom as comma-separated values
+  --margin <mm>  added to each wire's length (default 10: two stripped
+          ends of 5 mm)
 
 options:
   -D name=value   sets a variable, as if assigned at the end of the file
