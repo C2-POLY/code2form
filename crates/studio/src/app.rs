@@ -53,6 +53,8 @@ const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S)
 const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::S);
 const RENDER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F5);
 const EXPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F7);
+const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::Z);
 const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
 const FIND_REPLACE: KeyboardShortcut = KeyboardShortcut::new(Modifiers { alt: true, ..Modifiers::COMMAND }, Key::F);
 const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
@@ -1593,6 +1595,16 @@ impl StudioApp {
         }
         if previous || next {
             self.doc.editor.find(FindRequest::Step { forward: next });
+        }
+
+        // Cmd+Z in the editor or a text field is theirs. Elsewhere, as after
+        // an edit made in the 3D view, it undoes the file's last edit.
+        if ctx.memory(|m| m.focused().is_none()) {
+            // Shift+Cmd+Z first: Cmd+Z also matches it.
+            let [redo, undo] = ctx.input_mut(|i| [REDO, UNDO].map(|s| i.consume_shortcut(&s)));
+            if (undo || redo) && self.editor.undo_step(ctx, &mut self.text, undo) {
+                self.render_now();
+            }
         }
 
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());

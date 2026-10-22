@@ -438,6 +438,24 @@ impl Editor {
         self.edit(ctx, text, new_text, CCursorRange::one(CCursor::new(cursor)));
     }
 
+    /// Undoes (`back`) or redoes one step of the editor's history from
+    /// outside the editor, as Cmd+Z does in it: for the edits made in the
+    /// 3D view while the editor has no focus. Returns whether the text
+    /// changed.
+    pub fn undo_step(&self, ctx: &egui::Context, text: &mut String, back: bool) -> bool {
+        let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();
+        let current = (state.cursor.char_range().unwrap_or_default(), text.clone());
+        let mut undoer = state.undoer();
+        let found = if back { undoer.undo(&current) } else { undoer.redo(&current) }.cloned();
+        let Some((selection, previous)) = found else { return false };
+        let changed = previous != *text;
+        *text = previous;
+        state.set_undoer(undoer);
+        state.cursor.set_char_range(Some(selection));
+        state.store(ctx, self.id);
+        changed
+    }
+
     /// Replaces the text as one step of the editor's undo history.
     fn edit(&self, ctx: &egui::Context, text: &mut String, new_text: String, selection: CCursorRange) {
         let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();
@@ -833,6 +851,24 @@ mod tests {
         assert_eq!(editor.find.query, "a");
         assert!(editor.find.replace);
         assert_eq!(count(&editor), "2 of 3", "starts at the selection");
+    }
+
+    #[test]
+    fn edits_from_the_view_undo_and_redo_without_the_editor() {
+        let ctx = egui::Context::default();
+        let mut editor = Editor::new();
+        let mut text = "at = [0, 0, 0]".to_string();
+        frame(&ctx, &mut editor, &mut text, vec![]);
+        editor.replace_text(&ctx, &mut text, "at = [5, 0, 0]".into(), 0);
+        editor.replace_text(&ctx, &mut text, "at = [5, 7, 0]".into(), 0);
+        assert!(!ctx.memory(|m| m.has_focus(editor.id)));
+        assert!(editor.undo_step(&ctx, &mut text, true));
+        assert_eq!(text, "at = [5, 0, 0]");
+        assert!(editor.undo_step(&ctx, &mut text, true));
+        assert_eq!(text, "at = [0, 0, 0]");
+        assert!(!editor.undo_step(&ctx, &mut text, true), "nothing older");
+        assert!(editor.undo_step(&ctx, &mut text, false));
+        assert_eq!(text, "at = [5, 0, 0]");
     }
 
     #[test]
