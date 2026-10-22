@@ -248,7 +248,6 @@ impl PartCache {
     pub fn enclosure(
         &mut self,
         circuit: &Circuit,
-        source: &str,
         render: impl FnOnce(&str, &Path) -> PartRender,
     ) -> Option<Arc<PartRender>> {
         let Some(path) = &circuit.enclosure else {
@@ -262,12 +261,15 @@ impl PartCache {
                 return Some(Arc::new(PartRender::failed(vec![line])));
             }
         };
-        let mut inputs = source.to_string();
+        // What the enclosure reads of the circuit: its parts, their files,
+        // parameters and places. Not the wires: a wire's edit leaves it be.
+        let mut inputs = String::new();
         for part in &circuit.parts {
-            inputs.push('\0');
-            inputs.push_str(&part.path.to_string_lossy());
-            inputs.push('\0');
-            inputs.push_str(&part.source_with_params());
+            for field in [&part.name, &part.path.to_string_lossy().into_owned(), &part.source_with_params()] {
+                inputs.push_str(field);
+                inputs.push('\0');
+            }
+            inputs.push_str(&format!("{:?}\0", part.matrix()));
         }
         let key = (path.clone(), text, inputs);
         match &self.enclosure {
@@ -554,7 +556,7 @@ to = "b.B"
             assert!(!part.console.iter().any(|l| l.level == Level::Error), "{:?}", part.console);
         }
         let enclosure = cache
-            .enclosure(&circuit, &source, |text, file| {
+            .enclosure(&circuit, |text, file| {
                 crate::worker::render_enclosure(text, file, &path, &circuit, &libraries)
             })
             .expect("Grogu has an enclosure");
@@ -593,14 +595,14 @@ to = "b.B"
             renders.fetch_add(1, Ordering::Relaxed);
             crate::worker::render_enclosure(text, file, &path, &circuit, &[])
         };
-        let enclosure = cache.enclosure(&circuit, &source, render).unwrap();
+        let enclosure = cache.enclosure(&circuit, render).unwrap();
         let found = cache.collisions(&circuit, &parts, Some(&enclosure));
         // Every board sinks 0.5 mm into the box; d sits in a, which
         // overlaps b turned onto it.
         assert!(found.iter().filter(|c| c.other.is_none()).count() >= 3, "{found:?}");
         // The same parts again: neither the enclosure nor the collisions
         // run again.
-        let again = cache.enclosure(&circuit, &source, |t, f| crate::worker::render_enclosure(t, f, &path, &circuit, &[]));
+        let again = cache.enclosure(&circuit, |t, f| crate::worker::render_enclosure(t, f, &path, &circuit, &[]));
         assert!(Arc::ptr_eq(&again.unwrap(), &enclosure));
         assert_eq!(cache.collisions(&circuit, &parts, Some(&enclosure)), found);
         assert_eq!((renders.load(Ordering::Relaxed), cache.collision_runs), (1, 1));
@@ -609,10 +611,16 @@ to = "b.B"
         std::fs::write(dir.join("plain.c2f"), "// @pin X [0, 0, 0] -z\ncube(3);\n").unwrap();
         let circuit = c2f_circuit::parse(&source, &path, &[]).unwrap();
         let parts = cache.update(&circuit, &[], crate::worker::render_part);
-        let changed = cache.enclosure(&circuit, &source, |t, f| crate::worker::render_enclosure(t, f, &path, &circuit, &[]));
+        let changed = cache.enclosure(&circuit, |t, f| crate::worker::render_enclosure(t, f, &path, &circuit, &[]));
         assert!(!Arc::ptr_eq(&changed.clone().unwrap(), &enclosure));
         cache.collisions(&circuit, &parts, changed.as_ref());
         assert_eq!(cache.collision_runs, 2);
+
+        // A wire's color changed: the enclosure stays as it is.
+        let recolored = format!("{source}\n[[wires]]\nfrom = \"a.A\"\nto = \"b.B\"\ncolor = \"red\"\n");
+        let circuit = c2f_circuit::parse(&recolored, &path, &[]).unwrap();
+        let kept = cache.enclosure(&circuit, |_, _| panic!("the enclosure rendered again for a wire"));
+        assert!(Arc::ptr_eq(&kept.unwrap(), &changed.unwrap()));
         let _ = std::fs::remove_dir_all(dir);
     }
 

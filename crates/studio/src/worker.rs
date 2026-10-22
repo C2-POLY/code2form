@@ -327,7 +327,7 @@ fn render_circuit(
                 .find(|f| f.severity == c2f_circuit::check::Severity::Error)
                 .map(|f| lines.line(f.span.start as usize));
             let rendered = parts.update(&found, library_paths, render_part);
-            let enclosure = parts.enclosure(&found, source, |text, enclosure_path| {
+            let enclosure = parts.enclosure(&found, |text, enclosure_path| {
                 render_enclosure(text, enclosure_path, path, &found, library_paths)
             });
             let collisions = parts.collisions(&found, &rendered, enclosure.as_ref());
