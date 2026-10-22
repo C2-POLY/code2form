@@ -250,3 +250,25 @@ fn the_schema_lists_the_fields_the_reader_takes() {
     assert_eq!(keys(&schema["$defs"]["part"]), ["at", "color", "params", "part", "rotate"]);
     assert_eq!(keys(&schema["$defs"]["wire"]), ["color", "from", "label", "to"]);
 }
+
+#[test]
+fn wires_run_from_pin_to_pin_and_stay_apart() {
+    let circuit = grogu();
+    let paths = c2f_circuit::route::paths(&circuit);
+    for (wire, path) in circuit.wires.iter().zip(&paths) {
+        assert!(close(path[0], circuit.place(wire.from).position));
+        assert!(close(*path.last().unwrap(), circuit.place(wire.to).position));
+        // Each wire first leaves its pin the way the pin points.
+        let start = circuit.place(wire.from);
+        let step = [0, 1, 2].map(|k| path[1][k] - path[0][k]);
+        assert!(step.iter().zip(start.direction).map(|(s, d)| s * d).sum::<f64>() > 0.0);
+        assert!(c2f_circuit::route::length_of(path) >= 0.0);
+    }
+    // xiao.GND starts two wires: their middles are apart.
+    let gnd: Vec<usize> =
+        (0..circuit.wires.len()).filter(|&i| circuit.end_name(circuit.wires[i].from) == "xiao.GND").collect();
+    assert_eq!(gnd.len(), 2);
+    let (a, b) = (paths[gnd[0]][12], paths[gnd[1]][12]);
+    let apart = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+    assert!(apart > 1.0, "{apart}");
+}
