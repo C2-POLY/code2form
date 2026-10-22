@@ -25,6 +25,8 @@ pub struct Editor {
     pub cursor: Option<(usize, usize)>,
     /// The selection as last shown, to start a search from.
     selection: Option<CCursorRange>,
+    /// A byte offset to scroll into view once laid out.
+    reveal_at: Option<usize>,
     find: FindBar,
 }
 
@@ -100,14 +102,22 @@ enum Indent {
 }
 
 impl Editor {
+    #[cfg(test)]
     pub fn new() -> Self {
+        Editor::for_tab(0)
+    }
+
+    /// The editor of tab `tab`: each keeps its own cursor, scroll and undo
+    /// history, which egui stores under the editor's id.
+    pub fn for_tab(tab: u64) -> Self {
         Editor {
-            id: Id::new("c2f-editor"),
+            id: Id::new(("c2f-editor", tab)),
             indent_width: 4,
             highlighter: Highlighter::default(),
             error_line: None,
             cursor: None,
             selection: None,
+            reveal_at: None,
             find: FindBar::default(),
         }
     }
@@ -117,9 +127,20 @@ impl Editor {
         self.find.requests.push(request);
     }
 
+    /// Highlights the text as a circuit file, or as code.
+    pub fn set_circuit(&mut self, circuit: bool) {
+        self.highlighter.hash_comments = circuit;
+    }
+
     /// Gives the editor keyboard focus.
     pub fn focus(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(self.id));
+    }
+
+    /// Drops what egui keeps of the editor, its undo history first, once
+    /// its tab is closed.
+    pub fn forget(&self, ctx: &egui::Context) {
+        ctx.data_mut(|d| d.remove::<egui::text_edit::TextEditState>(self.id));
     }
 
     /// Shows the editor filling `ui`; returns whether the text changed.
@@ -142,7 +163,7 @@ impl Editor {
         };
 
         let mut changed = self.find_bar(ui, text);
-        egui::ScrollArea::vertical().id_salt("editor-scroll").auto_shrink(false).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(self.id.with("scroll")).auto_shrink(false).show(ui, |ui| {
             let line_count = text.bytes().filter(|&b| b == b'\n').count() + 1;
             let digits = line_count.to_string().len().max(3);
             let digit_width = ui.fonts(|f| f.glyph_width(&font, '0'));
@@ -190,6 +211,10 @@ impl Editor {
                     ui.ctx().request_repaint();
                 }
 
+                if let Some(offset) = self.reveal_at.take() {
+                    let at = output.galley.pos_from_cursor(CCursor::new(char_index(text, offset.min(text.len()))));
+                    ui.scroll_to_rect(at.translate(output.galley_pos.to_vec2()), Some(Align::Center));
+                }
                 if std::mem::take(&mut self.find.scroll) {
                     if let Some(m) = self.find.current_match() {
                         let start = output.galley.pos_from_cursor(CCursor::new(char_index(text, m.start)));
@@ -414,6 +439,24 @@ impl Editor {
         self.edit(ctx, text, new_text, CCursorRange::one(CCursor::new(cursor)));
     }
 
+    /// Undoes (`back`) or redoes one step of the editor's history from
+    /// outside the editor, as Cmd+Z does in it: for the edits made in the
+    /// 3D view while the editor has no focus. Returns whether the text
+    /// changed.
+    pub fn undo_step(&self, ctx: &egui::Context, text: &mut String, back: bool) -> bool {
+        let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();
+        let current = (state.cursor.char_range().unwrap_or_default(), text.clone());
+        let mut undoer = state.undoer();
+        let found = if back { undoer.undo(&current) } else { undoer.redo(&current) }.cloned();
+        let Some((selection, previous)) = found else { return false };
+        let changed = previous != *text;
+        *text = previous;
+        state.set_undoer(undoer);
+        state.cursor.set_char_range(Some(selection));
+        state.store(ctx, self.id);
+        changed
+    }
+
     /// Replaces the text as one step of the editor's undo history.
     fn edit(&self, ctx: &egui::Context, text: &mut String, new_text: String, selection: CCursorRange) {
         let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();
@@ -428,6 +471,16 @@ impl Editor {
         state.set_undoer(undoer);
         state.cursor.set_char_range(Some(selection));
         state.store(ctx, self.id);
+    }
+
+    /// Puts the cursor at the start of the line holding byte `offset` of
+    /// `text`, and scrolls it into view.
+    pub fn go_to(&mut self, ctx: &egui::Context, text: &str, offset: usize) {
+        let line_start = line_start(text, offset);
+        let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(char_index(text, line_start)))));
+        state.store(ctx, self.id);
+        self.reveal_at = Some(line_start);
     }
 
     /// Selects the current match in the editor and scrolls to it.
@@ -517,6 +570,17 @@ fn byte_index(text: &str, char_index: usize) -> usize {
 }
 
 /// The character index of a byte offset on a character boundary.
+/// The start of the line holding byte `offset` of `text`, wherever the
+/// offset falls: past the end, or inside a character (it may come from an
+/// older text).
+fn line_start(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    text[..offset].rfind('\n').map_or(0, |i| i + 1)
+}
+
 fn char_index(text: &str, byte: usize) -> usize {
     text.get(..byte).map_or_else(|| text.chars().count(), |before| before.chars().count())
 }
@@ -807,6 +871,24 @@ mod tests {
     }
 
     #[test]
+    fn edits_from_the_view_undo_and_redo_without_the_editor() {
+        let ctx = egui::Context::default();
+        let mut editor = Editor::new();
+        let mut text = "at = [0, 0, 0]".to_string();
+        frame(&ctx, &mut editor, &mut text, vec![]);
+        editor.replace_text(&ctx, &mut text, "at = [5, 0, 0]".into(), 0);
+        editor.replace_text(&ctx, &mut text, "at = [5, 7, 0]".into(), 0);
+        assert!(!ctx.memory(|m| m.has_focus(editor.id)));
+        assert!(editor.undo_step(&ctx, &mut text, true));
+        assert_eq!(text, "at = [5, 0, 0]");
+        assert!(editor.undo_step(&ctx, &mut text, true));
+        assert_eq!(text, "at = [0, 0, 0]");
+        assert!(!editor.undo_step(&ctx, &mut text, true), "nothing older");
+        assert!(editor.undo_step(&ctx, &mut text, false));
+        assert_eq!(text, "at = [5, 0, 0]");
+    }
+
+    #[test]
     fn replace_and_replace_all_undo_in_one_step() {
         let ctx = egui::Context::default();
         let mut editor = Editor::new();
@@ -884,5 +966,17 @@ mod tests {
     fn lines_and_columns() {
         assert_eq!(line_and_column("ab\nécd", 5), (1, 2));
         assert_eq!(line_and_column("", 0), (0, 0));
+    }
+
+    #[test]
+    fn go_to_takes_any_offset() {
+        let text = "a\néé\nb";
+        assert_eq!(line_start(text, 3), 2);
+        // Inside `é`, and past the end.
+        assert_eq!(line_start(text, 4), 2);
+        assert_eq!(line_start(text, 99), 7);
+        let mut editor = Editor::new();
+        editor.go_to(&egui::Context::default(), text, 3);
+        assert_eq!(editor.reveal_at, Some(2));
     }
 }

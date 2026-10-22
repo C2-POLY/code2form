@@ -4,7 +4,7 @@
 
 use c2f_lang::ast::Stmt;
 
-use crate::color;
+use crate::{color, enclosure};
 use crate::env::{self, Env, Frame};
 use crate::interp::{ArgValue, EResult, Interp};
 use crate::math::{cos_degrees, sin_degrees};
@@ -12,7 +12,7 @@ use crate::node::*;
 use crate::value::Value;
 
 /// Bound arguments of a builtin call.
-struct Params<'p> {
+pub(crate) struct Params<'p> {
     values: Vec<(&'static str, Value<'p>)>,
     /// Holds the call's `$` arguments; children and `$fn` lookups use it.
     frame: Env<'p>,
@@ -54,11 +54,11 @@ impl<'p> Params<'p> {
         Params { values, frame }
     }
 
-    fn get(&self, name: &str) -> Value<'p> {
+    pub(crate) fn get(&self, name: &str) -> Value<'p> {
         self.values.iter().find(|(n, _)| *n == name).map_or(Value::Undef, |(_, v)| v.clone())
     }
 
-    fn number(&self, name: &str) -> Option<f64> {
+    pub(crate) fn number(&self, name: &str) -> Option<f64> {
         self.get(name).as_number()
     }
 
@@ -74,7 +74,7 @@ impl<'p> Params<'p> {
 
     /// `$fn`, `$fa`, `$fs` as seen by this call. Only circles, spheres and
     /// cylinders clamp `$fa` and `$fs` to 0.01; other nodes keep them as is.
-    fn segments(&self, clamp: bool) -> Segments {
+    pub(crate) fn segments(&self, clamp: bool) -> Segments {
         let special = |name: &str| env::lookup(&self.frame, name).and_then(|v| v.as_number()).unwrap_or(0.0);
         // Only values below the floor are raised: NaN stays NaN.
         let floor = |v: f64| if clamp && v < 0.01 { 0.01 } else { v };
@@ -243,6 +243,24 @@ pub fn instantiate<'p>(
                 None => interp.warn(format!("Ignoring pause(): z = {} is not a height", p.get("z").repr())),
             }
             Ok(Some(None))
+        }
+        // Not in the reference: an enclosure's standoffs, screw holes and
+        // cutouts, and the parts themselves, from the circuit it names.
+        "standoffs_for" => {
+            let p = bind!(["part", "height"], ["d", "hole", "screw"]);
+            Ok(Some(enclosure::standoffs(interp, &p)))
+        }
+        "holes_for" => {
+            let p = bind!(["part", "depth"], ["hole", "screw"]);
+            Ok(Some(enclosure::screw_holes(interp, &p)))
+        }
+        "cutout_for" => {
+            let p = bind!(["part", "port"], ["clearance", "depth"]);
+            Ok(Some(enclosure::cutout(interp, &p)))
+        }
+        "circuit_part" => {
+            let p = bind!(["part"]);
+            Ok(Some(enclosure::part(interp, &p)))
         }
         "text" => {
             let p = bind!(["text", "size", "font"], ["halign", "valign", "spacing", "direction", "language", "script"]);

@@ -90,6 +90,11 @@ struct Ctx {
     cut: bool,
 }
 
+/// Whether neither `node` nor any node under it is marked `#` or `%`.
+fn unmarked(node: &Node) -> bool {
+    !node.highlight && !node.background && node.children.iter().all(unmarked)
+}
+
 impl Ctx {
     fn paint(&self) -> [f32; 4] {
         self.color.unwrap_or(if self.cut { CUT_COLOR } else { DEFAULT_COLOR })
@@ -103,6 +108,11 @@ struct Builder {
     backgrounds: Vec<Model>,
     /// Where data files named by relative paths are.
     base_dir: PathBuf,
+    /// The `projection()`s built so far: a design that outlines the same
+    /// solid twice, as a fence around a part does, builds it once. Their
+    /// outlines carry no color, so the context they are built in does not
+    /// matter.
+    projections: Vec<(Node, Model)>,
 }
 
 impl Builder {
@@ -268,11 +278,23 @@ impl Builder {
                 colored(m, ctx)
             }
             NodeKind::Projection { cut, .. } => {
+                // Marked children add to the highlights and backgrounds as
+                // they are built, so only unmarked ones are reused.
+                let reusable = unmarked(node);
+                if reusable {
+                    if let Some((_, model)) = self.projections.iter().find(|(n, _)| n == node) {
+                        return model.clone();
+                    }
+                }
                 let parts = self.children(node, ctx);
-                match self.union(parts) {
+                let model = match self.union(parts) {
                     Model::Solid(m) => Model::Flat(if *cut { m.slice(0.0) } else { m.project() }),
                     other => other,
+                };
+                if reusable {
+                    self.projections.push((node.clone(), model.clone()));
                 }
+                model
             }
             NodeKind::Resize { size, auto, .. } => {
                 let parts = self.children(node, ctx);

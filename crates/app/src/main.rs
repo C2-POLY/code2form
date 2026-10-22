@@ -2,10 +2,12 @@ use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+mod circuit;
 mod mcp;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
+       c2f circuit <command> [--csv] [--margin <mm>] <file.c2fc>
        c2f mcp
 
 commands:
@@ -16,8 +18,30 @@ commands:
   3mf     the same, as a 3MF package (binary: redirect it to a file)
   svg     evaluate, build the 2D geometry and print it as an SVG
   dxf     the same, as a DXF drawing
-  check   parse only and report syntax errors
+  check   parse only and report syntax errors and badly written
+          electronics annotations
+  pins    print the pins, mount holes and ports a part declares
+          (`// @pin`, `// @mount_hole`, `// @port`), one per line
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout
+
+circuit commands, on a `.c2fc` circuit:
+  check   read the circuit, evaluate its parts and check its wiring:
+          errors (a supply above what a pin takes, supplies tied
+          together or to ground, a supply or ground left open, a
+          wired nc pin) fail it; warnings (no common ground, a wired
+          reserved pin, two outputs on a net, parts that run into
+          each other or into the enclosure) do not
+  wires   print the wiring list in the order to lay the wires: step,
+          from pin to pin (with their labels), color, length and label;
+          the length is the routed curve's plus a margin
+  bom     print the bill of materials: the parts by file and params,
+          their quantity and the instances' names
+  stl     the parts, placed and evaluated with their params, as one
+          ASCII STL (wires are not exported)
+  3mf     the same, as a 3MF package (binary: redirect it to a file)
+  --csv   wires and bom as comma-separated values
+  --margin <mm>  added to each wire's length (default 10: two stripped
+          ends of 5 mm)
 
 options:
   -D name=value   sets a variable, as if assigned at the end of the file
@@ -81,11 +105,14 @@ fn run() -> ExitCode {
     if args == ["mcp"] {
         return mcp::serve();
     }
+    if args.first().is_some_and(|arg| arg == "circuit") {
+        return circuit::run(&args[1..]);
+    }
     let Some(options) = Options::parse(&args) else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "csg", "stl", "3mf", "svg", "dxf"].contains(&options.command.as_str()) {
+    if !["ast", "check", "pins", "csg", "stl", "3mf", "svg", "dxf"].contains(&options.command.as_str()) {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
         return ExitCode::from(2);
     }
@@ -101,6 +128,9 @@ fn run() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if options.command == "pins" {
+        return pins(&src, &options.path);
+    }
     // Appended to the file after an end-of-text character, which the
     // lexer skips, as the reference implementation does.
     if !options.defines.is_empty() {
@@ -128,10 +158,41 @@ fn run() -> ExitCode {
             print!("{}", c2f_lang::dump::ast_dump(&program.files[0].ast, &src));
             ExitCode::SUCCESS
         }
-        "check" => ExitCode::SUCCESS,
+        "check" => match annotation_errors(&src, &options.path) {
+            0 => ExitCode::SUCCESS,
+            _ => ExitCode::FAILURE,
+        },
         // `csg`, or an export format.
         command => csg(&program, Export::named(command)),
     }
+}
+
+/// Prints the annotations of a part in source order, each after its line
+/// number, as `12: @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`.
+fn pins(src: &str, file_name: &str) -> ExitCode {
+    let (annotations, _) = c2f_lang::annotations::read(src);
+    let mut printed: Vec<(c2f_lang::Span, String)> = Vec::new();
+    printed.extend(annotations.pins.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.mount_holes.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.ports.iter().map(|a| (a.span, a.to_string())));
+    printed.sort_by_key(|(span, _)| span.start);
+    let lines = c2f_lang::span::LineIndex::new(src);
+    for (span, text) in printed {
+        println!("{}: {text}", lines.line(span.start as usize) + 1);
+    }
+    match annotation_errors(src, file_name) {
+        0 => ExitCode::SUCCESS,
+        _ => ExitCode::FAILURE,
+    }
+}
+
+/// Reports the badly written annotations of a file; returns how many.
+fn annotation_errors(src: &str, file_name: &str) -> usize {
+    let (_, errors) = c2f_lang::annotations::read(src);
+    for error in &errors {
+        eprint!("{}", error.render(src, file_name));
+    }
+    errors.len()
 }
 
 fn apply_parameter_set(program: &mut c2f_eval::Program, file: Option<&str>, name: &str) -> Result<(), String> {
@@ -206,22 +267,8 @@ fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
         for warning in &rendered.warnings {
             eprintln!("WARNING: {warning}");
         }
-        match export.write(&rendered) {
-            Ok(bytes) => {
-                // Flushed here: the flush at exit would drop a write error.
-                let mut out = std::io::stdout().lock();
-                if let Err(err) = out.write_all(&bytes).and_then(|()| out.flush()) {
-                    eprintln!("error: cannot write the {}: {err}", export.name());
-                    return ExitCode::FAILURE;
-                }
-            }
-            Err(why) => eprintln!("WARNING: {why}"),
-        }
-        let s = rendered.stats;
-        if rendered.is_2d {
-            eprintln!("{} vertices, area {}", s.vertices, s.volume);
-        } else {
-            eprintln!("{} triangles, {} vertices, volume {}", s.triangles, s.vertices, s.volume);
+        if print_export(&rendered, export) != ExitCode::SUCCESS {
+            return ExitCode::FAILURE;
         }
     } else {
         print!("{}", output.csg());
@@ -233,4 +280,26 @@ fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
         }
         None => ExitCode::SUCCESS,
     }
+}
+
+/// Prints the geometry in the format `export`, then its size on stderr.
+fn print_export(rendered: &c2f_geom::Rendered, export: Export) -> ExitCode {
+    match export.write(rendered) {
+        Ok(bytes) => {
+            // Flushed here: the flush at exit would drop a write error.
+            let mut out = std::io::stdout().lock();
+            if let Err(err) = out.write_all(&bytes).and_then(|()| out.flush()) {
+                eprintln!("error: cannot write the {}: {err}", export.name());
+                return ExitCode::FAILURE;
+            }
+        }
+        Err(why) => eprintln!("WARNING: {why}"),
+    }
+    let s = rendered.stats;
+    if rendered.is_2d {
+        eprintln!("{} vertices, area {}", s.vertices, s.volume);
+    } else {
+        eprintln!("{} triangles, {} vertices, volume {}", s.triangles, s.vertices, s.volume);
+    }
+    ExitCode::SUCCESS
 }

@@ -1,0 +1,98 @@
+// Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies),
+// as it looks in the hand: the steel can with its two flats and a vent
+// in each, its rolled front, the boss, bronze bushing and steel shaft; at
+// the back, the white end bell held by two folded tabs of the can, its
+// bearing boss, the brass terminals and the red dot by the + one. Lying
+// on a flat along x, shaft towards +x, the back's center under the shaft
+// axis at the origin.
+// https://www.mabuchi-motor.com (the FA-130RA product page and drawing)
+//
+// From Mabuchi's FA-130RA drawing, as remembered and to check against it:
+// the motor is 20.1 mm wide, 15.1 mm thick and 25.1 mm long without its
+// boss, the boss 6 mm across, the shaft 2 mm across; copies differ by a
+// few tenths. Estimated: the end bell's length (6 mm), the boss's height
+// (1.5 mm), the vent slots, the back's bearing boss, the terminals' size
+// and place, and the two mount holes on the front face (2 mm, 12 mm
+// apart across the width), which not every copy has: check yours before
+// printing screw holes.
+
+/* [Build] */
+// Length of shaft out of the boss.
+shaft = 8; // [4:0.5:20]
+
+// @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
+// @pin - [0, 5, 7.55]  -x passive 6V
+// @mount_hole [25.1, -6, 7.55] d=2 +x
+// @mount_hole [25.1, 6, 7.55]  d=2 +x
+// @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
+
+module dc_motor(shaft = 8) {
+    $fn = 32;
+    axis = 7.55;
+    length = 25.1;
+    bell = 6;
+
+    steel = [0.78, 0.79, 0.81];
+    dark = [0.30, 0.31, 0.33];
+    plastic = [0.93, 0.92, 0.87];
+    brass = [0.82, 0.66, 0.36];
+    bronze = [0.66, 0.50, 0.30];
+
+    translate([0, 0, axis]) rotate([0, 90, 0]) rotate(90) {
+        // Now along z, the flats facing ±y (down and up once lying).
+
+        // The can, from the end bell to its front, its front edge rolled
+        // and its face holed for the screws; a vent slot in each flat.
+        color(steel) difference() {
+            union() {
+                translate([0, 0, bell]) profile(length - bell - 0.8, 0);
+                translate([0, 0, length - 0.8]) hull() {
+                    profile(0.01, 0);
+                    translate([0, 0, 0.79]) profile(0.01, 0.8);
+                }
+            }
+            for (x = [-6, 6]) translate([x, 0, length - 1.5]) cylinder(d = 2, h = 2, $fn = 16);
+            for (s = [-1, 1]) translate([-2.5, s * 7.55 - 0.5, length - 9.5]) cube([5, 1, 3]);
+        }
+        // What shows through the vents and the screw holes: the dark
+        // winding, the inside of the holes.
+        color(dark) {
+            translate([-2.5, -7.0, length - 9.5]) cube([5, 14, 3]);
+            for (x = [-6, 6]) translate([x, 0, length - 1.5]) cylinder(d = 2, h = 0.7, $fn = 16);
+        }
+
+        // The boss, the bronze bushing in it, the shaft.
+        color(steel) translate([0, 0, length]) cylinder(d = 6, h = 1.5);
+        color(bronze) translate([0, 0, length + 1.5]) cylinder(d = 3.4, h = 0.02, $fn = 16);
+        color(steel) translate([0, 0, length]) cylinder(d = 2, h = 1.5 + shaft, $fn = 16);
+
+        // The end bell, a little smaller than the can, and the can's two
+        // tabs folded over it on its round sides.
+        color(plastic) translate([0, 0, 0]) profile(bell, 0.3);
+        color(steel) for (s = [-1, 1]) intersection() {
+            translate([0, 0, bell - 1.8]) profile(1.8, 0);
+            translate([s > 0 ? 7.5 : -10.1, -2, bell - 1.8]) cube([2.6, 4, 1.8]);
+        }
+        // The back's bearing boss.
+        color(plastic) translate([0, 0, -1]) cylinder(d = 5, h = 1);
+        color(bronze) translate([0, 0, -1.02]) cylinder(d = 2.6, h = 0.02, $fn = 16);
+        // The red dot by the + terminal.
+        color([0.80, 0.10, 0.10]) translate([-5, -3.2, -0.02]) cylinder(d = 1.4, h = 0.02, $fn = 12);
+    }
+    // The brass terminals, out of the back, each with its wire hole.
+    color(brass) for (y = [-5, 5]) difference() {
+        translate([-2.5, y - 1, axis - 0.15]) cube([3, 2, 0.3]);
+        translate([-1.5, y, axis - 1]) cylinder(d = 0.9, h = 2, $fn = 12);
+    }
+}
+
+// The can's outline (a circle with two flats) `h` long along z, shrunk by
+// `inset` all round.
+module profile(h, inset) {
+    intersection() {
+        cylinder(d = 20.1 - 2 * inset, h = h);
+        translate([-15, -(15.1 - 2 * inset) / 2, 0]) cube([30, 15.1 - 2 * inset, h]);
+    }
+}
+
+dc_motor(shaft);

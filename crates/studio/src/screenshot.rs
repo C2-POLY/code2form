@@ -1,5 +1,12 @@
 //! `CODE2FORM_SCREENSHOT=out.png`: saves a picture of the window once the
 //! first render is on screen, for checking the UI from scripts.
+//!
+//! `CODE2FORM_SCREENSHOT_SELECT` selects something of a circuit first: a
+//! pin as `part.pin`, a part by its name, or a wire as `wire:7` (from 1);
+//! `assembly:7` shows the assembly mode at its seventh wire; and
+//! `rewire:xiao.5V>mic.VDD`, a new wire dragged from one pin to another;
+//! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
+//! `mic` mid-drag at x 40, y 10.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -11,6 +18,8 @@ const SETTLE: Duration = Duration::from_millis(1500);
 
 pub struct Screenshot {
     path: PathBuf,
+    /// What to select in a circuit, as `CODE2FORM_SCREENSHOT_SELECT` says.
+    pub select: Option<String>,
     ready_since: Option<Instant>,
     requested: bool,
 }
@@ -18,7 +27,8 @@ pub struct Screenshot {
 impl Screenshot {
     pub fn from_env() -> Option<Self> {
         let path = std::env::var_os("CODE2FORM_SCREENSHOT")?;
-        Some(Screenshot { path: PathBuf::from(path), ready_since: None, requested: false })
+        let select = std::env::var("CODE2FORM_SCREENSHOT_SELECT").ok();
+        Some(Screenshot { path: PathBuf::from(path), select, ready_since: None, requested: false })
     }
 
     /// Call every frame; `ready` once the first render is shown. Returns a

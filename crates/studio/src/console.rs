@@ -60,7 +60,7 @@ impl Console {
 
     fn push(&mut self, line: Line, from_render: bool) {
         let prefix = match line.level {
-            Level::Warning if !line.text.starts_with("WARNING") => "WARNING: ",
+            Level::Warning if !line.text.to_ascii_lowercase().starts_with("warning") => "WARNING: ",
             Level::Error if !line.text.to_ascii_lowercase().starts_with("error") => "ERROR: ",
             _ => "",
         };
@@ -115,5 +115,20 @@ impl Console {
                 }
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_message_that_names_its_level_is_not_prefixed_again() {
+        let mut console = Console::default();
+        console.log(Level::Warning, "unused variable");
+        console.log(Level::Warning, "warning: `xiao.D2` is reserved");
+        console.log(Level::Error, "error: unknown pin");
+        let texts: Vec<&str> = console.rows.iter().map(|row| row.text.as_str()).collect();
+        assert_eq!(texts, ["WARNING: unused variable", "warning: `xiao.D2` is reserved", "error: unknown pin"]);
     }
 }
