@@ -1,20 +1,28 @@
-// Espressif ESP32-S3-DevKitC-1: the board, its ESP32-S3-WROOM module, its
-// two USB-C connectors and its pin headers. Seen from above, the module's
-// antenna towards +y, the USB-C connectors on the edge at y = 0.
+// Espressif ESP32-S3-DevKitC-1 v1.1, as it looks in the hand: the black
+// board, its tinned pads and their names, the ESP32-S3-WROOM-1 module with
+// its etched shield and PCB antenna at the board's end, the two USB-C
+// receptacles, the RST and BOOT buttons, the USB-to-UART bridge, the 3.3 V
+// regulator, the RGB and power LEDs, the passives, and its two 22-pin
+// headers as it is sold. Seen from above, the antenna towards +y, the
+// USB-C connectors on the edge at y = 0.
 // https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide.html
 //
 // Same chip as the XIAO ESP32-S3, so the same GPIO numbers. From the user
 // guide: the headers J1 (left) and J3 (right), 22 pins each at 2.54 mm
 // pitch, in the order below, pin 1 at the antenna end; the strapping pins
-// GPIO0, GPIO3, GPIO45 and GPIO46. From the module's datasheet: the
-// WROOM-1 is 18 x 25.5 x 3.1 mm. Estimated, not checked against the
-// board's drawing: the board's size (about 62.7 x 25.4 x 1.6 mm), the rows
-// 22.86 mm apart, where the rows start along the board, and where the USB
-// connectors are (the first boards had Micro-USB). The board has no mount
-// holes: hold it by its edges or by its headers.
+// GPIO0, GPIO3, GPIO45 and GPIO46; the RGB LED on GPIO38 (v1.1). From the
+// module's datasheet: the WROOM-1 is 18 x 25.5 x 3.1 mm. From the board's
+// drawing as remembered: 62.7 x 25.4 mm, the rows 22.86 mm apart. Still
+// estimated, not checked against the drawing: the board's thickness
+// (1.6 mm), where the rows start along it, where the USB-C receptacles
+// are, and the places and sizes of the shield, the antenna's trace, the
+// buttons, the bridge (a 4 x 4 mm QFN), the regulator (drawn as an
+// SOT-223), the LEDs and the passives. The board has no mount holes: hold
+// it by its edges or by its headers.
 //
 // Annotations are plain numbers: the pins are the pads on top of the
-// board, wherever the headers point.
+// board, wherever the headers point. The board's bottom is 0.04 mm up,
+// on its pads.
 
 use <lib/pin_header.c2f>
 
@@ -24,67 +32,212 @@ headers = true;
 // The side the headers' long pins stick out of.
 header_side = "down"; // [down, up]
 
-// @pin 3V3   [1.27, 58.42, 1.6] power_out 3.3V "regulator output"
-// @pin 3V3_2 [1.27, 55.88, 1.6] power_out 3.3V "regulator output"
-// @pin RST   [1.27, 53.34, 1.6] input 3.3V "EN: low resets the chip"
-// @pin 4     [1.27, 50.8, 1.6]  io 3.3V "GPIO4, ADC1_CH3, touch 4"
-// @pin 5     [1.27, 48.26, 1.6] io 3.3V "GPIO5, ADC1_CH4, touch 5"
-// @pin 6     [1.27, 45.72, 1.6] io 3.3V "GPIO6, ADC1_CH5, touch 6"
-// @pin 7     [1.27, 43.18, 1.6] io 3.3V "GPIO7, ADC1_CH6, touch 7"
-// @pin 15    [1.27, 40.64, 1.6] io 3.3V "GPIO15, ADC2_CH4, 32 kHz crystal"
-// @pin 16    [1.27, 38.1, 1.6]  io 3.3V "GPIO16, ADC2_CH5, 32 kHz crystal"
-// @pin 17    [1.27, 35.56, 1.6] io 3.3V "GPIO17, ADC2_CH6"
-// @pin 18    [1.27, 33.02, 1.6] io 3.3V "GPIO18, ADC2_CH7"
-// @pin 8     [1.27, 30.48, 1.6] io 3.3V "GPIO8, ADC1_CH7, touch 8"
-// @pin 3     [1.27, 27.94, 1.6] io 3.3V reserved "GPIO3, ADC1_CH2, touch 3, strapping (JTAG source)"
-// @pin 46    [1.27, 25.4, 1.6]  io 3.3V reserved "GPIO46, strapping (boot mode, ROM messages)"
-// @pin 9     [1.27, 22.86, 1.6] io 3.3V "GPIO9, ADC1_CH8, touch 9"
-// @pin 10    [1.27, 20.32, 1.6] io 3.3V "GPIO10, ADC1_CH9, touch 10"
-// @pin 11    [1.27, 17.78, 1.6] io 3.3V "GPIO11, ADC2_CH0, touch 11"
-// @pin 12    [1.27, 15.24, 1.6] io 3.3V "GPIO12, ADC2_CH1, touch 12"
-// @pin 13    [1.27, 12.7, 1.6]  io 3.3V "GPIO13, ADC2_CH2, touch 13"
-// @pin 14    [1.27, 10.16, 1.6] io 3.3V "GPIO14, ADC2_CH3, touch 14"
-// @pin 5V    [1.27, 7.62, 1.6]  power_out 5V "USB 5 V; or 5 V in"
-// @pin GND   [1.27, 5.08, 1.6]  ground
-// @pin GND_2 [24.13, 58.42, 1.6] ground
-// @pin TX    [24.13, 55.88, 1.6] io 3.3V "GPIO43, U0TXD"
-// @pin RX    [24.13, 53.34, 1.6] io 3.3V "GPIO44, U0RXD"
-// @pin 1     [24.13, 50.8, 1.6]  io 3.3V "GPIO1, ADC1_CH0, touch 1"
-// @pin 2     [24.13, 48.26, 1.6] io 3.3V "GPIO2, ADC1_CH1, touch 2"
-// @pin 42    [24.13, 45.72, 1.6] io 3.3V "GPIO42, MTMS (JTAG)"
-// @pin 41    [24.13, 43.18, 1.6] io 3.3V "GPIO41, MTDI (JTAG)"
-// @pin 40    [24.13, 40.64, 1.6] io 3.3V "GPIO40, MTDO (JTAG)"
-// @pin 39    [24.13, 38.1, 1.6]  io 3.3V "GPIO39, MTCK (JTAG)"
-// @pin 38    [24.13, 35.56, 1.6] io 3.3V "GPIO38, RGB LED on board v1.1"
-// @pin 37    [24.13, 33.02, 1.6] io 3.3V "GPIO37, octal PSRAM on R8 modules"
-// @pin 36    [24.13, 30.48, 1.6] io 3.3V "GPIO36, octal PSRAM on R8 modules"
-// @pin 35    [24.13, 27.94, 1.6] io 3.3V "GPIO35, octal PSRAM on R8 modules"
-// @pin 0     [24.13, 25.4, 1.6]  io 3.3V reserved "GPIO0, BOOT button, strapping (boot mode)"
-// @pin 45    [24.13, 22.86, 1.6] io 3.3V reserved "GPIO45, strapping (flash voltage)"
-// @pin 48    [24.13, 20.32, 1.6] io 3.3V "GPIO48, RGB LED on board v1.0"
-// @pin 47    [24.13, 17.78, 1.6] io 3.3V "GPIO47"
-// @pin 21    [24.13, 15.24, 1.6] io 3.3V "GPIO21"
-// @pin 20    [24.13, 12.7, 1.6]  io 3.3V "GPIO20, USB D+, ADC2_CH9"
-// @pin 19    [24.13, 10.16, 1.6] io 3.3V "GPIO19, USB D-, ADC2_CH8"
-// @pin GND_3 [24.13, 7.62, 1.6]  ground
-// @pin GND_4 [24.13, 5.08, 1.6]  ground
-// @port uart [7, 0, 3.23] -y [8.94, 3.26] "USB-C to the USB-UART bridge"
-// @port usb  [18.4, 0, 3.23] -y [8.94, 3.26] "USB-C to the ESP32-S3's own USB (GPIO19, GPIO20)"
+// @pin 3V3   [1.27, 58.42, 1.64] power_out 3.3V "regulator output"
+// @pin 3V3_2 [1.27, 55.88, 1.64] power_out 3.3V "regulator output"
+// @pin RST   [1.27, 53.34, 1.64] input 3.3V "EN: low resets the chip"
+// @pin 4     [1.27, 50.8, 1.64]  io 3.3V "GPIO4, ADC1_CH3, touch 4"
+// @pin 5     [1.27, 48.26, 1.64] io 3.3V "GPIO5, ADC1_CH4, touch 5"
+// @pin 6     [1.27, 45.72, 1.64] io 3.3V "GPIO6, ADC1_CH5, touch 6"
+// @pin 7     [1.27, 43.18, 1.64] io 3.3V "GPIO7, ADC1_CH6, touch 7"
+// @pin 15    [1.27, 40.64, 1.64] io 3.3V "GPIO15, ADC2_CH4, 32 kHz crystal"
+// @pin 16    [1.27, 38.1, 1.64]  io 3.3V "GPIO16, ADC2_CH5, 32 kHz crystal"
+// @pin 17    [1.27, 35.56, 1.64] io 3.3V "GPIO17, ADC2_CH6"
+// @pin 18    [1.27, 33.02, 1.64] io 3.3V "GPIO18, ADC2_CH7"
+// @pin 8     [1.27, 30.48, 1.64] io 3.3V "GPIO8, ADC1_CH7, touch 8"
+// @pin 3     [1.27, 27.94, 1.64] io 3.3V reserved "GPIO3, ADC1_CH2, touch 3, strapping (JTAG source)"
+// @pin 46    [1.27, 25.4, 1.64]  io 3.3V reserved "GPIO46, strapping (boot mode, ROM messages)"
+// @pin 9     [1.27, 22.86, 1.64] io 3.3V "GPIO9, ADC1_CH8, touch 9"
+// @pin 10    [1.27, 20.32, 1.64] io 3.3V "GPIO10, ADC1_CH9, touch 10"
+// @pin 11    [1.27, 17.78, 1.64] io 3.3V "GPIO11, ADC2_CH0, touch 11"
+// @pin 12    [1.27, 15.24, 1.64] io 3.3V "GPIO12, ADC2_CH1, touch 12"
+// @pin 13    [1.27, 12.7, 1.64]  io 3.3V "GPIO13, ADC2_CH2, touch 13"
+// @pin 14    [1.27, 10.16, 1.64] io 3.3V "GPIO14, ADC2_CH3, touch 14"
+// @pin 5V    [1.27, 7.62, 1.64]  power_out 5V "USB 5 V; or 5 V in"
+// @pin GND   [1.27, 5.08, 1.64]  ground
+// @pin GND_2 [24.13, 58.42, 1.64] ground
+// @pin TX    [24.13, 55.88, 1.64] io 3.3V "GPIO43, U0TXD"
+// @pin RX    [24.13, 53.34, 1.64] io 3.3V "GPIO44, U0RXD"
+// @pin 1     [24.13, 50.8, 1.64]  io 3.3V "GPIO1, ADC1_CH0, touch 1"
+// @pin 2     [24.13, 48.26, 1.64] io 3.3V "GPIO2, ADC1_CH1, touch 2"
+// @pin 42    [24.13, 45.72, 1.64] io 3.3V "GPIO42, MTMS (JTAG)"
+// @pin 41    [24.13, 43.18, 1.64] io 3.3V "GPIO41, MTDI (JTAG)"
+// @pin 40    [24.13, 40.64, 1.64] io 3.3V "GPIO40, MTDO (JTAG)"
+// @pin 39    [24.13, 38.1, 1.64]  io 3.3V "GPIO39, MTCK (JTAG)"
+// @pin 38    [24.13, 35.56, 1.64] io 3.3V "GPIO38, RGB LED on board v1.1"
+// @pin 37    [24.13, 33.02, 1.64] io 3.3V "GPIO37, octal PSRAM on R8 modules"
+// @pin 36    [24.13, 30.48, 1.64] io 3.3V "GPIO36, octal PSRAM on R8 modules"
+// @pin 35    [24.13, 27.94, 1.64] io 3.3V "GPIO35, octal PSRAM on R8 modules"
+// @pin 0     [24.13, 25.4, 1.64]  io 3.3V reserved "GPIO0, BOOT button, strapping (boot mode)"
+// @pin 45    [24.13, 22.86, 1.64] io 3.3V reserved "GPIO45, strapping (flash voltage)"
+// @pin 48    [24.13, 20.32, 1.64] io 3.3V "GPIO48, RGB LED on board v1.0"
+// @pin 47    [24.13, 17.78, 1.64] io 3.3V "GPIO47"
+// @pin 21    [24.13, 15.24, 1.64] io 3.3V "GPIO21"
+// @pin 20    [24.13, 12.7, 1.64]  io 3.3V "GPIO20, USB D+, ADC2_CH9"
+// @pin 19    [24.13, 10.16, 1.64] io 3.3V "GPIO19, USB D-, ADC2_CH8"
+// @pin GND_3 [24.13, 7.62, 1.64]  ground
+// @pin GND_4 [24.13, 5.08, 1.64]  ground
+// @port uart [7, 0, 3.27] -y [8.94, 3.26] "USB-C to the USB-UART bridge"
+// @port usb  [18.4, 0, 3.27] -y [8.94, 3.26] "USB-C to the ESP32-S3's own USB (GPIO19, GPIO20)"
 
 module esp32s3_devkitc1(headers = true, header_side = "down") {
-    t = 1.6;
-    length = 62.7;
+    // The pads under the board are 0.04 mm thick: the board
+    // sits on them, so that nothing goes below z = 0.
+    translate([0, 0, 0.04]) board(headers, header_side);
+}
 
-    color("Black") cube([25.4, length, t]);
-    // The ESP32-S3-WROOM-1 module, its antenna at the board's end.
-    color("Silver") translate([(25.4 - 18) / 2, length - 25.5, t]) cube([18, 25.5 - 6.3, 3.1]);
-    color("DarkSlateGray") translate([(25.4 - 18) / 2, length - 6.3, t]) cube([18, 6.3, 0.8]);
-    // The USB-C receptacles, flush with the edge.
+module board(headers, header_side) {
+    $fn = 10;
+    t = 1.6;
+    w = 25.4;
+    l = 62.7;
+    rows = [1.27, 24.13];
+    pins = [for (i = [0 : 21]) 5.08 + i * 2.54];
+
+    black = [0.06, 0.06, 0.07];
+    tin = [0.82, 0.83, 0.85];
+    gold = [0.85, 0.68, 0.38];
+    metal = [0.80, 0.81, 0.83];
+    etch = [0.52, 0.53, 0.55];
+    module_pcb = [0.10, 0.11, 0.12];
+    dark = [0.13, 0.13, 0.14];
+    print = [0.95, 0.95, 0.95];
+    ceramic = [0.78, 0.66, 0.50];
+
+    // The board, its pads' holes through it.
+    color(black) difference() {
+        rounded(w, l, t, 0.5);
+        for (x = rows, y = pins) translate([x, y, -1]) cylinder(d = 1.0, h = t + 2);
+    }
+    // Tinned pads on both faces, pin 1's square, at the antenna end.
+    color(tin) for (x = rows, y = pins, z = [-0.02, t]) translate([x, y, z]) difference() {
+        if (y == pins[21]) translate([-0.85, -0.85, 0]) cube([1.7, 1.7, 0.02]);
+        else cylinder(d = 1.7, h = 0.02);
+        translate([0, 0, -1]) cylinder(d = 1.0, h = 2);
+    }
+
+    // The ESP32-S3-WROOM-1 module, 18 x 25.5 mm, at the board's end.
+    mx = (w - 18) / 2;
+    my = l - 25.5;
+    color(module_pcb) translate([mx, my, t]) cube([18, 25.5, 0.8]);
+    // Its castellated pads: 14 down each side, 12 along its bottom edge.
+    color(gold) {
+        for (i = [0 : 13], x = [mx - 0.05, mx + 18 - 0.45])
+            translate([x, my + 1.5 + i * 1.27 - 0.45, t]) cube([0.5, 0.9, 0.82]);
+        for (i = [0 : 11])
+            translate([w / 2 + (i - 5.5) * 1.27 - 0.45, my - 0.05, t]) cube([0.9, 0.5, 0.82]);
+    }
+    // Its shield, over the chip, the flash and the PSRAM, etched.
+    color(metal) translate([mx + 0.7, my + 0.7, t + 0.8]) rounded(16.6, 18.3, 2.3, 0.4);
+    color(etch) translate([w / 2, 0, t + 3.1]) linear_extrude(0.02) let($fn = 6) {
+        translate([0, my + 14.6]) text("ESPRESSIF", size = 1.5, font = "Liberation Sans:style=Bold", halign = "center");
+        translate([0, my + 11.6]) text("ESP32-S3-WROOM-1", size = 1.15, halign = "center");
+        translate([0, my + 9.6]) text("N8R8", size = 1.0, halign = "center");
+    }
+    // Its PCB antenna under the solder mask: a meandered trace from the
+    // shield's edge across the end.
+    color([0.26, 0.27, 0.27]) translate([0, 0, t + 0.8]) {
+        translate([mx + 2.5, my + 19.2, 0]) cube([0.45, 1.6, 0.01]);
+        translate([mx + 2.5, my + 20.4, 0]) cube([13.0, 0.45, 0.01]);
+        for (i = [0 : 7]) translate([mx + 2.5 + i * 1.8, my + 20.4, 0]) cube([0.45, 4.1, 0.01]);
+        for (i = [0 : 6]) translate([mx + 2.5 + i * 1.8, i % 2 == 0 ? my + 24.05 : my + 20.4, 0]) cube([2.25, 0.45, 0.01]);
+    }
+
+    // The USB-C receptacles, flush with the edge at y = 0: the bridge's
+    // (UART) on the left, the ESP32-S3's own (USB) on the right.
     for (x = [7, 18.4])
-        color("Silver") translate([x - 8.94 / 2, 0, t]) cube([8.94, 7.35, 3.26]);
+        color(metal) translate([x - 8.94 / 2, 7.35, t]) mirror([0, 1, 0]) usb_c(8.94, 7.35, 3.26);
+
+    // RST (EN) on the left, BOOT (GPIO0) on the right: small tactile
+    // switches, their plungers up.
+    for (x = [6.0, 19.4]) {
+        color(dark) translate([x - 1.5, 10.2, t]) cube([3.0, 4.0, 1.2]);
+        color(metal) translate([x - 1.5, 10.2, t + 1.2]) difference() {
+            cube([3.0, 4.0, 0.2]);
+            translate([1.5, 2.0, -1]) cylinder(d = 2.0, h = 2);
+        }
+        color([0.92, 0.92, 0.90]) translate([x, 12.2, t + 1.2]) cylinder(d = 1.6, h = 0.45);
+        color(tin) for (dx = [-1.9, 1.5], dy = [0.3, 3.2]) translate([x + dx, 10.2 + dy, t]) cube([0.4, 0.5, 0.2]);
+    }
+
+    // The USB-to-UART bridge, a 4 x 4 mm QFN, its pin 1 dot.
+    color(dark) translate([5.5, 16.0, t]) cube([4.0, 4.0, 0.85]);
+    color([0.35, 0.35, 0.37]) translate([6.0, 19.5, t + 0.85]) cylinder(d = 0.4, h = 0.01);
+    // The 3.3 V regulator, an SOT-223: its body, its tab, its three legs.
+    color(dark) translate([13.6, 15.6, t]) cube([6.5, 3.5, 1.6]);
+    color(tin) {
+        translate([15.35, 19.1, t]) cube([3.0, 1.3, 0.25]);
+        for (i = [-1 : 1]) translate([16.85 + i * 2.3 - 0.35, 14.3, t]) cube([0.7, 1.3, 0.25]);
+    }
+    // The RGB LED, white with its clear window, and the red power LED.
+    color([0.95, 0.95, 0.93]) translate([11.1, 27.5, t]) cube([3.2, 3.2, 0.8]);
+    color([0.98, 0.96, 0.82]) translate([12.7, 29.1, t + 0.8]) cylinder(d = 2.4, h = 0.05, $fn = 24);
+    color([0.85, 0.12, 0.10]) translate([4.6, 23.6, t]) cube([1.6, 0.8, 0.45]);
+
+    // The passives around them.
+    for (p = [[11.6, 11.0, 0], [11.6, 13.2, 1], [13.8, 11.0, 0], [13.8, 13.2, 0],
+              [10.8, 17.2, 0], [10.8, 19.0, 1], [21.3, 17.2, 0], [21.3, 19.6, 0],
+              [8.0, 22.4, 1], [9.9, 22.4, 0], [15.8, 22.4, 0], [17.7, 22.4, 1],
+              [16.2, 28.6, 0], [9.2, 28.6, 0], [6.6, 32.0, 1], [18.8, 32.0, 0]])
+        smd([p[0], p[1]], [1.6, 0.8], p[2] == 1 ? dark : ceramic, tin, t);
+
+    // The print on top: each pin's name beside its pad, the board's name,
+    // the ports' and buttons' names, the module's outline.
+    names_j1 = ["3V3", "3V3", "RST", "4", "5", "6", "7", "15", "16", "17", "18",
+                "8", "3", "46", "9", "10", "11", "12", "13", "14", "5V", "G"];
+    names_j3 = ["G", "TX", "RX", "1", "2", "42", "41", "40", "39", "38", "37",
+                "36", "35", "0", "45", "48", "47", "21", "20", "19", "G", "G"];
+    color(print) translate([0, 0, t]) linear_extrude(0.02) let($fn = 6) {
+        for (i = [0 : 21]) {
+            translate([2.55, pins[21 - i]]) text(names_j1[i], size = 0.8, valign = "center");
+            translate([22.85, pins[21 - i]]) text(names_j3[i], size = 0.8, halign = "right", valign = "center");
+        }
+        translate([w / 2, 34.0]) text("ESP32-S3-DevKitC-1", size = 1.05, font = "Liberation Sans:style=Bold", halign = "center");
+        translate([w / 2, 32.3]) text("v1.1", size = 0.9, halign = "center");
+        translate([7.0, 8.0]) text("UART", size = 0.9, halign = "center");
+        translate([18.4, 8.0]) text("USB", size = 0.9, halign = "center");
+        translate([6.0, 14.8]) text("RST", size = 0.8, halign = "center");
+        translate([19.4, 14.8]) text("BOOT", size = 0.8, halign = "center");
+        difference() {
+            translate([mx - 0.3, my - 0.3]) square([18.6, 25.6]);
+            translate([mx - 0.15, my - 0.15]) square([18.3, 25.5]);
+        }
+    }
     if (headers)
-        for (x = [1.27, 24.13])
-            pin_header(22, [x, 5.08], t, header_side);
+        for (x = rows)
+            pin_header(22, [x, pins[0]], t, header_side);
+}
+
+// A box with its four vertical edges rounded by `r`.
+module rounded(x, y, h, r) {
+    hull() for (cx = [r, x - r], cy = [r, y - r]) translate([cx, cy, 0]) cylinder(r = r, h = h);
+}
+
+// A surface-mount part `size` long and wide, centered `at`, its tinned
+// ends along its length.
+module smd(at, size, body, ends, t) {
+    along_x = size[0] > size[1];
+    end = 0.3;
+    translate([at[0] - size[0] / 2, at[1] - size[1] / 2, t]) {
+        color(body) translate(along_x ? [end, 0, 0] : [0, end, 0])
+            cube(along_x ? [size[0] - 2 * end, size[1], 0.5] : [size[0], size[1] - 2 * end, 0.5]);
+        color(ends) for (k = [0, 1])
+            translate(along_x ? [k * (size[0] - end), 0, 0] : [0, k * (size[1] - end), 0])
+                cube(along_x ? [end, size[1], 0.5] : [size[0], end, 0.5]);
+    }
+}
+
+// A USB-C receptacle `w` wide, `d` deep and `h` high, lying along y, its
+// opening at y = d: a stadium shell with its mouth open.
+module usb_c(w, d, h) {
+    module stadium(w, h, d) {
+        hull() for (x = [h / 2, w - h / 2]) translate([x, 0, h / 2]) rotate([-90, 0, 0]) cylinder(d = h, h = d);
+    }
+    difference() {
+        stadium(w, h, d);
+        translate([0.3, d - 3, 0.3]) stadium(w - 0.6, h - 0.6, 3.1);
+    }
+    // The tongue inside the mouth.
+    color([0.12, 0.12, 0.13]) translate([1.4, d - 3, h / 2 - 0.35]) cube([w - 2.8, 2.9, 0.7]);
 }
 
 esp32s3_devkitc1(headers, header_side);
