@@ -1182,6 +1182,11 @@ fn components(ui: &mut egui::Ui, id: Id, v: &[f64], label: &str, dim: bool, mut 
     });
 }
 
+/// Where the edges section keeps its settings, and the flag that brings it
+/// into view.
+const EDGES: &str = "properties-edges";
+const REVEAL_EDGES: &str = "properties-edges-reveal";
+
 fn edges_section(
     ui: &mut egui::Ui,
     base: Id,
@@ -1196,8 +1201,12 @@ fn edges_section(
             return;
         }
     };
-    let id = Id::new("properties-edges");
+    let id = Id::new(EDGES);
     let mut s: EdgeSettings = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    // Asked from the toolbar: the section comes into view.
+    if ui.data_mut(|d| d.remove_temp::<bool>(Id::new(REVEAL_EDGES))).unwrap_or(false) {
+        ui.scroll_to_cursor(Some(egui::Align::Min));
+    }
     ui.horizontal(|ui| {
         row_label(ui, "Kind", theme::palette().text_dim, false);
         ui.selectable_value(&mut s.fillet, true, "Fillet");
@@ -1326,6 +1335,32 @@ impl StudioApp {
         if let Content::Call(model, range) = content {
             self.properties_actions(ctx, &model, range, actions);
         }
+    }
+
+    /// Whether the toolbar's Fillet and Chamfer apply: a single cube or
+    /// cylinder whose edges the inspector can round; else why not.
+    pub(super) fn edges_ready(&self, ctx: &egui::Context) -> Result<(), String> {
+        let none = "Select a cube or a cylinder";
+        let [key] = self.doc.viewer.selection() else { return Err(none.into()) };
+        let (Some(range), Some(_)) = (key.range(), self.selected_ranges()) else { return Err(none.into()) };
+        match &*self.properties_model(ctx, range) {
+            Ok(Model { edges: Some(Ok(_)), .. }) => Ok(()),
+            Ok(Model { edges: Some(Err(why)), .. }) => Err(why.clone()),
+            _ => Err("Only a cube or a cylinder has edges to round".into()),
+        }
+    }
+
+    /// The toolbar's Fillet (`fillet`) or Chamfer: the inspector's edges
+    /// section, set to it and scrolled to.
+    pub(super) fn ask_edges(&mut self, ctx: &egui::Context, fillet: bool) {
+        let id = Id::new(EDGES);
+        let mut settings: EdgeSettings = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
+        settings.fillet = fillet;
+        ctx.data_mut(|d| {
+            d.insert_temp(id, settings);
+            d.insert_temp(Id::new(REVEAL_EDGES), true);
+        });
+        self.panels.inspector = InspectorTab::Properties;
     }
 
     /// What the Properties tab shows of the selection.

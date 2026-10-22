@@ -22,6 +22,7 @@ use eframe::egui::{
 };
 
 use super::StudioApp;
+use super::shapes::{self, Command};
 use crate::code_edit::{self, Modifier, NodeKind, Target, TreeNode};
 use crate::theme;
 
@@ -83,6 +84,8 @@ pub(super) enum Action {
         range: Range<usize>,
         target: Target,
     },
+    /// An entry of the right-click menu, for the selection.
+    Command(Command),
 }
 
 /// The object dragged in the tree, and the text it was read from: a drag
@@ -133,7 +136,7 @@ impl TreeState {
 
     /// Draws the rows, `selected` the ranges the view selects, and returns
     /// what the user asked of one of them.
-    fn show(&mut self, ui: &mut egui::Ui, selected: &[Range<usize>]) -> Option<Action> {
+    fn show(&mut self, ui: &mut egui::Ui, selected: &[Range<usize>], can_paste: bool) -> Option<Action> {
         let live = !self.stale();
         let nodes = std::mem::take(&mut self.nodes);
         let rows = visible_rows(&nodes, &self.collapsed);
@@ -193,6 +196,17 @@ impl TreeState {
             if response.double_clicked() {
                 self.start_rename(&node.range);
             }
+            // Right-click: the row joins the selection unless it is in it,
+            // and the selection's menu opens.
+            if response.secondary_clicked() && !is_selected {
+                action = Some(Action::Select { range: node.range.clone(), add: false });
+            }
+            let count = if is_selected { selected.len() } else { 1 };
+            response.context_menu(|ui| {
+                if let Some(command) = shapes::object_menu(ui, count, can_paste) {
+                    action = Some(Action::Command(command));
+                }
+            });
             response.dnd_set_drag_payload(Dragged {
                 range: node.range.clone(),
                 name: node.name.clone(),
@@ -407,9 +421,10 @@ impl StudioApp {
             ui.label(RichText::new("No objects yet").size(12.0).color(theme::palette().text_dim));
         }
         let mut action = None;
+        let can_paste = StudioApp::can_paste(ctx);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
-            action = self.tree.show(ui, &selected);
+            action = self.tree.show(ui, &selected, can_paste);
         });
         // F2 renames the object selected, or the row last clicked.
         let free = ctx.memory(|m| m.focused().is_none());
@@ -445,6 +460,7 @@ impl StudioApp {
                 }
                 self.apply_code_edit(ctx, result, "");
             }
+            Action::Command(command) => self.object_command(ctx, command),
             Action::Move { range, target } => {
                 let result = code_edit::move_into(text, range, target);
                 if let Ok(edit) = &result {
@@ -746,7 +762,7 @@ sphere(2); // Ball
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().frame(Frame::new()).show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
-                action = state.show(ui, selected);
+                action = state.show(ui, selected, false);
             });
         });
         action

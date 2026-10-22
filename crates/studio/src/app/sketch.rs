@@ -34,6 +34,7 @@ use eframe::egui::{
 use glam::Vec3;
 
 use super::StudioApp;
+use super::toolbar::{self, Icon, Row};
 use crate::code_edit::number;
 use crate::console::Level;
 use crate::sketch_view::{
@@ -474,41 +475,38 @@ impl StudioApp {
         true
     }
 
-    /// The Sketch menu, at the bottom left of the view next to the axes.
-    /// The Sketch menu, and "Edit sketch" when the selection is a sketch,
-    /// in the modelling toolbar above the view.
-    pub(super) fn sketch_entry(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    /// The SKETCH group of the modelling toolbar: a new sketch, from a menu
+    /// of planes, and the sketch selected reopened.
+    pub(super) fn sketch_tools(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, row: Row) {
         let edit = self.selected_sketch();
         let has_draft = self.doc.sketch.draft.is_some();
         let mut chosen: Option<Plane> = None;
         let (mut face, mut open, mut resume) = (false, false, false);
-        ui.menu_button("Sketch", |ui| {
-            for (plane, label) in [
-                (Plane::Xy, "On the XY plane"),
-                (Plane::Xz, "On the XZ plane"),
-                (Plane::Yz, "On the YZ plane"),
-            ] {
-                if ui.button(label).clicked() {
-                    chosen = Some(plane);
+        toolbar::group(ui, "SKETCH", row, |ui| {
+            let tip = "Draw a 2D profile on a plane, constrain it, then extrude or revolve it";
+            let new = toolbar::tool(ui, row, Icon::Sketch, "Sketch", false, Ok(()), tip);
+            egui::Popup::menu(&new).show(|ui| {
+                for (plane, label) in [
+                    (Plane::Xy, "On the XY plane"),
+                    (Plane::Xz, "On the XZ plane"),
+                    (Plane::Yz, "On the YZ plane"),
+                ] {
+                    if ui.button(label).clicked() {
+                        chosen = Some(plane);
+                    }
                 }
-            }
-            face = ui
-                .button("On a face…")
-                .on_hover_text("Then click a flat face of the model")
-                .clicked();
-            if has_draft {
-                ui.separator();
-                resume = ui.button("Resume unfinished sketch").clicked();
-            }
-        })
-        .response
-        .on_hover_text("Draw a 2D profile on a plane, constrain it, then extrude or revolve it");
-        if let Some(module) = &edit {
-            open = ui
-                .button("Edit sketch")
-                .on_hover_text(format!("Reopen {module} with its constraints"))
-                .clicked();
-        }
+                face = ui.button("On a face…").on_hover_text("Then click a flat face of the model").clicked();
+                if has_draft {
+                    ui.separator();
+                    resume = ui.button("Resume unfinished sketch").clicked();
+                }
+            });
+            let (enabled, tip) = match &edit {
+                Some(module) => (Ok(()), format!("Reopen {module} with its constraints")),
+                None => (Err("Select a sketch to reopen it"), String::new()),
+            };
+            open = toolbar::tool(ui, row, Icon::EditSketch, "Edit", false, enabled, &tip).clicked();
+        });
         if let Some(plane) = chosen {
             let cut_from = self.cut_target();
             self.new_sketch(plane, cut_from);
@@ -1691,17 +1689,12 @@ fn paint_pick(viewer: &crate::viewer::Viewer, rect: Rect, painter: &egui::Painte
 }
 
 /// A line of help at the bottom of the view.
-fn hint_bar(painter: &egui::Painter, rect: Rect, text: &str) {
-    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), theme::palette().text);
+pub(super) fn hint_bar(painter: &egui::Painter, rect: Rect, text: &str) {
+    let palette = theme::palette();
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), palette.text);
     let size = galley.size() + Vec2::new(20.0, 8.0);
     let card = Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 22.0), size);
-    painter.rect(
-        card,
-        CornerRadius::same(6),
-        Color32::from_black_alpha(185),
-        Stroke::new(1.0, Color32::from_white_alpha(28)),
-        StrokeKind::Inside,
-    );
+    painter.rect(card, CornerRadius::same(6), palette.window, Stroke::new(1.0, palette.border), StrokeKind::Inside);
     painter.galley(card.min + Vec2::new(10.0, 4.0), galley, theme::palette().text);
 }
 

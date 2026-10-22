@@ -452,6 +452,11 @@ impl Viewer {
         if response.clicked_by(PointerButton::Primary) {
             self.click(self.hovered, click);
         }
+        // A right-click on an object outside the selection selects it, for
+        // the menu that opens; on the selection, it keeps it whole.
+        if response.secondary_clicked() && self.hovered.is_some_and(|k| !self.selection.contains(&k)) {
+            self.click(self.hovered, Click::default());
+        }
         // The click before it selected the object around: go inside it.
         if response.double_clicked_by(PointerButton::Primary) {
             let deep = response.interact_pointer_pos().and_then(|pos| self.pick(rect, pos, Click { deep: true, ..click }));

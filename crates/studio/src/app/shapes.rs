@@ -1,7 +1,7 @@
 //! Making a model without code (C2F-40): shapes put down from a toolbar,
 //! booleans of the selection, holes, copies and deletions.
 //!
-//! A floating toolbar at the bottom of the 3D view arms a shape: the next
+//! The CREATE group of the modelling toolbar arms a shape: the next
 //! click puts it on the build plate, or on the face under the pointer with
 //! its own Z axis along the face's normal, and the app writes its call at
 //! the end of the code (inside the boolean selected, when one is). With
@@ -21,14 +21,17 @@
 use std::ops::Range;
 
 use eframe::egui::{
-    self, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, RichText, Stroke,
+    self, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Stroke,
 };
 use glam::Vec3;
 
 use super::StudioApp;
+use super::toolbar::{self, Icon, Row};
+use super::workspace::CodeTab;
 use crate::code_edit::{self, Boolean, Edit, Place, Primitive};
 use crate::pick::Ray;
 use crate::select::Statement;
+use crate::settings::Workspace;
 use crate::theme;
 
 /// The toolbar's shapes: what each makes, its label and its tooltip.
@@ -274,31 +277,77 @@ fn read_keys(ctx: &egui::Context) -> Keys {
 enum Action {
     Shape(Primitive),
     Hole,
+    /// Fillet (true) or Chamfer: the inspector's edges section.
+    Edges(bool),
     Combine(Boolean),
+}
+
+/// What the right-click menu of an object asks, in the view or the tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Command {
     Duplicate,
     Copy,
+    Cut,
+    Paste,
     Delete,
+    ShowInCode,
 }
 
 impl StudioApp {
-    /// The shapes toolbar over the 3D view, and its keys.
-    /// The shapes, the hole toggle and what acts on the selection, in the
-    /// modelling toolbar above the view.
-    pub(super) fn shapes_toolbar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    /// The CREATE, MODIFY and COMBINE groups of the modelling toolbar.
+    pub(super) fn shape_tools(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, row: Row) {
         let mut state = Shapes::load(ctx);
         let selected = self.doc.viewer.selection().len();
-        match toolbar(ui, state.tool, selected) {
+        let edges = self.edges_ready(ctx);
+        match toolbar(ui, row, state.tool, selected, edges.as_ref().map(|_| ()).map_err(String::as_str)) {
             Some(Action::Shape(kind)) => state.tool.pick(kind),
             Some(Action::Hole) => state.tool.toggle_hole(),
+            Some(Action::Edges(fillet)) => self.ask_edges(ctx, fillet),
             Some(Action::Combine(op)) => self.combine(ctx, op),
-            Some(Action::Duplicate) => self.duplicate_selection(ctx),
-            Some(Action::Copy) => {
-                self.copy_selection(ctx, &mut state);
-            }
-            Some(Action::Delete) => self.delete_selection(ctx),
             None => {}
         }
         state.store(ctx);
+    }
+
+    /// Does what an object's right-click menu asked.
+    pub(super) fn object_command(&mut self, ctx: &egui::Context, command: Command) {
+        let mut state = Shapes::load(ctx);
+        match command {
+            Command::Duplicate => self.duplicate_selection(ctx),
+            Command::Copy => {
+                self.copy_selection(ctx, &mut state);
+            }
+            Command::Cut => {
+                if self.copy_selection(ctx, &mut state) {
+                    self.delete_selection(ctx);
+                }
+            }
+            Command::Paste => {
+                if let Some(copied) = state.clipboard.clone() {
+                    self.paste(ctx, &copied, None);
+                }
+            }
+            Command::Delete => self.delete_selection(ctx),
+            Command::ShowInCode => self.show_in_code(ctx),
+        }
+        state.store(ctx);
+    }
+
+    /// The Code workspace, its cursor on the object selected last.
+    fn show_in_code(&mut self, ctx: &egui::Context) {
+        let Some(range) = self.selected_ranges().and_then(|ranges| ranges.last().cloned()) else {
+            return;
+        };
+        self.set_workspace(ctx, Workspace::Code);
+        self.panels.code_tab = CodeTab::Code;
+        let text = self.doc.text.clone();
+        self.doc.editor.go_to(ctx, &text, range.start);
+        self.doc.editor.focus(ctx);
+    }
+
+    /// Whether the clipboard holds objects copied here, for Paste.
+    pub(super) fn can_paste(ctx: &egui::Context) -> bool {
+        Shapes::load(ctx).clipboard.is_some()
     }
 
     /// Placing an armed shape with a click in the view, and the keys that
@@ -347,8 +396,26 @@ impl StudioApp {
             self.paste(ctx, &text, state.clipboard.as_deref());
         }
 
+        if let Some(kind) = state.tool.armed {
+            let name = SHAPES.iter().find(|s| s.0 == kind).map_or("Shape", |s| s.1);
+            let hint = if state.tool.hole {
+                format!("{name} hole: click on a face of an object · Shift-click: another · Esc: cancel")
+            } else {
+                format!("{name}: click on the plate or on a face · Shift-click: another · Esc: cancel")
+            };
+            super::sketch::hint_bar(&ui.painter_at(rect), rect, &hint);
+        }
+
+        // Right-click: the menu of the selection, which the click joined.
+        let mut command = None;
+        let can_paste = state.clipboard.is_some();
+        response.context_menu(|ui| command = object_menu(ui, selected, can_paste));
+
         state.selection = (self.doc.id, self.doc.viewer.selection().to_vec());
         state.store(ctx);
+        if let Some(command) = command {
+            self.object_command(ctx, command);
+        }
     }
 
     /// Where an armed shape would land: a dot on the point, and a stroke
@@ -469,67 +536,84 @@ impl StudioApp {
     }
 }
 
-/// The floating toolbar at the bottom of the view, above the mouse help:
-/// the shapes and Hole, with the actions on the selection above them when
-/// there is one, and a hint while a shape is armed. Returns what was
-/// clicked.
-fn toolbar(ui: &mut egui::Ui, tool: Tool, selected: usize) -> Option<Action> {
+/// The CREATE, MODIFY and COMBINE groups: the shapes, Hole, Fillet and
+/// Chamfer, and the booleans. What does not apply is greyed out, with why
+/// on hover, rather than hidden. Returns what was clicked.
+fn toolbar(ui: &mut egui::Ui, row: Row, armed: Tool, selected: usize, edges: Result<(), &str>) -> Option<Action> {
     let mut action = None;
-    let ctx = ui.ctx().clone();
-    let command = |key: Key| ctx.format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, key));
-    // One row, laid out the same whatever is selected: what does not apply
-    // is greyed out rather than hidden.
-    for (kind, label, tip) in SHAPES {
-        let armed = tool.armed == Some(kind);
-        if ui.selectable_label(armed, label).on_hover_text(tip).clicked() {
-            action = Some(Action::Shape(kind));
+    toolbar::group(ui, "CREATE", row, |ui| {
+        for (kind, label, tip) in SHAPES {
+            let on = armed.armed == Some(kind) && !armed.hole;
+            if toolbar::tool(ui, row, shape_icon(kind), label, on, Ok(()), tip).clicked() {
+                action = Some(Action::Shape(kind));
+            }
         }
-    }
-    let hole = ui.selectable_label(
-        tool.hole,
-        RichText::new("Hole").color(if tool.hole { theme::palette().warning } else { theme::palette().text }),
-    );
-    if hole.on_hover_text("Cut the next shape out of the object it is put on").clicked() {
-        action = Some(Action::Hole);
-    }
-    ui.separator();
-    for (op, label, tip) in BOOLEANS {
-        let button = ui.add_enabled(selected >= 2, egui::Button::new(label));
-        if button.on_hover_text(tip).on_disabled_hover_text("Shift-click to select two objects or more").clicked() {
-            action = Some(Action::Combine(op));
+    });
+    toolbar::separator(ui);
+    toolbar::group(ui, "MODIFY", row, |ui| {
+        let tip = "Cut the next shape out of the object it is put on";
+        if toolbar::tool(ui, row, Icon::Hole, "Hole", armed.hole, Ok(()), tip).clicked() {
+            action = Some(Action::Hole);
         }
-    }
-    ui.separator();
-    let some = selected > 0;
-    let duplicate = ui
-        .add_enabled(some, egui::Button::new("Duplicate"))
-        .on_hover_text(format!("Duplicate the selection ({})", command(Key::D)));
-    if duplicate.clicked() {
-        action = Some(Action::Duplicate);
-    }
-    let copy = ui.add_enabled(some, egui::Button::new("Copy")).on_hover_text(format!(
-        "Copy the selection with its transforms ({}, then {} to paste)",
-        command(Key::C),
-        command(Key::V)
-    ));
-    if copy.clicked() {
-        action = Some(Action::Copy);
-    }
-    let delete = ui.add_enabled(some, egui::Button::new("Delete")).on_hover_text("Delete the selection (Delete)");
-    if delete.clicked() {
-        action = Some(Action::Delete);
-    }
-    if let Some(kind) = tool.armed {
-        let name = SHAPES.iter().find(|s| s.0 == kind).map_or("Shape", |s| s.1);
-        let hint = if tool.hole {
-            format!("{name} hole: click on a face of an object · Shift-click: another · Esc: cancel")
-        } else {
-            format!("{name}: click on the plate or on a face · Shift-click: another · Esc: cancel")
-        };
-        ui.separator();
-        ui.label(RichText::new(hint).size(12.0).color(theme::palette().text_dim));
-    }
+        let tip = "Round the edges of the selected cube or cylinder";
+        if toolbar::tool(ui, row, Icon::Fillet, "Fillet", false, edges, tip).clicked() {
+            action = Some(Action::Edges(true));
+        }
+        let tip = "Bevel the edges of the selected cube or cylinder";
+        if toolbar::tool(ui, row, Icon::Chamfer, "Chamfer", false, edges, tip).clicked() {
+            action = Some(Action::Edges(false));
+        }
+    });
+    toolbar::separator(ui);
+    toolbar::group(ui, "COMBINE", row, |ui| {
+        let enabled = if selected >= 2 { Ok(()) } else { Err("Shift-click to select two objects or more") };
+        for (op, label, tip) in BOOLEANS {
+            let icon = match op {
+                Boolean::Union => Icon::Unite,
+                Boolean::Difference => Icon::Subtract,
+                Boolean::Intersection => Icon::Intersect,
+            };
+            if toolbar::tool(ui, row, icon, label, false, enabled, tip).clicked() {
+                action = Some(Action::Combine(op));
+            }
+        }
+    });
     action
+}
+
+fn shape_icon(kind: Primitive) -> Icon {
+    match kind {
+        Primitive::Cube => Icon::Cube,
+        Primitive::Cylinder => Icon::Cylinder,
+        Primitive::Sphere => Icon::Sphere,
+        Primitive::Cone => Icon::Cone,
+        Primitive::Tube => Icon::Tube,
+        Primitive::Text => Icon::Text,
+    }
+}
+
+/// The right-click menu of the selection, in the view or the tree: the
+/// entry clicked.
+pub(super) fn object_menu(ui: &mut egui::Ui, selected: usize, can_paste: bool) -> Option<Command> {
+    let ctx = ui.ctx().clone();
+    let keys = |modifiers: Modifiers, key: Key| ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key));
+    let some = selected > 0;
+    let mut command = None;
+    let mut entry = |ui: &mut egui::Ui, enabled: bool, label: &str, keys: String, chosen: Command| {
+        if ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(keys)).clicked() {
+            command = Some(chosen);
+            ui.close();
+        }
+    };
+    entry(ui, some, "Duplicate", keys(Modifiers::COMMAND, Key::D), Command::Duplicate);
+    entry(ui, some, "Copy", keys(Modifiers::COMMAND, Key::C), Command::Copy);
+    entry(ui, some, "Cut", keys(Modifiers::COMMAND, Key::X), Command::Cut);
+    entry(ui, can_paste, "Paste", keys(Modifiers::COMMAND, Key::V), Command::Paste);
+    ui.separator();
+    entry(ui, some, "Delete", keys(Modifiers::NONE, Key::Backspace), Command::Delete);
+    ui.separator();
+    entry(ui, selected == 1, "Show in Code", String::new(), Command::ShowInCode);
+    command
 }
 
 #[cfg(test)]

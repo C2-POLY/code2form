@@ -45,6 +45,7 @@ mod modelling;
 mod properties;
 mod shapes;
 mod sketch;
+mod toolbar;
 mod tree;
 mod workspace;
 
