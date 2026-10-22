@@ -34,6 +34,18 @@ pub struct Finding {
     pub span: Span,
 }
 
+impl Finding {
+    /// As an error of the circuit file `src` at `path` is rendered,
+    /// `warning:` for a warning.
+    pub fn render(&self, src: &str, path: &std::path::Path) -> String {
+        let rendered = c2f_lang::Diagnostic::new(self.message.clone(), self.span).render(src, &path.display().to_string());
+        match self.severity {
+            Severity::Error => rendered,
+            Severity::Warning => rendered.replacen("error:", "warning:", 1),
+        }
+    }
+}
+
 /// How close two voltages are to be the same.
 const TOLERANCE: f64 = 1e-6;
 

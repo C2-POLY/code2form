@@ -6,7 +6,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use c2f_circuit::check::{self, Finding, Severity};
+use c2f_circuit::check::{self, Severity};
 use c2f_circuit::{Circuit, Error, Instance, route};
 use c2f_eval::{Node, NodeKind};
 use c2f_lang::Diagnostic;
@@ -106,7 +106,7 @@ fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
     }
     let findings = check::check(circuit);
     for finding in &findings {
-        eprint!("{}", render_finding(finding, src, path));
+        eprint!("{}", finding.render(src, path));
     }
     let count = |severity| findings.iter().filter(|f| f.severity == severity).count();
     let (errors, warnings) = (assembly.errors.len() + count(Severity::Error), count(Severity::Warning));
@@ -124,16 +124,6 @@ fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
     }
     println!("{summary}");
     ExitCode::SUCCESS
-}
-
-/// A finding as an error of the circuit file is rendered, `warning:` for
-/// a warning.
-pub fn render_finding(finding: &Finding, src: &str, path: &Path) -> String {
-    let rendered = Diagnostic::new(finding.message.clone(), finding.span).render(src, &path.display().to_string());
-    match finding.severity {
-        Severity::Error => rendered,
-        Severity::Warning => rendered.replacen("error:", "warning:", 1),
-    }
 }
 
 pub fn plural(n: usize, word: &str) -> String {

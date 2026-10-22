@@ -286,10 +286,25 @@ fn render_circuit(
 ) -> RenderOutcome {
     let start = Instant::now();
     let mut console = Vec::new();
+    let mut annotation_error = None;
     let result = match c2f_circuit::parse(source, path, library_paths) {
         Ok(found) => {
             let found = Arc::new(found);
             read(found.clone());
+            // The wiring checks: the parts render even when they fail.
+            let findings = c2f_circuit::check::check(&found);
+            console.extend(findings.iter().map(|finding| {
+                let level = match finding.severity {
+                    c2f_circuit::check::Severity::Error => Level::Error,
+                    c2f_circuit::check::Severity::Warning => Level::Warning,
+                };
+                Line::new(level, finding.render(source, path))
+            }));
+            let lines = c2f_lang::span::LineIndex::new(source);
+            annotation_error = findings
+                .iter()
+                .find(|f| f.severity == c2f_circuit::check::Severity::Error)
+                .map(|f| lines.line(f.span.start as usize));
             let rendered = parts.update(&found, library_paths, render_part);
             Ok(circuit::scene(&found, &rendered, source, &mut console))
         }
@@ -298,7 +313,7 @@ fn render_circuit(
             Err(circuit::error_line(&errors, path, source))
         }
     };
-    RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters: None, annotation_error: None }
+    RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters: None, annotation_error }
 }
 
 /// Renders a part of a circuit, its parameters set in `source`, as a
@@ -586,6 +601,16 @@ mod tests {
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
         assert!(matches!(outcome.result, Err(Some(1))));
         assert!(outcome.console.iter().any(|l| l.level == Level::Error && l.text.contains("none.c2f")));
+
+        // The wiring checks reach the console, and an error marks its wire.
+        std::fs::write(dir.join("supply.c2f"), "// @pin OUT [0, 0, 1] up power_out 5V\ncube(1);\n").unwrap();
+        std::fs::write(dir.join("chip.c2f"), "// @pin IN [0, 0, 1] up io 3.3V\ncube(1);\n").unwrap();
+        let source = "[parts.s]\npart = \"supply.c2f\"\n[parts.c]\npart = \"chip.c2f\"\nat = [5, 0, 0]\n\n[[wires]]\nfrom = \"s.OUT\"\nto = \"c.IN\"\n";
+        let generation = worker.render(source.into(), dir.join("test.c2fc"), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
+        assert!(outcome.result.is_ok(), "the parts still render");
+        assert!(outcome.console.iter().any(|l| l.level == Level::Error && l.text.contains("c.IN")), "{:?}", outcome.console.iter().map(|l| &l.text).collect::<Vec<_>>());
+        assert_eq!(outcome.annotation_error, Some(7));
         let _ = std::fs::remove_dir_all(dir);
     }
 
