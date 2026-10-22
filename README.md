@@ -32,9 +32,11 @@ and echo output on all 86 files, and the same volumes on every model it
 can export but one (see below). Committed goldens in `tests/oracle` keep
 it so without the reference installed.
 
-Known differences: the reference's `projection()` without `cut` returns
-holes that the operations after it fill, while Code2Form keeps them open
-(0.3% of the volume of `GEB.scad`); fonts that keep their hinting at
+Known differences: on `GEB.scad`'s exact setup, the reference's
+`projection()` without `cut` returns B's holes with the wrong orientation,
+so the operations after it fill them, while Code2Form keeps them open as
+the reference does for the same solid placed or built otherwise (0.3% of
+the volume of `GEB.scad`); fonts that keep their hinting at
 large sizes (Helvetica, Menlo) differ by a fraction of a percent of the
 text size; a few edge cases with NaN and infinite values.
 
