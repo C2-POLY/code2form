@@ -17,3 +17,4 @@ pub use build::{Model, render, render_in};
 pub use image::VIEWS;
 pub use mesh::{Rendered, RenderMesh, Stats};
 pub use primitives::fragments;
+pub use text::set_font_folders;
