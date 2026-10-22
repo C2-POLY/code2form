@@ -10,6 +10,7 @@ mod code_edit;
 mod console;
 mod customizer;
 mod editor;
+mod fillet;
 mod find;
 mod highlight;
 mod icon_setting;

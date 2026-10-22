@@ -1,0 +1,129 @@
+// Cubes and cylinders with rounded (filleted) or chamfered edges, which
+// keep the bounding box and the placement of the `cube()` or `cylinder()`
+// they replace: `rounded_cube([30, 20, 10], fillet = 2)` fills the same
+// box as `cube([30, 20, 10])`. The app's properties panel writes these
+// calls; they are plain OpenSCAD, so the file can be copied next to a
+// design that has to open without Code2Form's library.
+//
+// Curves follow `$fn`, `$fa` and `$fs` as `circle()` does, rounded up to a
+// multiple of 4 segments so that the faces land exactly on the box.
+
+// `cube(size, center)` with its edges rounded to the radius `fillet`:
+// "all" twelve edges, the four "vertical" ones, or the four around the
+// "top" or the "bottom" face (the vertical edges then stay sharp).
+module rounded_cube(size = [1, 1, 1], fillet = 1, edges = "all", center = false) {
+    s = is_num(size) ? [size, size, size] : size;
+    translate(center ? -s / 2 : [0, 0, 0]) _edged_box(s, fillet, edges, true);
+}
+
+// `cube(size, center)` with its edges cut at 45 degrees, `chamfer` back
+// from the edge on both faces; `edges` as for `rounded_cube()`.
+module chamfered_cube(size = [1, 1, 1], chamfer = 1, edges = "all", center = false) {
+    s = is_num(size) ? [size, size, size] : size;
+    translate(center ? -s / 2 : [0, 0, 0]) _edged_box(s, chamfer, edges, false);
+}
+
+// `cylinder(h, r1, r2, center)` (or `r`) with the rim of its "top", its
+// "bottom" or "both" rounded to the radius `fillet`, tangent to the cap
+// and to the side, cones included.
+module rounded_cylinder(h = 1, r = 1, r1, r2, fillet = 1, rims = "both", center = false) {
+    _edged_cylinder(h, is_undef(r1) ? r : r1, is_undef(r2) ? r : r2, fillet, rims, center, true);
+}
+
+// `cylinder(h, r1, r2, center)` (or `r`) with the rim of its "top", its
+// "bottom" or "both" cut `chamfer` back from the rim on the cap and on the
+// side.
+module chamfered_cylinder(h = 1, r = 1, r1, r2, chamfer = 1, rims = "both", center = false) {
+    _edged_cylinder(h, is_undef(r1) ? r : r1, is_undef(r2) ? r : r2, chamfer, rims, center, false);
+}
+
+// The segments of a full circle of radius `r`, as `circle()` takes them,
+// rounded up to a multiple of 4.
+function _segments(r) =
+    4 * ceil(($fn > 0 ? max($fn, 3) : ceil(max(min(360 / $fa, r * 2 * PI / $fs), 5))) / 4);
+
+// The box from the origin to `s`, its `edges` rounded (`round`) or
+// chamfered by `d`.
+module _edged_box(s, d, edges, round) {
+    if (edges == "vertical") {
+        linear_extrude(s.z) _corner_rect(s.x, s.y, d, [true, true, true, true], round);
+    } else if (edges == "top" || edges == "bottom") {
+        // Where two rounded edges meet at a sharp one, the corner is where
+        // the two fillets cross: the box as seen from the front and as
+        // seen from the side, intersected.
+        k = edges == "top" ? [false, false, true, true] : [true, true, false, false];
+        intersection() {
+            rotate([90, 0, 90]) linear_extrude(s.x) _corner_rect(s.y, s.z, d, k, round);
+            translate([0, s.y, 0]) rotate([90, 0, 0]) linear_extrude(s.y) _corner_rect(s.x, s.z, d, k, round);
+        }
+    } else if (round) {
+        hull() for (x = [d, s.x - d], y = [d, s.y - d], z = [d, s.z - d]) translate([x, y, z]) _ball(d);
+    } else {
+        hull() {
+            translate([0, d, d]) cube([s.x, s.y - 2 * d, s.z - 2 * d]);
+            translate([d, 0, d]) cube([s.x - 2 * d, s.y, s.z - 2 * d]);
+            translate([d, d, 0]) cube([s.x - 2 * d, s.y - 2 * d, s.z]);
+        }
+    }
+}
+
+// The rectangle from the origin to [w, h], the corners `k` marks (bottom
+// left, bottom right, top right, top left) rounded or chamfered by `d`.
+module _corner_rect(w, h, d, k, round) {
+    corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    if (round) {
+        hull() for (i = [0 : 3]) {
+            c = corners[i];
+            if (k[i]) translate([d + c.x * (w - 2 * d), d + c.y * (h - 2 * d)]) circle(d, $fn = _segments(d));
+            else translate([c.x * (w - d), c.y * (h - d)]) square(d);
+        }
+    } else {
+        // Each corner, cut or not, going round counter-clockwise.
+        cut = [[[0, d], [d, 0]], [[w - d, 0], [w, d]], [[w, h - d], [w - d, h]], [[d, h], [0, h - d]]];
+        polygon([for (i = [0 : 3]) each (k[i] ? cut[i] : [[corners[i].x * w, corners[i].y * h]])]);
+    }
+}
+
+// A sphere of radius `r` whose poles and equator lie exactly on the
+// radius, unlike `sphere()`'s rings, so that a hull of them fills its box.
+module _ball(r) {
+    n = _segments(r);
+    rotate_extrude($fn = n)
+        polygon(concat([[0, -r]], [for (i = [1 : n / 2 - 1]) r * [cos(-90 + 360 * i / n), sin(-90 + 360 * i / n)]], [[0, r]]));
+}
+
+module _edged_cylinder(h, r1, r2, d, rims, center, round) {
+    bottom = rims != "top" && r1 > 0;
+    top = rims != "bottom" && r2 > 0;
+    // The half profile, counter-clockwise from the axis at the bottom.
+    profile = concat(
+        [[0, 0]],
+        r1 > 0 ? (bottom ? _corner([0, 0], [r1, 0], [r2, h], d, round) : [[r1, 0]]) : [],
+        r2 > 0 ? (top ? _corner([r1, 0], [r2, h], [0, h], d, round) : [[r2, h]]) : [],
+        [[0, h]]
+    );
+    translate([0, 0, center ? -h / 2 : 0]) rotate_extrude($fn = _segments(max(r1, r2))) polygon(profile);
+}
+
+// The corner `v`, between the edges from `a` and to `b`, replaced by an
+// arc of radius `d` tangent to both (`round`) or by a cut `d` back from
+// the corner along each edge.
+function _corner(a, v, b, d, round) =
+    let (
+        u = (a - v) / norm(a - v),
+        w = (b - v) / norm(b - v),
+        angle = acos(u * w)
+    )
+    round
+        ? let (
+            t = d / tan(angle / 2),
+            c = v + (u + w) / norm(u + w) * d / sin(angle / 2),
+            p = v + u * t,
+            q = v + w * t,
+            from = atan2(p.y - c.y, p.x - c.x),
+            turn = 180 - angle,
+            // Counter-clockwise along the profile, the arc turns left.
+            steps = max(1, ceil(_segments(d) * turn / 360))
+        )
+        [for (i = [0 : steps]) i == 0 ? p : i == steps ? q : c + d * [cos(from + turn * i / steps), sin(from + turn * i / steps)]]
+        : [v + u * d, v + w * d];
