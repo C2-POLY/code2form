@@ -160,6 +160,11 @@ mod tests {
         std::env::temp_dir().join(format!("code2form-settings-{name}-{}", std::process::id()))
     }
 
+    /// An absolute path on every system (`/opt` has no drive on Windows).
+    fn absolute(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
     #[test]
     fn survive_a_save_and_load() {
         let dir = temp("round-trip");
@@ -167,8 +172,8 @@ mod tests {
         assert_eq!(Settings::load(Some(&store)), Settings::default(), "no file yet");
         let settings = Settings {
             icon: Tint::Teal,
-            library_folders: vec![PathBuf::from("/opt/libs"), PathBuf::from("/Users/me/with space")],
-            font_folders: vec![PathBuf::from("/opt/fonts")],
+            library_folders: vec![absolute("libs"), absolute("with space")],
+            font_folders: vec![absolute("fonts")],
             render_while_typing: false,
             render_delay: 900,
             code_size: 16.0,
@@ -183,14 +188,18 @@ mod tests {
 
     #[test]
     fn keep_what_they_understand() {
-        let text = "icon = plaid\ncode-size = 99\nrender-delay = 5\nlayer-height = NaN\nlibrary = relative\n\
-                    library = /a\nlibrary = /a\ngrid = maybe\nfuture-key = 1\nno equals sign\n";
-        let settings = Settings::parse(text);
+        let a = absolute("a");
+        let text = format!(
+            "icon = plaid\ncode-size = 99\nrender-delay = 5\nlayer-height = NaN\nlibrary = relative\n\
+             library = {a}\nlibrary = {a}\ngrid = maybe\nfuture-key = 1\nno equals sign\n",
+            a = a.display()
+        );
+        let settings = Settings::parse(&text);
         assert_eq!(settings.icon, Tint::Graphite);
         assert_eq!(settings.code_size, 24.0, "clamped");
         assert_eq!(settings.render_delay, 100, "clamped");
         assert_eq!(settings.layer_height, LAYER_HEIGHT);
-        assert_eq!(settings.library_folders, [PathBuf::from("/a")]);
+        assert_eq!(settings.library_folders, [a]);
         assert!(settings.show_grid);
     }
 
