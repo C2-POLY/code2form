@@ -62,6 +62,20 @@ they are. Written in Rust, it renders as you type.
   Each is one edit of the code, one step to undo. The **Code** toggle
   (⌘E) hides the editor, to model with the view, the tree and the panels
   alone.
+- **Properties panel**: the selected call's arguments in a panel on the
+  right, as in Fusion: sizes, radii, `$fn`, vectors component by
+  component, booleans, texts and a color picker, for builtins and for the
+  parameters a module declares (in the file or in a `use`d library).
+  Changing a value rewrites its literal in place, as one undo step; a
+  number dragged (on its field or its label) is written once, when the
+  drag ends. A parameter left out shows its default, greyed, and editing
+  it adds the argument; a computed one (`width / 2`) is never overwritten:
+  it shows its value, with buttons to replace it by that number, to go to
+  the variable's definition or to open it in the Customizer. The
+  *Placement* section edits the `translate`, `rotate` and `scale` around
+  the object, and *Edges* rounds or chamfers a `cube` or a `cylinder`
+  (all, vertical, top or bottom edges; top, bottom or both rims) into a
+  call to the library's `shapes/rounded.c2f`, keeping its size.
 - **Electronics**: a part declares its pins, mount holes and ports in
   comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
   the reference implementation ignores. A `.c2fc` circuit file (TOML)

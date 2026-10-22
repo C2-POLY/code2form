@@ -16,9 +16,6 @@
 //! shorter). The parameters are numbers: a caller that has `cube([w, d,
 //! h])` passes the evaluated values.
 
-// The properties panel that calls these is not written yet.
-#![allow(dead_code)]
-
 use std::ops::Range;
 
 /// The library file the generated calls need, as `use` names it.
