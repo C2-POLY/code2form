@@ -1,7 +1,8 @@
 // Grogu's base plate, printed in PETG: the plate the parts of grogu.c2fc
 // sit on, a fence around each board, a front wall with an opening for the
-// XIAO's USB-C, a grille under the speaker, and a right wall the motor is
-// screwed to through two standoffs, its shaft through the wall.
+// XIAO's USB-C, a grille under the speaker, a hole under the microphone,
+// and a right wall the motor is screwed to through two standoffs, its
+// shaft through the wall.
 //
 // What comes from the parts is taken from the circuit: move a part there
 // and its fence, opening, grille or standoffs follow at the next render.
@@ -41,12 +42,14 @@ standoff = 2;
 // the motor's face (x = 50.1).
 motor_wall = 52.1;
 
-// A fence `height` tall around what the part covers from above.
+// A fence `height` tall around what the part covers from above. Its
+// convex hull is outline enough for a board or a round part, and quick to
+// take from a detailed part.
 module fence_for(part, height) {
     linear_extrude(height = height)
         difference() {
-            offset(delta = clearance + fence) projection() circuit_part(part);
-            offset(delta = clearance) projection() circuit_part(part);
+            offset(delta = clearance + fence) projection() hull() circuit_part(part);
+            offset(delta = clearance) projection() hull() circuit_part(part);
         }
 }
 
@@ -77,6 +80,8 @@ module grogu_plate() {
         }
         cutout_for("xiao", "usb_c", clearance = opening_clearance);
         cutout_for("motor", "shaft", clearance = opening_clearance);
+        // The microphone hears from below: a hole through the plate.
+        cutout_for("mic", "sound", clearance = 0.5, depth = thickness + 2);
         holes_for("motor", depth = standoff + wall + 1, screw = "M2");
         intersection() {
             cutout_for("speaker", "cone", clearance = 0);

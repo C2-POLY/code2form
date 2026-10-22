@@ -177,7 +177,10 @@ fn collisions(circuit: &Circuit, assembly: &Assembly) -> Vec<String> {
         match program {
             Some(program) => {
                 let output = c2f_eval::evaluate(&program);
-                models.push(c2f_geom::render_in(&output.nodes, enclosure.parent().unwrap_or(Path::new(""))).model);
+                // `%` copies of the parts, there to be seen through, are
+                // not the enclosure: building them would only cost time.
+                let nodes: Vec<_> = output.nodes.into_iter().filter(|node| !node.background).collect();
+                models.push(c2f_geom::render_in(&nodes, enclosure.parent().unwrap_or(Path::new(""))).model);
             }
             None => return vec![format!("collisions: cannot load the enclosure {}", enclosure.display())],
         }
