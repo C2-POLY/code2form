@@ -76,6 +76,23 @@ pub struct Rendered {
 }
 
 impl Rendered {
+    /// The model's smallest and largest corner, at z 0 for a 2D model;
+    /// `None` when it is empty.
+    pub fn bounds(&self) -> Option<([f64; 3], [f64; 3])> {
+        match &self.model {
+            _ if self.model.is_empty() => None,
+            Model::Solid(m) => {
+                let b = m.bounding_box();
+                Some(([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]))
+            }
+            Model::Flat(c) => {
+                let b = c.bounds();
+                Some(([b.min.x, b.min.y, 0.0], [b.max.x, b.max.y, 0.0]))
+            }
+            Model::Empty => None,
+        }
+    }
+
     /// The model as an ASCII STL file, laid out as the reference
     /// implementation writes them. `None` for an empty or 2D model.
     ///

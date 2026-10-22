@@ -14,3 +14,9 @@ path = "src/main.rs"
 c2f-lang.workspace = true
 c2f-eval.workspace = true
 c2f-geom.workspace = true
+# The MCP server's JSON-RPC messages.
+serde_json = "1"
+
+[dev-dependencies]
+# Reads back the server's PNG pictures.
+miniz_oxide = "0.8"

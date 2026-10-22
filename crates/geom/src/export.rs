@@ -232,7 +232,7 @@ fn zip(files: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 /// The CRC-32 that ZIP stores for each entry (IEEE, reflected).
-fn crc32(data: &[u8]) -> u32 {
+pub(crate) fn crc32(data: &[u8]) -> u32 {
     let mut table = [0u32; 256];
     for (n, entry) in table.iter_mut().enumerate() {
         let mut c = n as u32;
