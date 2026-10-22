@@ -5,7 +5,7 @@
 
 // @pin D0  [1.28, 18.12, 1.2] io 3.3V "GPIO1, A0, touch"
 // @pin D1  [1.28, 15.58, 1.2] io 3.3V "GPIO2, A1"
-// @pin D2  [1.28, 13.04, 1.2] io 3.3V "GPIO3, A2, strapping"
+// @pin D2  [1.28, 13.04, 1.2] io 3.3V reserved "GPIO3, A2, strapping"
 // @pin D3  [1.28, 10.5, 1.2]  io 3.3V "GPIO4, A3"
 // @pin D4  [1.28, 7.96, 1.2]  io 3.3V "GPIO5, SDA"
 // @pin D5  [1.28, 5.42, 1.2]  io 3.3V "GPIO6, SCL"

@@ -126,6 +126,12 @@ fn rotations_turn_as_rotate_does() {
     // About x first, then z.
     let (a, _, b) = place("[90, 0, 90]");
     assert!(close(a, [10.0, 21.0, 30.0]) && close(b, [10.0, 20.0, 31.0]), "{a:?} {b:?}");
+    let circuit = folder.parse("[parts.b]\npart = \"board.c2f\"\nat = [10, 20, 30]\nrotate = [90, 0, 90]\n").unwrap();
+    let m = circuit.parts[0].matrix();
+    let pin = circuit.parts[0].annotations.pins[1].position;
+    let by_matrix: Vec<f64> = (0..3).map(|r| (0..3).map(|c| m[r][c] * pin[c]).sum::<f64>() + m[r][3]).collect();
+    assert!(close([by_matrix[0], by_matrix[1], by_matrix[2]], circuit.parts[0].place(pin)));
+    assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0]);
     let (a, _, _) = place("[0, 0, 45]");
     let h = 0.5f64.sqrt();
     assert!(close(a, [10.0 + h, 20.0 + h, 30.0]));

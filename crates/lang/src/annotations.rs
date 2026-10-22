@@ -23,6 +23,8 @@
 //! - voltage: a number followed by `V`, the most a pin takes (what it
 //!   supplies for `power_out`).
 //! - label: a `"string"`.
+//! - `reserved`: a pin the board needs for itself, such as a strapping
+//!   pin read at boot; wiring it gets a warning.
 //! - a mount hole's diameter `d=2`; a port's opening `[width, height]` or a
 //!   round one `d=3`.
 //!
@@ -62,6 +64,8 @@ pub struct Pin {
     /// The most the pin takes, in volts; what it supplies for `power_out`.
     pub voltage: Option<f64>,
     pub label: Option<String>,
+    /// Better left unwired: the board uses it, as a strapping pin.
+    pub reserved: bool,
     /// The annotation's text, after `//`.
     pub span: Span,
 }
@@ -288,6 +292,7 @@ struct Fields {
     kind: Option<PinKind>,
     voltage: Option<f64>,
     label: Option<String>,
+    reserved: bool,
     diameter: Option<f64>,
     size: Option<[f64; 2]>,
 }
@@ -313,7 +318,7 @@ impl What {
         match self {
             What::Pin => {
                 "a direction (up, down, +x, -y, [x, y, z]), a type (io, input, output, power_in, power_out, \
-                 ground, passive, nc), a voltage like 3.3V or a \"label\""
+                 ground, passive, nc), a voltage like 3.3V, reserved or a \"label\""
             }
             What::MountHole => "its diameter d=… or a direction (up, down, +x, -y, [x, y, z])",
             What::Port => {
@@ -339,6 +344,7 @@ impl Reader {
             kind: fields.kind.unwrap_or(PinKind::Passive),
             voltage: fields.voltage,
             label: fields.label,
+            reserved: fields.reserved,
             span,
         });
         Ok(())
@@ -461,6 +467,11 @@ fn fields<'a>(items: impl Iterator<Item = Item<'a>>, what: What) -> Result<Field
                         return Err(twice("a direction"));
                     }
                     fields.direction = Some(*direction);
+                } else if word == "reserved" && what == What::Pin {
+                    if fields.reserved {
+                        return Err(twice("reserved"));
+                    }
+                    fields.reserved = true;
                 } else if let Some(d) = word.strip_prefix("d=").filter(|_| what != What::Pin) {
                     if fields.diameter.is_some() {
                         return Err(twice("a diameter"));
@@ -516,6 +527,9 @@ impl fmt::Display for Pin {
         write!(f, "@pin {} {} {} {}", self.name, vector(&self.position), direction(self.direction), self.kind.name())?;
         if let Some(volts) = self.voltage {
             write!(f, " {}V", number(volts))?;
+        }
+        if self.reserved {
+            write!(f, " reserved")?;
         }
         if let Some(label) = &self.label {
             write!(f, " {}", string(label))?;
@@ -595,6 +609,8 @@ cube(10);
     fn fields_come_in_any_order() {
         let (a, _) = read("// @pin 5V [1, 2, 3] 5V \"supply\" power_in -x\n");
         let (b, _) = read("// @pin 5V [1, 2, 3] -x power_in 5V \"supply\"\n");
+        let (r, _) = read("// @pin D2 [0, 0, 0] reserved io \"strapping\"\n");
+        assert_eq!(r.pins[0].to_string(), "@pin D2 [0, 0, 0] up io reserved \"strapping\"");
         assert_eq!(a.pins[0].to_string(), "@pin 5V [1, 2, 3] -x power_in 5V \"supply\"");
         assert_eq!(a.pins[0].to_string(), b.pins[0].to_string());
         let (c, _) = read("// @port jack [0, 0, 0] [6, 5] [1, 0, 1]\n");
@@ -642,7 +658,7 @@ cube(10);
                 "1: expected the pin's name",
                 "2: expected the pin's position, [x, y, z]",
                 "3: expected the pin's position, [x, y, z]",
-                "4: unknown pin field `sideways`: expected a direction (up, down, +x, -y, [x, y, z]), a type (io, input, output, power_in, power_out, ground, passive, nc), a voltage like 3.3V or a \"label\"",
+                "4: unknown pin field `sideways`: expected a direction (up, down, +x, -y, [x, y, z]), a type (io, input, output, power_in, power_out, ground, passive, nc), a voltage like 3.3V, reserved or a \"label\"",
                 "5: the pin already has a direction",
                 "6: a direction cannot be [0, 0, 0]",
                 "7: a pin name cannot contain `.`",
@@ -653,7 +669,7 @@ cube(10);
                 "12: a diameter must be a positive number",
                 "13: a port needs the size of its opening, as in [9, 3.2] or d=3",
                 "14: a port's opening is [width, height] or d=…, not both",
-                "15: unknown pin field `d=2`: expected a direction (up, down, +x, -y, [x, y, z]), a type (io, input, output, power_in, power_out, ground, passive, nc), a voltage like 3.3V or a \"label\"",
+                "15: unknown pin field `d=2`: expected a direction (up, down, +x, -y, [x, y, z]), a type (io, input, output, power_in, power_out, ground, passive, nc), a voltage like 3.3V, reserved or a \"label\"",
                 "16: unknown mount hole field `\"label\"`: expected its diameter d=… or a direction (up, down, +x, -y, [x, y, z])",
                 "17: expected numbers separated by commas",
                 "18: expected the pin's name",

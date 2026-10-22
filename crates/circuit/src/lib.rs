@@ -129,6 +129,20 @@ impl Instance {
         [p[0] + self.at[0], p[1] + self.at[1], p[2] + self.at[2]]
     }
 
+    /// The 4×4 matrix (rows) that places the part, as the `multmatrix()`
+    /// of `translate(at) rotate(rotate)`.
+    pub fn matrix(&self) -> [[f64; 4]; 4] {
+        let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]].map(|axis| self.turn(axis));
+        let mut m = [[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        for row in 0..3 {
+            for (column, axis) in axes.iter().enumerate() {
+                m[row][column] = axis[row];
+            }
+            m[row][3] = self.at[row];
+        }
+        m
+    }
+
     /// A direction of the part in the circuit's coordinates.
     pub fn turn(&self, v: [f64; 3]) -> [f64; 3] {
         let [x, y, z] = self.rotate;
