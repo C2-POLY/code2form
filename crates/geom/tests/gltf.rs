@@ -200,3 +200,78 @@ fn same_model_same_file() {
     let b = export("color(\"red\") sphere(5);", &GltfOptions::default()).unwrap().bytes;
     assert_eq!(a, b);
 }
+
+fn close3(a: &Value, b: [f64; 3]) -> bool {
+    (0..3).all(|k| (a[k].as_f64().unwrap() - b[k]).abs() < 1e-7)
+}
+
+#[test]
+fn parts_are_named_nodes_in_their_hierarchy() {
+    let glb = export(
+        "cube([40, 40, 5]);
+        translate([20, 20, 5]) rotate([0, 0, 90]) part(\"turret\") {
+            cylinder(h = 10, r = 12, $fn = 36);
+            translate([0, 10, 5]) part(\"barrel\") rotate([-90, 0, 0]) cylinder(h = 20, r = 2);
+        }
+        translate([100, 0, 0]) part(\"pivot\");",
+        &GltfOptions { name: "tower".into(), ..GltfOptions::default() },
+    )
+    .unwrap();
+    assert!(glb.warnings.is_empty(), "{:?}", glb.warnings);
+    let model = Gltf::read(&glb.bytes);
+    let nodes = model.json["nodes"].as_array().unwrap();
+    let names: Vec<&str> = nodes.iter().map(|n| n["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["tower", "turret", "barrel", "pivot"]);
+    assert_eq!(nodes[0]["children"], serde_json::json!([1, 3]));
+    assert_eq!(nodes[1]["children"], serde_json::json!([2]));
+    // The turret at (20, 20, 5) mm: Y up, the model's Y is -Z.
+    assert!(close3(&nodes[1]["translation"], [0.02, 0.005, -0.02]), "{}", nodes[1]);
+    // A quarter turn about the model's Z is one about glTF's Y.
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    let rotation = &nodes[1]["rotation"];
+    assert!((0..4).all(|k| (rotation[k].as_f64().unwrap() - [0.0, half, 0.0, half][k]).abs() < 1e-9), "{rotation}");
+    assert_eq!(nodes[1].get("scale"), None);
+    // The barrel, relative to the turret.
+    assert!(close3(&nodes[2]["translation"], [0.0, 0.005, -0.01]), "{}", nodes[2]);
+    // Each part's mesh in its own frame: the turret's cylinder is centered.
+    let turret = &model.json["meshes"][nodes[1]["mesh"].as_u64().unwrap() as usize];
+    let position = turret["primitives"][0]["attributes"]["POSITION"].as_u64().unwrap() as usize;
+    let min = &model.json["accessors"][position]["min"];
+    assert!(close3(min, [-0.012, 0.0, -0.012]), "{min}");
+    // A part without geometry is a pivot, without a mesh.
+    assert_eq!(nodes[3].get("mesh"), None);
+    assert_eq!(model.json["meshes"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn node_names_are_unique() {
+    let glb = export("part(\"lid\") cube(1); part(\"lid\") cube(2); part(\"model\") cube(3);", &GltfOptions {
+        name: "model".into(),
+        ..GltfOptions::default()
+    });
+    let model = Gltf::read(&glb.unwrap().bytes);
+    let names: Vec<&str> = model.json["nodes"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["model", "lid", "lid 2", "model 2"]);
+}
+
+#[test]
+fn mirrors_and_scales_are_node_scales() {
+    let model = gltf("part(\"a\") cube(1); mirror([1, 0, 0]) scale([1, 2, 3]) part(\"b\") cube(1);");
+    let b = &model.json["nodes"][2];
+    // x mirrored, the model's y and z scales as glTF's z and y.
+    assert!(close3(&b["scale"], [-1.0, 3.0, 2.0]), "{b}");
+    assert_eq!(b.get("rotation"), None, "{b}");
+}
+
+#[test]
+fn a_sheared_part_warns() {
+    let glb = export("multmatrix([[1, 1, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]) part(\"skew\") cube(1);", &GltfOptions::default()).unwrap();
+    assert!(glb.warnings.iter().any(|w| w.contains("part(\"skew\") is sheared")), "{:?}", glb.warnings);
+}
+
+#[test]
+fn a_part_in_a_boolean_is_merged() {
+    let glb = export("difference() { cube(10); part(\"hole\") cylinder(r = 2, h = 30); }", &GltfOptions::default()).unwrap();
+    assert!(glb.warnings[0].contains("merged"), "{:?}", glb.warnings);
+    assert_eq!(Gltf::read(&glb.bytes).json["nodes"].as_array().unwrap().len(), 1);
+}

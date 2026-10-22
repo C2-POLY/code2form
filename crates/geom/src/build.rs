@@ -142,7 +142,7 @@ impl Builder {
 
     fn node_inner(&mut self, node: &Node, ctx: Ctx) -> Model {
         match &node.kind {
-            NodeKind::Group | NodeKind::Union | NodeKind::Render { .. } => {
+            NodeKind::Group | NodeKind::Union | NodeKind::Render { .. } | NodeKind::Part { .. } => {
                 let parts = self.children(node, ctx);
                 self.union(parts)
             }

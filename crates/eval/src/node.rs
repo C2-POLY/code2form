@@ -61,6 +61,10 @@ pub enum NodeKind {
 
     Transform(Matrix),
     Color([f64; 4]),
+    /// Not in the reference: a part of the model kept apart from the rest,
+    /// which a glTF export writes as a node of its own to move and animate.
+    /// Other exports unite it with the rest, as a group.
+    Part { name: String },
     Offset { op: OffsetOp, segments: Segments },
     Resize { size: [f64; 3], auto: [bool; 3], convexity: u32 },
     LinearExtrude {
@@ -184,7 +188,8 @@ impl NodeKind {
     /// `name(arguments)` as in the CSG file.
     pub fn header(&self) -> String {
         match self {
-            NodeKind::Group => "group()".into(),
+            // The reference has no parts: it reads a group back.
+            NodeKind::Group | NodeKind::Part { .. } => "group()".into(),
             NodeKind::Union => "union()".into(),
             NodeKind::Difference => "difference()".into(),
             NodeKind::Intersection => "intersection()".into(),

@@ -7,15 +7,21 @@
 //! Each `color()` becomes a PBR material and a primitive of its own.
 //! Normals are smoothed across the facets of a curved surface and split
 //! along sharp edges, so a cylinder reads round and a cube stays crisp.
+//!
+//! Each `part("name")` is a node of its own, named, holding its geometry
+//! in its own frame, with the translation, rotation and scale written
+//! around it, under the node of the part it is written in. What is outside
+//! any part is the root node.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use c2f_eval::node::Node;
+use c2f_eval::node::{Matrix, Node};
 use manifold_rust::manifold::Manifold;
 use serde_json::{Value, json};
 
 use crate::build::{CUT_COLOR, DEFAULT_COLOR, Model, render_in};
+use crate::parts::{self, Parts};
 
 /// How a model is written to glTF.
 #[derive(Clone, Debug, PartialEq)]
@@ -23,7 +29,8 @@ pub struct GltfOptions {
     /// Meters per model unit: 0.001 keeps a millimeter design at its real
     /// size, 1 makes each unit a meter.
     pub scale: f64,
-    /// The name of the scene's root node.
+    /// The name of the scene's root node, which holds what is outside any
+    /// `part()`.
     pub name: String,
     /// The color of the parts without `color()`, in sRGB. The faces a
     /// `difference()` cuts take it too, rather than the preview's green.
@@ -52,27 +59,160 @@ pub struct Glb {
 /// Facets that meet at more than this angle keep their own normals.
 const SHARP_DEGREES: f64 = 35.0;
 
-/// Renders `nodes` and writes them as a `.glb`. Data files are read
-/// relative to `base_dir`, as [`render_in`] reads them. An empty or 2D
-/// model has no glTF.
+/// Renders `nodes` and writes them as a `.glb`, a node for each `part()`.
+/// Data files are read relative to `base_dir`, as [`render_in`] reads
+/// them. An empty or 2D model has no glTF.
 pub fn glb(nodes: &[Node], base_dir: &Path, options: &GltfOptions) -> Result<Glb, String> {
-    let rendered = render_in(nodes, base_dir);
-    let mut warnings = rendered.warnings;
-    let manifold = match rendered.model {
-        Model::Solid(manifold) if !manifold.is_empty() => manifold,
-        Model::Flat(_) => return Err("the model is 2D; glTF holds solids".into()),
-        _ => return Err("the model is empty; no glTF written".into()),
-    };
+    let Parts { root, parts, mut warnings } = parts::split(nodes);
     let mut writer = Writer::new(options);
-    let mesh = writer.mesh(&options.name, &manifold);
-    let mut node = json!({ "name": options.name });
-    if let Some(mesh) = mesh {
-        node["mesh"] = json!(mesh);
+    // The root, then each part: node `i + 1` is part `i`.
+    let mut flat = false;
+    let names = unique(std::iter::once(options.name.as_str()).chain(parts.iter().map(|p| p.name.as_str())));
+    let geometry = std::iter::once(&root).chain(parts.iter().map(|p| &p.nodes));
+    for (name, nodes) in names.iter().zip(geometry) {
+        let rendered = render_in(nodes, base_dir);
+        for warning in rendered.warnings {
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }
+        let mut node = json!({ "name": name });
+        match rendered.model {
+            Model::Solid(manifold) => {
+                if let Some(mesh) = writer.mesh(name, &manifold) {
+                    node["mesh"] = json!(mesh);
+                }
+            }
+            Model::Flat(_) => flat = true,
+            Model::Empty => {}
+        }
+        writer.nodes.push(node);
     }
-    writer.nodes.push(node);
+    if writer.meshes.is_empty() {
+        return Err(if flat { "the model is 2D; glTF holds solids" } else { "the model is empty; no glTF written" }.into());
+    }
+    if flat {
+        warnings.push("The 2D shapes of the model are left out: glTF holds solids".into());
+    }
+    for (i, part) in parts.iter().enumerate() {
+        let parent = part.parent.map_or(0, |p| p + 1);
+        let node = &mut writer.nodes[i + 1];
+        let (transform, sheared) = Transform::of(&part.matrix, options.scale);
+        if sheared {
+            warnings.push(format!(
+                "part(\"{}\") is sheared or skewed, which a glTF node cannot hold: it is written with the nearest rotation",
+                part.name
+            ));
+        }
+        transform.write(node);
+        let children = &mut writer.nodes[parent]["children"];
+        match children.as_array_mut() {
+            Some(children) => children.push(json!(i + 1)),
+            None => *children = json!([i + 1]),
+        }
+    }
     let (bytes, triangles, vertices) = writer.finish(vec![0]);
-    warnings.dedup();
     Ok(Glb { bytes, warnings, triangles, vertices })
+}
+
+/// `names`, a number added to those met before (`lid`, `lid 2`), so that
+/// engines that key nodes by name keep them as written.
+fn unique<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        let mut candidate = name.to_string();
+        let mut n = 1;
+        while out.contains(&candidate) {
+            n += 1;
+            candidate = format!("{name} {n}");
+        }
+        out.push(candidate);
+    }
+    out
+}
+
+/// A node's place in glTF: translation in meters with Y up, rotation as a
+/// unit quaternion `[x, y, z, w]`, and scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Transform {
+    pub translation: [f64; 3],
+    pub rotation: [f64; 4],
+    pub scale: [f64; 3],
+}
+
+impl Transform {
+    /// `matrix`, which places a part in its parent's frame, in glTF's
+    /// frame; and whether it was sheared, which a glTF node cannot hold,
+    /// so that its rotation is the nearest one.
+    pub(crate) fn of(matrix: &Matrix, scale: f64) -> (Transform, bool) {
+        // Y up: the turn C applied on both sides, C · M · Cᵀ.
+        let turn = |[x, y, z]: [f64; 3]| [x, z, -y];
+        let translation = turn([matrix[0][3], matrix[1][3], matrix[2][3]]).map(|c| c * scale);
+        let column = |j: usize| turn([matrix[0][j], matrix[1][j], matrix[2][j]]);
+        let mut columns = [column(0), column(2), column(1).map(|c| -c)];
+        let mut scales = columns.map(|c| dot(c, c).sqrt());
+        // A mirror is a negative scale along X.
+        if dot(cross(columns[0], columns[1]), columns[2]) < 0.0 {
+            scales[0] = -scales[0];
+        }
+        for (column, s) in columns.iter_mut().zip(scales) {
+            if s != 0.0 {
+                *column = column.map(|c| c / s);
+            }
+        }
+        // The nearest rotation, by Gram-Schmidt.
+        let x = unit(columns[0]).unwrap_or([1.0, 0.0, 0.0]);
+        let y = unit(sub(columns[1], x.map(|c| c * dot(x, columns[1])))).unwrap_or_else(|| any_normal(x));
+        let z = cross(x, y);
+        let sheared = scales.iter().all(|&s| s != 0.0)
+            && [dot(columns[0], columns[1]), dot(columns[1], columns[2]), dot(columns[0], columns[2])]
+                .iter()
+                .any(|d| d.abs() > 1e-6);
+        (Transform { translation, rotation: quaternion([x, y, z]), scale: scales }, sheared)
+    }
+
+    /// Sets the node's `translation`, `rotation` and `scale`, leaving out
+    /// those that change nothing.
+    fn write(&self, node: &mut Value) {
+        if self.translation != [0.0; 3] {
+            node["translation"] = json!(self.translation);
+        }
+        if self.rotation != [0.0, 0.0, 0.0, 1.0] {
+            node["rotation"] = json!(self.rotation);
+        }
+        if self.scale != [1.0; 3] {
+            node["scale"] = json!(self.scale);
+        }
+    }
+}
+
+/// A unit vector at right angles to `v`.
+fn any_normal(v: [f64; 3]) -> [f64; 3] {
+    let other = if v[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    unit(cross(v, other)).unwrap_or([0.0, 0.0, 1.0])
+}
+
+/// The unit quaternion `[x, y, z, w]` of the rotation whose columns are
+/// `columns`, with `w` at least 0.
+fn quaternion(columns: [[f64; 3]; 3]) -> [f64; 4] {
+    let m = |i: usize, j: usize| columns[j][i];
+    let trace = m(0, 0) + m(1, 1) + m(2, 2);
+    let q = if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        [(m(2, 1) - m(1, 2)) / s, (m(0, 2) - m(2, 0)) / s, (m(1, 0) - m(0, 1)) / s, s / 4.0]
+    } else if m(0, 0) > m(1, 1) && m(0, 0) > m(2, 2) {
+        let s = (1.0 + m(0, 0) - m(1, 1) - m(2, 2)).sqrt() * 2.0;
+        [s / 4.0, (m(0, 1) + m(1, 0)) / s, (m(0, 2) + m(2, 0)) / s, (m(2, 1) - m(1, 2)) / s]
+    } else if m(1, 1) > m(2, 2) {
+        let s = (1.0 + m(1, 1) - m(0, 0) - m(2, 2)).sqrt() * 2.0;
+        [(m(0, 1) + m(1, 0)) / s, s / 4.0, (m(1, 2) + m(2, 1)) / s, (m(0, 2) - m(2, 0)) / s]
+    } else {
+        let s = (1.0 + m(2, 2) - m(0, 0) - m(1, 1)).sqrt() * 2.0;
+        [(m(0, 2) + m(2, 0)) / s, (m(1, 2) + m(2, 1)) / s, s / 4.0, (m(1, 0) - m(0, 1)) / s]
+    };
+    let length = q.iter().map(|c| c * c).sum::<f64>().sqrt();
+    let sign = if q[3] < 0.0 { -1.0 } else { 1.0 };
+    q.map(|c| sign * c / length)
 }
 
 /// The glTF document being written, and its binary buffer.

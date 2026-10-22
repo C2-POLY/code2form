@@ -13,6 +13,7 @@ mod image;
 mod import;
 mod mesh;
 mod offset;
+mod parts;
 mod primitives;
 mod text;
 

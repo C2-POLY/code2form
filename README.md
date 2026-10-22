@@ -158,6 +158,39 @@ UnityGLTF packages. The file passes the Khronos glTF-Validator.
   and kept apart where faces meet at more than 35°, so a cylinder reads
   round and a cube keeps its edges.
 
+### Parts
+
+STL and 3MF exports unite the whole model into one solid. `part("name")`
+keeps what it holds apart from the rest: in a glTF it is a node of its
+own, named, that a game moves or animates.
+
+```
+cube([40, 40, 5]);
+translate([20, 20, 5]) rotate([0, 0, 45]) part("turret") {
+    cylinder(h = 10, r = 12);
+    translate([0, 8, 5]) part("barrel") rotate([-90, 0, 0]) cylinder(h = 25, r = 2);
+}
+```
+
+- A part's geometry is in its own frame; the `translate()`, `rotate()`,
+  `scale()` and `mirror()` written around it become the node's
+  translation, rotation and scale. A shear has no glTF equivalent: the
+  node takes the nearest rotation, with a warning.
+- A part in a part is a child node, and follows its parent. What is
+  outside any part is the root node, named after the file. Names stay
+  unique: a second part named `lid` is `lid 2`.
+- A part inside `difference()`, `intersection()`, `hull()`,
+  `minkowski()` and the other operations that reshape it is merged into
+  the geometry around it, with a warning. `union()` and `color()` keep
+  it apart; it takes the color it is drawn in.
+- A part without geometry is an empty node, a pivot to hang other parts
+  on.
+- STL, 3MF and the app's view draw the parts as the rest of the model,
+  and `c2f csg` prints them as `group()`. The reference implementation
+  ignores `part()` and what it holds, with a warning; a file that defines
+  `module part(name) children();` opens there whole. A module of your own
+  named `part` wins over the built-in one.
+
 ## Compatibility
 
 Code2Form opens `.scad` files. Its parser, evaluator and geometry are

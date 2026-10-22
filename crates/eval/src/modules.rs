@@ -244,6 +244,17 @@ pub fn instantiate<'p>(
             }
             Ok(Some(None))
         }
+        // Not in the reference: a part kept apart from the rest of the
+        // model, for glTF exports.
+        "part" => {
+            let p = bind!(["name"]);
+            let name = match p.get("name") {
+                Value::Str(name) => name.to_string(),
+                Value::Undef => "part".to_string(),
+                other => other.to_display(),
+            };
+            with_children!(p, NodeKind::Part { name })
+        }
         // Not in the reference: an enclosure's standoffs, screw holes and
         // cutouts, and the parts themselves, from the circuit it names.
         "standoffs_for" => {
