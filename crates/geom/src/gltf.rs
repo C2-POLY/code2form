@@ -12,10 +12,17 @@
 //! in its own frame, with the translation, rotation and scale written
 //! around it, under the node of the part it is written in. What is outside
 //! any part is the root node.
+//!
+//! A program that reads `$t` is animated ([`program_glb`]): its parts'
+//! geometry is built once, at `$t = 0`, then the program is evaluated at
+//! each frame, without building any geometry, for where its parts are.
+//! Their movement becomes a glTF animation: a track of translations,
+//! rotations or scales for each part that moves, interpolated linearly.
 
 use std::collections::HashMap;
 use std::path::Path;
 
+use c2f_eval::Program;
 use c2f_eval::node::{Matrix, Node};
 use manifold_rust::manifold::Manifold;
 use serde_json::{Value, json};
@@ -35,12 +42,53 @@ pub struct GltfOptions {
     /// The color of the parts without `color()`, in sRGB. The faces a
     /// `difference()` cuts take it too, rather than the preview's green.
     pub color: [f32; 3],
+    /// How a program that reads `$t` is animated, by [`program_glb`];
+    /// `None` writes it at `$t = 0`, still.
+    pub animation: Option<GltfAnimation>,
 }
 
 impl Default for GltfOptions {
     fn default() -> Self {
         let [r, g, b, _] = DEFAULT_COLOR;
-        GltfOptions { scale: 0.001, name: "Code2Form".into(), color: [r, g, b] }
+        GltfOptions {
+            scale: 0.001,
+            name: "Code2Form".into(),
+            color: [r, g, b],
+            animation: Some(GltfAnimation::default()),
+        }
+    }
+}
+
+/// The animation of the parts along `$t`, from 0 to 1 in `duration`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GltfAnimation {
+    pub name: String,
+    /// In seconds.
+    pub duration: f64,
+    /// Frames sampled a second.
+    pub fps: f64,
+    /// Plays over and over. Godot reads a name that ends in `-loop` so:
+    /// the name gets that ending.
+    pub looped: bool,
+}
+
+impl Default for GltfAnimation {
+    fn default() -> Self {
+        GltfAnimation { name: "animation".into(), duration: 2.0, fps: 30.0, looped: true }
+    }
+}
+
+impl GltfAnimation {
+    /// The name written: with `-loop` when it loops.
+    pub fn written_name(&self) -> String {
+        let looping = ["-loop", "_loop", "-cycle", "_cycle"].iter().any(|end| self.name.ends_with(end));
+        if self.looped && !looping { format!("{}-loop", self.name) } else { self.name.clone() }
+    }
+
+    /// The steps between frames: at least one, so that `$t` = 0 and 1 are
+    /// both sampled.
+    fn intervals(&self) -> usize {
+        ((self.duration * self.fps).round() as usize).max(1)
     }
 }
 
@@ -54,6 +102,8 @@ pub struct Glb {
     /// Vertices written: a corner shared by facets that meet at a sharp
     /// edge or in two colors is written once for each.
     pub vertices: usize,
+    /// The frames of the animation, none when it is still.
+    pub frames: usize,
 }
 
 /// Facets that meet at more than this angle keep their own normals.
@@ -63,7 +113,99 @@ const SHARP_DEGREES: f64 = 35.0;
 /// Data files are read relative to `base_dir`, as [`render_in`] reads
 /// them. An empty or 2D model has no glTF.
 pub fn glb(nodes: &[Node], base_dir: &Path, options: &GltfOptions) -> Result<Glb, String> {
-    let Parts { root, parts, mut warnings } = parts::split(nodes);
+    build(parts::split(nodes), base_dir, options, None)
+}
+
+/// Evaluates `program` and writes it as a `.glb`, as [`glb`] does, its
+/// data files read next to its main file. When it reads `$t` and
+/// `options.animation` is set, its parts move as `$t` goes from 0 to 1.
+/// The error that stops the program is the error.
+pub fn program_glb(program: &mut Program, options: &GltfOptions) -> Result<Glb, String> {
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let t = program.t;
+    let result = sample(program, options).and_then(|(first, motion)| build(first, &base_dir, options, motion));
+    program.t = t;
+    result
+}
+
+/// Where each part is at each frame, and the animation's name.
+struct Motion {
+    name: String,
+    /// In seconds.
+    times: Vec<f64>,
+    /// For each frame, each part's matrix, as [`parts::Part::matrix`].
+    poses: Vec<Vec<Matrix>>,
+}
+
+/// The program at `$t = 0`, split into parts, and with an animation, where
+/// they are at each frame. A frame that changes more than the parts'
+/// places is a warning: the geometry is the first frame's.
+fn sample(program: &mut Program, options: &GltfOptions) -> Result<(Parts, Option<Motion>), String> {
+    let evaluate = |program: &mut Program, t: f64| {
+        program.t = t;
+        let output = c2f_eval::evaluate(program);
+        match output.error {
+            Some(error) if t == 0.0 => Err(error),
+            Some(error) => Err(format!("at $t = {t}: {error}")),
+            None => Ok(output),
+        }
+    };
+    let output = evaluate(program, 0.0)?;
+    let mut first = parts::split(&output.nodes);
+    let Some(animation) = options.animation.as_ref().filter(|_| output.animated) else { return Ok((first, None)) };
+    if first.parts.is_empty() {
+        first.warnings.push(
+            "The model reads $t but has no part(): put what moves in part(\"name\") for the glTF to animate it".into(),
+        );
+        return Ok((first, None));
+    }
+    let intervals = animation.intervals();
+    let mut motion = Motion { name: animation.written_name(), times: Vec::new(), poses: Vec::new() };
+    let mut warned: Vec<Option<usize>> = Vec::new();
+    for frame in 0..=intervals {
+        let t = frame as f64 / intervals as f64;
+        motion.times.push(t * animation.duration);
+        if frame == 0 {
+            motion.poses.push(first.parts.iter().map(|p| p.matrix).collect());
+            continue;
+        }
+        let now = parts::split(&evaluate(program, t)?.nodes);
+        let same = now.parts.len() == first.parts.len()
+            && now.parts.iter().zip(&first.parts).all(|(a, b)| a.name == b.name && a.parent == b.parent);
+        if !same {
+            if !warned.contains(&None) {
+                warned.push(None);
+                first.warnings.push(format!(
+                    "The parts change with $t (at $t = {t}, they are not those at 0): the glTF keeps them where they were"
+                ));
+            }
+            motion.poses.push(motion.poses[frame - 1].clone());
+            continue;
+        }
+        let root_changed = now.root != first.root;
+        for (i, (a, b)) in now.parts.iter().zip(&first.parts).enumerate() {
+            if a.nodes != b.nodes && !warned.contains(&Some(i)) {
+                warned.push(Some(i));
+                first.warnings.push(format!(
+                    "part(\"{}\") changes shape with $t, which a glTF cannot hold: it keeps its shape at $t = 0 and moves",
+                    b.name
+                ));
+            }
+        }
+        if root_changed && !warned.contains(&Some(usize::MAX)) {
+            warned.push(Some(usize::MAX));
+            first.warnings.push(
+                "What is outside any part() changes with $t, which a glTF cannot hold: it is kept as at $t = 0".into(),
+            );
+        }
+        motion.poses.push(now.parts.iter().map(|p| p.matrix).collect());
+    }
+    Ok((first, Some(motion)))
+}
+
+/// Writes the parts, and their motion, as a `.glb`.
+fn build(split: Parts, base_dir: &Path, options: &GltfOptions, motion: Option<Motion>) -> Result<Glb, String> {
+    let Parts { root, parts, mut warnings } = split;
     let mut writer = Writer::new(options);
     // The root, then each part: node `i + 1` is part `i`.
     let mut flat = false;
@@ -111,8 +253,12 @@ pub fn glb(nodes: &[Node], base_dir: &Path, options: &GltfOptions) -> Result<Glb
             None => *children = json!([i + 1]),
         }
     }
+    let frames = match motion {
+        Some(motion) => writer.animation(&motion, parts.len(), &mut warnings),
+        None => 0,
+    };
     let (bytes, triangles, vertices) = writer.finish(vec![0]);
-    Ok(Glb { bytes, warnings, triangles, vertices })
+    Ok(Glb { bytes, warnings, triangles, vertices, frames })
 }
 
 /// `names`, a number added to those met before (`lid`, `lid 2`), so that
@@ -226,6 +372,7 @@ struct Writer {
     meshes: Vec<Value>,
     nodes: Vec<Value>,
     materials: Vec<Value>,
+    animations: Vec<Value>,
     /// The material of each color, by its bits.
     material_of: HashMap<[u32; 4], usize>,
     triangles: usize,
@@ -248,6 +395,7 @@ impl Writer {
             meshes: Vec::new(),
             nodes: Vec::new(),
             materials: Vec::new(),
+            animations: Vec::new(),
             material_of: HashMap::new(),
             triangles: 0,
             vertices: 0,
@@ -345,6 +493,51 @@ impl Writer {
         Some(self.meshes.len() - 1)
     }
 
+    /// Writes the parts' `motion` as an animation, a track for each of
+    /// their translations, rotations and scales that changes; node `i + 1`
+    /// is part `i`. Returns how many frames it has: none when nothing moves.
+    fn animation(&mut self, motion: &Motion, parts: usize, warnings: &mut Vec<String>) -> usize {
+        let times: Vec<f32> = motion.times.iter().map(|&t| t as f32).collect();
+        let mut samplers = Vec::new();
+        let mut channels = Vec::new();
+        let mut input = None;
+        for i in 0..parts {
+            let transforms: Vec<Transform> =
+                motion.poses.iter().map(|pose| Transform::of(&pose[i], self.scale).0).collect();
+            let mut rotations: Vec<[f64; 4]> = transforms.iter().map(|t| t.rotation).collect();
+            // q and -q are the same turn; the shorter way between frames is
+            // the one meant.
+            for k in 1..rotations.len() {
+                let previous = rotations[k - 1];
+                if (0..4).map(|c| previous[c] * rotations[k][c]).sum::<f64>() < 0.0 {
+                    rotations[k] = rotations[k].map(|c| -c);
+                }
+            }
+            let translations: Vec<Vec<f64>> = transforms.iter().map(|t| t.translation.to_vec()).collect();
+            let scales: Vec<Vec<f64>> = transforms.iter().map(|t| t.scale.to_vec()).collect();
+            let rotations: Vec<Vec<f64>> = rotations.iter().map(|q| q.to_vec()).collect();
+            for (path, values, kind) in
+                [("translation", translations, "VEC3"), ("rotation", rotations, "VEC4"), ("scale", scales, "VEC3")]
+            {
+                let still = values.iter().all(|v| v.iter().zip(&values[0]).all(|(a, b)| (a - b).abs() <= 1e-9));
+                if still {
+                    continue;
+                }
+                let input = *input.get_or_insert_with(|| self.floats(&times, 1, "SCALAR", None, true));
+                let flat: Vec<f32> = values.iter().flatten().map(|&v| v as f32).collect();
+                let output = self.floats(&flat, values[0].len(), kind, None, false);
+                samplers.push(json!({ "input": input, "output": output, "interpolation": "LINEAR" }));
+                channels.push(json!({ "sampler": samplers.len() - 1, "target": { "node": i + 1, "path": path } }));
+            }
+        }
+        if channels.is_empty() {
+            warnings.push("The model reads $t, but no part() moves with it: no animation written".into());
+            return 0;
+        }
+        self.animations.push(json!({ "name": motion.name, "samplers": samplers, "channels": channels }));
+        times.len()
+    }
+
     /// The `.glb` of a scene whose root nodes are `roots`, with its triangle
     /// and vertex counts.
     fn finish(self, roots: Vec<usize>) -> (Vec<u8>, usize, usize) {
@@ -354,6 +547,9 @@ impl Writer {
             "scenes": [{ "nodes": roots }],
             "nodes": self.nodes,
         });
+        if !self.animations.is_empty() {
+            document["animations"] = json!(self.animations);
+        }
         if !self.meshes.is_empty() {
             document["meshes"] = json!(self.meshes);
             document["materials"] = json!(self.materials);

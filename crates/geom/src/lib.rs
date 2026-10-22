@@ -19,7 +19,7 @@ mod text;
 
 pub use build::{DEFAULT_COLOR, Model, render, render_in};
 pub use collide::{Placement, TOUCHING, collisions};
-pub use gltf::{Glb, GltfOptions, glb};
+pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
 pub use image::VIEWS;
 pub use mesh::{Rendered, RenderMesh, Stats};
 pub use primitives::fragments;

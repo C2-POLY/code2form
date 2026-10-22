@@ -262,6 +262,12 @@ fn export_writes_files() {
     assert_eq!(document["accessors"][0]["max"], json!([10.0, 10.0, 0.0]));
     let (is_error, _) = server.call("export", json!({ "code": "cube(1);", "output": gltf, "scale": 0 }));
     assert!(is_error);
+    let code = "rotate([0, 0, 360 * $t]) part(\"wheel\") cube(5);";
+    let (is_error, report) = server.report("export", json!({ "code": code, "output": gltf, "fps": 10, "loop": false }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["animation"], json!({ "name": "part", "frames": 21 }));
+    let (is_error, report) = server.report("export", json!({ "code": code, "output": gltf, "animate": false }));
+    assert!(!is_error && report.get("animation").is_none(), "{report}");
 
     let (is_error, report) = server.report("export", json!({ "code": "square(10);", "output": dir.join("plate.svg") }));
     assert!(!is_error, "{report}");

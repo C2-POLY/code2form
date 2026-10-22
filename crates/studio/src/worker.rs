@@ -266,7 +266,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
             }
         }
         for (target, format, options) in exports {
-            let result = export(shown.as_ref(), &target, format, &options);
+            let result = export(shown.as_mut(), &target, format, &options);
             if replies.send(Reply::Exported { target, result }).is_err() {
                 return;
             }
@@ -532,7 +532,7 @@ fn pipeline(
     Ok((rendered, program))
 }
 
-fn export(shown: Option<&Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
+fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
     let Shown { rendered, program } = shown.ok_or("there is no model to export yet")?;
     if format == Format::Glb {
         return export_gltf(program, target, &options.gltf);
@@ -555,20 +555,21 @@ fn export(shown: Option<&Shown>, target: &Path, format: Format, options: &Export
     Ok(format!("Exported {} {what} to {}", group_digits(count), target.display()))
 }
 
-/// Writes the program's model as a `.glb`, its root node named after the
-/// file.
-fn export_gltf(program: &c2f_eval::Program, target: &Path, options: &c2f_geom::GltfOptions) -> Result<String, String> {
+/// Writes the program's model as a `.glb`, animated when it reads `$t`,
+/// its root node and its animation named after the file.
+fn export_gltf(program: &mut c2f_eval::Program, target: &Path, options: &c2f_geom::GltfOptions) -> Result<String, String> {
     let mut options = options.clone();
     if let Some(stem) = target.file_stem() {
         options.name = stem.to_string_lossy().into_owned();
+        if let Some(animation) = options.animation.as_mut() {
+            animation.name = options.name.clone();
+        }
     }
-    let glb = catch_unwind(AssertUnwindSafe(|| {
-        let output = c2f_eval::evaluate(program);
-        c2f_geom::glb(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")), &options)
-    }))
-    .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))??;
+    let glb = catch_unwind(AssertUnwindSafe(|| c2f_geom::program_glb(program, &options)))
+        .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))??;
     std::fs::write(target, &glb.bytes).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
-    let mut message = format!("Exported {} triangles to {}", group_digits(glb.triangles), target.display());
+    let frames = if glb.frames > 0 { format!(", animated over {} frames,", glb.frames) } else { String::new() };
+    let mut message = format!("Exported {} triangles{frames} to {}", group_digits(glb.triangles), target.display());
     for warning in &glb.warnings {
         message.push_str(&format!("\nWarning: {warning}"));
     }

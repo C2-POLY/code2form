@@ -89,7 +89,12 @@ impl Parts {
                 return Some(node.clone());
             }
         };
-        let children = node.children.iter().filter_map(|child| self.strip(child, &inner)).collect();
+        let children: Vec<Node> = node.children.iter().filter_map(|child| self.strip(child, &inner)).collect();
+        // What only held parts holds nothing now: its place would change
+        // with theirs.
+        if children.is_empty() && !node.children.is_empty() {
+            return None;
+        }
         Some(Node { kind: node.kind.clone(), highlight: node.highlight, background: false, children })
     }
 }
@@ -169,7 +174,8 @@ mod tests {
         // The arm's geometry holds its cube, not the hand's sphere.
         let arm = c2f_eval::node::csg(&parts.parts[1].nodes);
         assert!(arm.contains("cube(size = [2, 2, 20]") && !arm.contains("sphere"), "{arm}");
-        assert!(parts.root.iter().all(|n| c2f_eval::node::csg(std::slice::from_ref(n)).trim() == "multmatrix([[1, 0, 0, 50], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]);"));
+        // What only held parts is gone from the root.
+        assert!(parts.root.is_empty(), "{}", c2f_eval::node::csg(&parts.root));
     }
 
     #[test]

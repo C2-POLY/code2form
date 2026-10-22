@@ -51,3 +51,23 @@ fn a_flat_model_writes_nothing() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("2D"));
 }
+
+const TURRET: &str = "cube([40, 40, 5]); translate([20, 20, 5]) rotate([0, 0, 360 * $t]) part(\"turret\") cylinder(h = 10, r = 12);";
+
+#[test]
+fn a_model_that_reads_t_is_animated() {
+    let output = c2f(&[], "turret", TURRET);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let gltf = json(&output.stdout);
+    assert!(gltf["animations"][0]["name"].as_str().unwrap().ends_with("-turret-loop"), "{}", gltf["animations"]);
+    assert!(String::from_utf8_lossy(&output.stderr).ends_with(", 61 frames\n"));
+
+    let output = c2f(&["--duration", "1", "--fps", "10", "--animation", "spin", "--no-loop"], "turret", TURRET);
+    let gltf = json(&output.stdout);
+    assert_eq!(gltf["animations"][0]["name"], "spin");
+    assert!(String::from_utf8_lossy(&output.stderr).ends_with(", 11 frames\n"));
+
+    let output = c2f(&["--still"], "turret", TURRET);
+    assert!(json(&output.stdout).get("animations").is_none());
+    assert_eq!(c2f(&["--fps", "0"], "bad", TURRET).status.code(), Some(2));
+}

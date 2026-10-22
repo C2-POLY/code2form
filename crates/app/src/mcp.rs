@@ -155,6 +155,20 @@ fn tools() -> Value {
                     "default": 0.001,
                     "description": "glb: meters per model unit. 0.001 keeps a model in millimeters at its size; 1 makes each unit a meter.",
                 },
+                "duration": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 2,
+                    "description": "glb of a model that reads $t: the seconds its part() nodes take to move from $t = 0 to 1.",
+                },
+                "fps": { "type": "number", "exclusiveMinimum": 0, "default": 30, "description": "glb: animation frames sampled a second." },
+                "animation": { "type": "string", "description": "glb: the animation's name (default: the output file's name)." },
+                "loop": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "glb: the animation loops; its name then ends in -loop, which Godot reads. false plays it once.",
+                },
+                "animate": { "type": "boolean", "default": true, "description": "glb: false writes the model at $t = 0, without animation." },
             }), &["output"]),
         },
     ]);
@@ -317,16 +331,35 @@ fn export_gltf(args: &Value, output: &str) -> Result<Vec<Value>, String> {
     if let Some(stem) = Path::new(output).file_stem() {
         options.name = stem.to_string_lossy().into_owned();
     }
-    let (program, evaluated) = evaluate(args)?;
-    let base = program.files[0].path.parent().unwrap_or(Path::new(""));
+    let positive = |key: &str| match args.get(key) {
+        None => Ok(None),
+        Some(v) => v.as_f64().filter(|v| v.is_finite() && *v > 0.0).map(Some).ok_or(format!("`{key}` must be a positive number")),
+    };
+    let mut animation = c2f_geom::GltfAnimation { name: options.name.clone(), ..Default::default() };
+    if let Some(duration) = positive("duration")? {
+        animation.duration = duration;
+    }
+    if let Some(fps) = positive("fps")? {
+        animation.fps = fps;
+    }
+    if let Some(name) = args.get("animation").and_then(Value::as_str) {
+        animation.name = name.to_string();
+    }
+    animation.looped = args.get("loop").and_then(Value::as_bool).unwrap_or(true);
+    let animate = args.get("animate").and_then(Value::as_bool).unwrap_or(true);
+    options.animation = animate.then_some(animation);
+    let (mut program, evaluated) = evaluate(args)?;
     let mut report = json!({ "ok": true, "echo": evaluated.echo, "warnings": evaluated.warnings });
-    let glb = c2f_geom::glb(&evaluated.nodes, base, &options).map_err(|why| format!("{why}\n{}", pretty(&report)))?;
+    let glb = c2f_geom::program_glb(&mut program, &options).map_err(|why| format!("{why}\n{}", pretty(&report)))?;
     if let Some(warnings) = report["warnings"].as_array_mut() {
         warnings.extend(glb.warnings.iter().map(|w| json!(w)));
     }
     report["model"] = json!("3D");
     report["triangles"] = json!(glb.triangles);
     report["vertices"] = json!(glb.vertices);
+    if glb.frames > 0 {
+        report["animation"] = json!({ "name": options.animation.map(|a| a.written_name()), "frames": glb.frames });
+    }
     std::fs::write(output, &glb.bytes).map_err(|err| format!("cannot write {output}: {err}"))?;
     report["written"] = json!({ "path": output, "format": Export::Glb.name(), "bytes": glb.bytes.len() });
     Ok(vec![text(pretty(&report))])

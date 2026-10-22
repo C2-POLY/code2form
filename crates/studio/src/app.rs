@@ -1679,7 +1679,18 @@ impl StudioApp {
                 self.render_now();
             }
             let [r, g, b] = self.settings.model_color.map(|c| f32::from(c) / 255.0);
-            let gltf = c2f_geom::GltfOptions { scale: self.settings.gltf_scale, color: [r, g, b], ..Default::default() };
+            let animation = c2f_geom::GltfAnimation {
+                duration: self.settings.gltf_duration,
+                fps: f64::from(self.settings.gltf_fps),
+                looped: self.settings.gltf_loop,
+                ..Default::default()
+            };
+            let gltf = c2f_geom::GltfOptions {
+                scale: self.settings.gltf_scale,
+                color: [r, g, b],
+                animation: Some(animation),
+                ..Default::default()
+            };
             self.worker.export(target, format, ExportOptions { binary_stl: self.settings.binary_stl, gltf });
         }
     }
@@ -3044,6 +3055,15 @@ fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolde
     section_heading(ui, "glTF models", "For game engines: Godot, Unity. glTF counts in meters.");
     ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[0], "Real size: a millimeter is a millimeter");
     ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[1], "A unit is a meter: for levels and scenery");
+    ui.add_space(6.0);
+    ui.label(RichText::new("A design that reads $t moves its part()s along it:").color(theme::palette().text_dim));
+    ui.horizontal(|ui| {
+        ui.add(egui::DragValue::new(&mut settings.gltf_duration).range(settings::GLTF_DURATIONS).speed(0.1).suffix(" s"))
+            .on_hover_text("The seconds from $t = 0 to 1");
+        ui.add(egui::DragValue::new(&mut settings.gltf_fps).range(settings::GLTF_FPS).suffix(" fps"))
+            .on_hover_text("Frames sampled a second");
+        ui.checkbox(&mut settings.gltf_loop, "Loop").on_hover_text("Its name ends in -loop, which Godot plays over and over");
+    });
     ui.add_space(14.0);
     section_heading(ui, "Export folder", "Where Export… opens.");
     let mut edit = None;

@@ -275,3 +275,102 @@ fn a_part_in_a_boolean_is_merged() {
     assert!(glb.warnings[0].contains("merged"), "{:?}", glb.warnings);
     assert_eq!(Gltf::read(&glb.bytes).json["nodes"].as_array().unwrap().len(), 1);
 }
+
+fn animated(src: &str, options: &GltfOptions) -> Result<c2f_geom::Glb, String> {
+    let mut program = c2f_eval::Program::load(src, Path::new("t.scad"), &[]).expect("parses");
+    c2f_geom::program_glb(&mut program, options)
+}
+
+/// The keyframes of the animation's channel for `node`'s `path`: the times
+/// and the values, `width` numbers each.
+fn track(model: &Gltf, node: u64, path: &str) -> Option<(Vec<f32>, Vec<Vec<f32>>)> {
+    let animation = &model.json["animations"][0];
+    let channel = animation["channels"].as_array()?.iter().find(|c| c["target"]["node"] == node && c["target"]["path"] == path)?;
+    let sampler = &animation["samplers"][channel["sampler"].as_u64().unwrap() as usize];
+    assert_eq!(sampler["interpolation"], "LINEAR");
+    let times = model.floats(sampler["input"].as_u64().unwrap() as usize);
+    let width = if path == "rotation" { 4 } else { 3 };
+    let values = model.floats(sampler["output"].as_u64().unwrap() as usize).chunks(width).map(<[f32]>::to_vec).collect();
+    Some((times, values))
+}
+
+const TURRET: &str = "cube([40, 40, 5]);
+    translate([20, 20, 5]) rotate([0, 0, 360 * $t]) part(\"turret\") {
+        cylinder(h = 10, r = 12);
+        translate([0, 8, 5 + 2 * sin(360 * $t)]) part(\"barrel\") cube([2, 20, 2]);
+    }";
+
+#[test]
+fn a_turret_turns_once_and_loops() {
+    let glb = animated(TURRET, &GltfOptions::default()).unwrap();
+    assert!(glb.warnings.is_empty(), "{:?}", glb.warnings);
+    // 2 seconds at 30 frames a second, both ends included.
+    assert_eq!(glb.frames, 61);
+    let model = Gltf::read(&glb.bytes);
+    assert_eq!(model.json["animations"].as_array().unwrap().len(), 1);
+    assert_eq!(model.json["animations"][0]["name"], "animation-loop");
+    let (times, rotations) = track(&model, 1, "rotation").expect("the turret turns");
+    assert_eq!((times[0], times[60]), (0.0, 2.0));
+    assert!((times[15] - 0.5).abs() < 1e-6);
+    // A turn about glTF's Y, a sixtieth of it a frame, by the shorter way.
+    for (k, q) in rotations.iter().enumerate() {
+        let half = (k as f64 / 60.0 * std::f64::consts::PI) as f32;
+        let expected = [0.0, half.sin(), 0.0, half.cos()];
+        assert!((0..4).all(|c| (q[c] - expected[c]).abs() < 1e-5), "frame {k}: {q:?} vs {expected:?}");
+    }
+    // It turns in place: no translation track.
+    assert!(track(&model, 1, "translation").is_none());
+    assert!(track(&model, 1, "scale").is_none());
+    // The barrel goes up and down within the turret, which carries it.
+    let (_, translations) = track(&model, 2, "translation").expect("the barrel moves");
+    assert!(track(&model, 2, "rotation").is_none(), "it turns with its parent");
+    let height = |k: usize| translations[k][1];
+    assert!((height(0) - 0.005).abs() < 1e-6 && (height(15) - 0.007).abs() < 1e-6 && (height(45) - 0.003).abs() < 1e-6);
+    // The last frame is the first: the loop does not jump.
+    assert!((0..3).all(|c| (translations[60][c] - translations[0][c]).abs() < 1e-6));
+}
+
+#[test]
+fn duration_fps_and_name_are_settings() {
+    let animation = c2f_geom::GltfAnimation { name: "spin".into(), duration: 4.0, fps: 5.0, looped: false };
+    let options = GltfOptions { animation: Some(animation), ..GltfOptions::default() };
+    let glb = animated(TURRET, &options).unwrap();
+    assert_eq!(glb.frames, 21);
+    let model = Gltf::read(&glb.bytes);
+    assert_eq!(model.json["animations"][0]["name"], "spin");
+    let (times, _) = track(&model, 1, "rotation").unwrap();
+    assert_eq!(times.last(), Some(&4.0));
+    // The times' accessor has its bounds, as glTF asks.
+    let input = model.json["animations"][0]["samplers"][0]["input"].as_u64().unwrap() as usize;
+    assert_eq!(model.json["accessors"][input]["max"], serde_json::json!([4.0]));
+}
+
+#[test]
+fn a_still_model_or_export_has_no_animation() {
+    let glb = animated("part(\"lid\") cube(1);", &GltfOptions::default()).unwrap();
+    assert_eq!(glb.frames, 0);
+    assert!(Gltf::read(&glb.bytes).json.get("animations").is_none());
+    let still = GltfOptions { animation: None, ..GltfOptions::default() };
+    let glb = animated(TURRET, &still).unwrap();
+    assert!(Gltf::read(&glb.bytes).json.get("animations").is_none());
+    // Evaluated at $t = 0.
+    assert!(Gltf::read(&glb.bytes).json["nodes"][1].get("rotation").is_none());
+}
+
+#[test]
+fn what_a_glb_cannot_hold_is_a_warning() {
+    let glb = animated("part(\"grow\") cube(1 + $t);", &GltfOptions::default()).unwrap();
+    assert!(glb.warnings.iter().any(|w| w.contains("part(\"grow\") changes shape")), "{:?}", glb.warnings);
+    assert!(glb.warnings.iter().any(|w| w.contains("no part() moves")), "{:?}", glb.warnings);
+    let glb = animated("rotate(360 * $t) cube(1);", &GltfOptions::default()).unwrap();
+    assert!(glb.warnings.iter().any(|w| w.contains("has no part()")), "{:?}", glb.warnings);
+    let glb = animated("rotate(360 * $t) part(\"a\") cube(1); cube(1 + $t);", &GltfOptions::default()).unwrap();
+    assert!(glb.warnings.iter().any(|w| w.contains("outside any part() changes")), "{:?}", glb.warnings);
+    assert_eq!(glb.frames, 61);
+}
+
+#[test]
+fn an_error_at_any_frame_is_the_error() {
+    let error = animated("assert($t < 0.5); rotate(360 * $t) part(\"a\") cube(1);", &GltfOptions::default()).unwrap_err();
+    assert!(error.starts_with("at $t = 0.5"), "{error}");
+}

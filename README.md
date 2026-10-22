@@ -198,6 +198,37 @@ translate([20, 20, 5]) rotate([0, 0, 45]) part("turret") {
   `module part(name) children();` opens there whole. A module of your own
   named `part` wins over the built-in one.
 
+### Animation
+
+A design that reads `$t` exports animated: its parts move as `$t` goes
+from 0 to 1, as the app's playback bar shows them.
+
+```
+cube([40, 40, 5]);
+translate([20, 20, 5]) rotate([0, 0, 360 * $t]) part("turret") {
+    cylinder(h = 10, r = 12);
+    translate([0, 8, 5]) part("barrel") rotate([-90, 0, 0]) cylinder(h = 25, r = 2);
+}
+```
+
+- Each part's geometry is built once, at `$t = 0`. The program is then
+  evaluated at each frame, without building any geometry, for where each
+  part is: its translation, rotation and scale become a track of the
+  glTF animation, interpolated linearly, for each part that moves.
+- The animation lasts 2 seconds, sampled 30 times a second, both ends
+  included (Settings > Export > glTF models, `--duration` and `--fps`,
+  or the MCP tool's `duration` and `fps`). It is named after the file
+  (`--animation`, `animation`), and loops: its name then ends in `-loop`,
+  which Godot reads to play it over and over (`--no-loop`, `"loop":
+  false` play it once). `--still` (`"animate": false`) writes the model
+  at `$t = 0`.
+- For the loop to be seamless, a part should be where it started at
+  `$t = 1`, as `360 * $t` or `sin(360 * $t)` are.
+- Only movement is animated. A part whose shape changes with `$t`, or
+  geometry outside any part that does, keeps its shape at `$t = 0`, with
+  a warning; so do parts that come and go. A model that reads `$t`
+  without any `part()` exports still, with a warning.
+
 ## Compatibility
 
 Code2Form opens `.scad` files. Its parser, evaluator and geometry are

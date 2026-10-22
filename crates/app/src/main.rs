@@ -51,7 +51,14 @@ options:
   -p file.json    reads customizer parameter sets from this file
   -P name         applies this parameter set (with -p)
   --scale <m>     glb: meters per model unit (default 0.001: a model in
-                  millimeters keeps its size; 1 makes each unit a meter)";
+                  millimeters keeps its size; 1 makes each unit a meter)
+  --duration <s>  glb of a model that reads $t: the seconds its parts take
+                  to go from $t = 0 to 1 (default 2)
+  --fps <n>       glb: frames sampled a second (default 30)
+  --animation <name>  glb: the animation's name (default the file's name)
+  --no-loop       glb: an animation played once; it loops by default, its
+                  name ending in -loop, which Godot reads
+  --still         glb: the model at $t = 0, without animation";
 
 /// Reserved, not committed. Deeply nested programs recurse when printed.
 const STACK: usize = 1 << 30;
@@ -83,13 +90,32 @@ impl Options {
         let (command, mut rest) = args.split_first()?;
         let (mut defines, mut parameter_file, mut parameter_set, mut path) = (Vec::new(), None, None, None);
         let mut gltf = c2f_geom::GltfOptions::default();
+        let (mut still, mut animation_name) = (false, None);
         while let Some((arg, tail)) = rest.split_first() {
             rest = tail;
-            if arg == "--scale" {
-                let (value, tail) = rest.split_first()?;
-                rest = tail;
-                gltf.scale = value.parse().ok().filter(|s: &f64| s.is_finite() && *s > 0.0)?;
-                continue;
+            let animation = gltf.animation.get_or_insert_with(Default::default);
+            let positive = |value: &String| value.parse().ok().filter(|v: &f64| v.is_finite() && *v > 0.0);
+            match arg.as_str() {
+                "--scale" | "--duration" | "--fps" | "--animation" => {
+                    let (value, tail) = rest.split_first()?;
+                    rest = tail;
+                    match arg.as_str() {
+                        "--scale" => gltf.scale = positive(value)?,
+                        "--duration" => animation.duration = positive(value)?,
+                        "--fps" => animation.fps = positive(value)?,
+                        _ => animation_name = Some(value.clone()),
+                    }
+                    continue;
+                }
+                "--no-loop" => {
+                    animation.looped = false;
+                    continue;
+                }
+                "--still" => {
+                    still = true;
+                    continue;
+                }
+                _ => {}
             }
             // `-D x=1` or `-Dx=1`: both are accepted.
             let (flag, value) = match ["-D", "-p", "-P"].into_iter().find(|f| arg.starts_with(f)) {
@@ -112,6 +138,12 @@ impl Options {
         let path = path?;
         if let Some(stem) = Path::new(&path).file_stem() {
             gltf.name = stem.to_string_lossy().into_owned();
+        }
+        if let Some(animation) = gltf.animation.as_mut() {
+            animation.name = animation_name.unwrap_or_else(|| gltf.name.clone());
+        }
+        if still {
+            gltf.animation = None;
         }
         Some(Options { command: command.clone(), path, defines, parameter_file, parameter_set, gltf })
     }
@@ -183,7 +215,7 @@ fn run() -> ExitCode {
             _ => ExitCode::FAILURE,
         },
         // `csg`, or an export format.
-        command => csg(&program, Export::named(command), &options.gltf),
+        command => csg(&mut program, Export::named(command), &options.gltf),
     }
 }
 
@@ -290,7 +322,7 @@ fn render(program: &c2f_eval::Program, output: &c2f_eval::Output) -> c2f_geom::R
 }
 
 /// Prints the CSG tree, or with `export` the geometry in that format.
-fn csg(program: &c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom::GltfOptions) -> ExitCode {
+fn csg(program: &mut c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom::GltfOptions) -> ExitCode {
     let output = c2f_eval::evaluate(program);
     for line in &output.echo {
         eprintln!("{line}");
@@ -298,8 +330,8 @@ fn csg(program: &c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom::Glt
     for warning in &output.warnings {
         eprintln!("WARNING: {warning}");
     }
-    if let Some(Export::Glb) = export {
-        if print_gltf(program, &output, gltf) != ExitCode::SUCCESS {
+    if let (Some(Export::Glb), None) = (export, &output.error) {
+        if print_gltf(program, gltf) != ExitCode::SUCCESS {
             return ExitCode::FAILURE;
         }
     } else if let Some(export) = export {
@@ -342,10 +374,10 @@ fn print_export(rendered: &c2f_geom::Rendered, export: Export) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Prints the evaluated program as a `.glb`, then its size on stderr.
-fn print_gltf(program: &c2f_eval::Program, output: &c2f_eval::Output, options: &c2f_geom::GltfOptions) -> ExitCode {
-    let base = program.files[0].path.parent().unwrap_or(Path::new(""));
-    match c2f_geom::glb(&output.nodes, base, options) {
+/// Prints the program as a `.glb`, animated when it reads `$t`, then its
+/// size on stderr.
+fn print_gltf(program: &mut c2f_eval::Program, options: &c2f_geom::GltfOptions) -> ExitCode {
+    match c2f_geom::program_glb(program, options) {
         Ok(glb) => {
             for warning in &glb.warnings {
                 eprintln!("WARNING: {warning}");
@@ -354,7 +386,10 @@ fn print_gltf(program: &c2f_eval::Program, output: &c2f_eval::Output, options: &
                 eprintln!("error: cannot write the glTF: {err}");
                 return ExitCode::FAILURE;
             }
-            eprintln!("{} triangles, {} vertices", glb.triangles, glb.vertices);
+            match glb.frames {
+                0 => eprintln!("{} triangles, {} vertices", glb.triangles, glb.vertices),
+                frames => eprintln!("{} triangles, {} vertices, {frames} frames", glb.triangles, glb.vertices),
+            }
         }
         Err(why) => eprintln!("WARNING: {why}"),
     }
