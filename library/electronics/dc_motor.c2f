@@ -1,0 +1,43 @@
+// Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies),
+// lying on its flat side along x, its shaft towards +x: the can, the end
+// bell with its two terminals, the bearing boss and the shaft. The center
+// of the back, under the shaft's axis, at the origin.
+// https://www.mabuchi-motor.com (the FA-130RA product page and drawing)
+//
+// From Mabuchi's FA-130RA drawing, as remembered and to check against it:
+// the can is 20.1 mm wide, 15.1 mm thick and 25.1 mm long, the boss 6 mm
+// across, the shaft 2 mm across; copies differ by a few tenths. Estimated:
+// the boss's height (1.5 mm),
+// the terminals' size and place, and the two mount holes on the front face
+// (2 mm, 12 mm apart across the width), which not every copy has: check
+// yours before printing screw holes.
+
+/* [Build] */
+// Length of shaft out of the boss.
+shaft = 8; // [4:0.5:20]
+
+// @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
+// @pin - [0, 5, 7.55]  -x passive 6V
+// @mount_hole [25.1, -6, 7.55] d=2 +x
+// @mount_hole [25.1, 6, 7.55]  d=2 +x
+// @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
+
+module dc_motor(shaft = 8) {
+    $fn = 48;
+    axis = 7.55;
+
+    color("Silver")
+        translate([0, 0, axis])
+            rotate([0, 90, 0])
+                intersection() {
+                    cylinder(d = 20.1, h = 25.1);
+                    cube([15.1, 30, 60], center = true);
+                }
+    color("Silver") translate([25.1, 0, axis]) rotate([0, 90, 0]) cylinder(d = 6, h = 1.5);
+    color("Gold") translate([25.1, 0, axis]) rotate([0, 90, 0]) cylinder(d = 2, h = 1.5 + shaft, $fn = 16);
+    // The terminals, out of the back.
+    for (y = [-5, 5])
+        color("Gold") translate([-1.5, y - 1, axis - 0.15]) cube([1.5, 2, 0.3]);
+}
+
+dc_motor(shaft);

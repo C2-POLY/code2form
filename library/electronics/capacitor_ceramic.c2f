@@ -1,0 +1,35 @@
+// 100 nF multilayer ceramic capacitor, through-hole (radial, dipped):
+// the epoxy body standing on its two leads, the decoupling capacitor
+// placed next to a chip's supply pins. The lead ends at z = 0.
+// https://www.kemet.com (the C315 to C330 Goldmax datasheet)
+//
+// Dipped radial ceramics such as KEMET's C315 to C330 Goldmax series come
+// with a 2.54 or 5.08 mm lead pitch and 0.5 mm leads; the body drawn here
+// (about 4 x 2.5 x 4 mm) is typical of 100 nF, 50 V parts, not one
+// series' exact size. Not polarized: the pins are 1 and 2.
+//
+// Annotations are plain numbers: the pins are the lead ends at the 2.54 mm
+// pitch, and stay there for 5.08 mm.
+
+/* [Size] */
+// Lead pitch: 2.54 or 5.08 mm, as bought.
+pitch = 2.54; // [2.54, 5.08]
+// Length of lead between the body and the board.
+lead = 2; // [0:0.5:10]
+
+// @pin 1 [-1.27, 0, 0] down passive 50V
+// @pin 2 [1.27, 0, 0]  down passive 50V
+
+module capacitor_ceramic(pitch = 2.54, lead = 2) {
+    $fn = 24;
+
+    color("Goldenrod")
+        hull()
+            for (x = [-1, 1])
+                translate([x * (max(pitch, 4) / 2 - 1.25), 0, lead + 2])
+                    scale([1, 1, 1.6]) sphere(d = 2.5);
+    for (x = [-pitch / 2, pitch / 2])
+        color("Silver") translate([x, 0, 0]) cylinder(d = 0.5, h = lead + 1, $fn = 12);
+}
+
+capacitor_ceramic(pitch, lead);

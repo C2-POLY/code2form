@@ -239,8 +239,9 @@ pub fn app_resources() -> Option<PathBuf> {
 }
 
 /// The library search path: `OPENSCADPATH`, then the user library folder,
-/// then this app's own copy, then the libraries bundled with an installed
-/// reference.
+/// then this app's own copy, then the repository's `library` folder when
+/// this program runs where it was built (`cargo run`), then the libraries
+/// bundled with an installed reference.
 pub fn default_library_paths() -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = std::env::var_os("OPENSCADPATH")
         .map(|v| std::env::split_paths(&v).collect())
@@ -249,6 +250,10 @@ pub fn default_library_paths() -> Vec<PathBuf> {
         paths.push(Path::new(&home).join("Documents/OpenSCAD/libraries"));
     }
     paths.extend(app_resources().map(|resources| resources.join("libraries")));
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library");
+    if repository.is_dir() {
+        paths.push(repository);
+    }
     paths.push(PathBuf::from("/Applications/OpenSCAD-2021.01.app/Contents/Resources/libraries"));
     paths.push(PathBuf::from("/Applications/OpenSCAD.app/Contents/Resources/libraries"));
     paths

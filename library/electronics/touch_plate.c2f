@@ -1,0 +1,26 @@
+// Copper plate for a capacitive touch pad: a square of copper sheet (or
+// copper tape on card) glued under a thin shell, a wire soldered at its
+// corner to a touch pin of the ESP32-S3. Its corner at the origin.
+// https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/cap_touch_sens.html
+//
+// No part number: the size is the designer's. Espressif's touch sensor
+// guide covers how pad size, the plastic over it and the wire's length
+// change the reading: a larger pad reaches through more plastic, a short
+// wire picks up less noise.
+//
+// Annotations are plain numbers: the solder point stays in its corner
+// whatever the size.
+
+/* [Size] */
+// Side of the square.
+size = 20; // [10:50]
+// Thickness of the sheet.
+thickness = 0.3; // [0.05:0.05:1]
+
+// @pin PAD [2, 2, 0.3] up passive 3.3V "solder point"
+
+module touch_plate(size = 20, thickness = 0.3) {
+    color("Chocolate") cube([size, size, thickness]);
+}
+
+touch_plate(size, thickness);

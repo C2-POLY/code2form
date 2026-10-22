@@ -8,38 +8,38 @@
 version = 1
 
 [parts.xiao]
-part = "parts/xiao_esp32s3.c2f"
+part = "electronics/xiao_esp32s3.c2f"
 at = [0, 0, 0]
 
 [parts.amp]
-part = "parts/max98357a.c2f"
+part = "electronics/max98357a.c2f"
 at = [-30, 0, 0]
 params = { headers = true }
 
 [parts.cap]
-part = "parts/capacitor_radial.c2f"
+part = "electronics/capacitor_radial.c2f"
 at = [-20, 26, 0]
 params = { d = 8, h = 12 }
 
 [parts.speaker]
-part = "parts/speaker.c2f"
+part = "electronics/speaker.c2f"
 at = [-45, 40, 0]
 
 [parts.mic]
-part = "parts/inmp441.c2f"
+part = "electronics/inmp441.c2f"
 at = [35, 12, 0]
 rotate = [0, 0, 180]
 
 [parts.driver]
-part = "parts/drv8833.c2f"
+part = "electronics/drv8833.c2f"
 at = [0, 32, 0]
 
 [parts.motor]
-part = "parts/dc_motor.c2f"
+part = "electronics/dc_motor.c2f"
 at = [25, 40, 0]
 
 [parts.touch]
-part = "parts/touch_plate.c2f"
+part = "electronics/touch_plate.c2f"
 at = [25, -30, 0]
 
 # Power: the 5 V rail, with the decoupling capacitor at the amplifier.

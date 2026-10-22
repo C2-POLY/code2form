@@ -1,0 +1,21 @@
+// Pin headers for the parts of the electronics library, which `use` this
+// file. Standard 2.54 mm male headers: a 2.5 mm plastic spacer, 0.64 mm
+// square pins with a 3 mm short end and a 6 mm long end.
+
+// A row of `n` pins at 2.54 mm pitch, the first one's center at `at`
+// ([x, y]), going along +x or +y (`along`), soldered through a board `t`
+// thick whose bottom is at z = 0. The spacer and the long ends are on the
+// `side` given: "down" (under the board, as for a breadboard) or "up".
+module pin_header(n, at, t, side = "down", along = "y") {
+    pitch = 2.54;
+    step = along == "x" ? [pitch, 0] : [0, pitch];
+    length = along == "x" ? [n * pitch, pitch] : [pitch, n * pitch];
+    up = side == "up";
+    color("Black")
+        translate([at[0] - pitch / 2, at[1] - pitch / 2, up ? t : -2.5])
+            cube([length[0], length[1], 2.5]);
+    color("Gold")
+        for (i = [0 : n - 1])
+            translate([at[0] + i * step[0], at[1] + i * step[1], up ? t - 3 : -8.5])
+                translate([-0.32, -0.32, 0]) cube([0.64, 0.64, 11.5]);
+}

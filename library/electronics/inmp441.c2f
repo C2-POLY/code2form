@@ -1,0 +1,45 @@
+// INMP441 I2S MEMS microphone module: the round board, the microphone
+// under it, and its 2 x 3 header when soldered. The board's center at the
+// origin; the sound reaches the microphone through a hole in the board,
+// on the side away from it (up).
+// https://invensense.tdk.com/products/digital/inmp441/
+//
+// From the microphone's datasheet: VDD 1.62 to 3.63 V; L/R to GND puts
+// the data on the left channel. The module is a generic one, with no
+// drawing of its own: its diameter (about 14 mm), its thickness, where
+// the pins and the sound hole are and which pins face which are measured
+// on boards sold under that name and may differ on yours. It has no mount
+// holes.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// The header soldered to the board.
+headers = false;
+// The side the header's long pins stick out of.
+header_side = "up"; // [down, up]
+
+// @pin SD  [-2.54, -5, 1]    output 3.6V "I2S data"
+// @pin VDD [0, -5, 1]        power_in 3.6V "1.62 to 3.63 V"
+// @pin GND [2.54, -5, 1]     ground
+// @pin L/R [-2.54, -2.46, 1] input 3.6V "channel: GND for left"
+// @pin WS  [0, -2.46, 1]     input 3.6V "I2S word select"
+// @pin SCK [2.54, -2.46, 1]  input 3.6V "I2S bit clock"
+// @port sound [0, 3, 1] up d=1 "sound hole"
+
+module inmp441(headers = false, header_side = "up") {
+    $fn = 48;
+    t = 1;
+
+    color("Purple") difference() {
+        cylinder(d = 14, h = t);
+        translate([0, 3, -1]) cylinder(d = 1, h = t + 2, $fn = 16);
+    }
+    // The microphone, 4.72 x 3.76 x 1 mm, under the sound hole.
+    color("Silver") translate([-4.72 / 2, 3 - 3.76 / 2, -1]) cube([4.72, 3.76, 1]);
+    if (headers)
+        for (y = [-5, -2.46])
+            pin_header(3, [-2.54, y], t, header_side, along = "x");
+}
+
+inmp441(headers, header_side);

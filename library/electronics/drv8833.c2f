@@ -1,0 +1,46 @@
+// DRV8833 dual H-bridge motor driver module, the generic one whose pins
+// read IN1 to IN4, EEP and ULT: the board, the driver, and its two rows of
+// six pins when soldered. Seen from above, the inputs along the edge at
+// y = 0, the outputs along the far edge.
+// https://www.ti.com/product/DRV8833
+//
+// From the driver's datasheet: VM (VCC here) 2.7 to 10.8 V, the logic
+// inputs up to 5.75 V, nSLEEP (EEP) high to run, nFAULT (ULT) an open
+// drain output, low on a fault. The module is a generic one, with no
+// drawing of its own: its size (about 18.5 x 15.2 mm), the order of the
+// pins along each row and the rows' spacing are measured on boards sold
+// under that name and may differ on yours. It has no mount holes.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// The headers soldered to the board.
+headers = false;
+// The side the headers' long pins stick out of.
+header_side = "down"; // [down, up]
+
+// @pin IN1  [1.27, 1.27, 1.6]   input 5.75V "bridge A, input 1"
+// @pin IN2  [3.81, 1.27, 1.6]   input 5.75V "bridge A, input 2"
+// @pin IN3  [6.35, 1.27, 1.6]   input 5.75V "bridge B, input 1"
+// @pin IN4  [8.89, 1.27, 1.6]   input 5.75V "bridge B, input 2"
+// @pin VCC  [11.43, 1.27, 1.6]  power_in 10.8V "motor supply, 2.7 to 10.8 V"
+// @pin GND  [13.97, 1.27, 1.6]  ground
+// @pin EEP  [1.27, 17.23, 1.6]  input 5.75V "nSLEEP: high to run"
+// @pin OUT1 [3.81, 17.23, 1.6]  output 10.8V "bridge A, output 1"
+// @pin OUT2 [6.35, 17.23, 1.6]  output 10.8V "bridge A, output 2"
+// @pin OUT3 [8.89, 17.23, 1.6]  output 10.8V "bridge B, output 1"
+// @pin OUT4 [11.43, 17.23, 1.6] output 10.8V "bridge B, output 2"
+// @pin ULT  [13.97, 17.23, 1.6] output 5.75V "nFAULT: low on a fault, open drain"
+
+module drv8833(headers = false, header_side = "down") {
+    t = 1.6;
+
+    color("FireBrick") cube([15.24, 18.5, t]);
+    // The driver, a 5 x 4.4 mm HTSSOP.
+    color("Black") translate([5.12, 7.05, t]) cube([5, 4.4, 1.2]);
+    if (headers)
+        for (y = [1.27, 17.23])
+            pin_header(6, [1.27, y], t, header_side, along = "x");
+}
+
+drv8833(headers, header_side);

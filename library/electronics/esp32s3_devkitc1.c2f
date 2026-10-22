@@ -1,0 +1,90 @@
+// Espressif ESP32-S3-DevKitC-1: the board, its ESP32-S3-WROOM module, its
+// two USB-C connectors and its pin headers. Seen from above, the module's
+// antenna towards +y, the USB-C connectors on the edge at y = 0.
+// https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide.html
+//
+// Same chip as the XIAO ESP32-S3, so the same GPIO numbers. From the user
+// guide: the headers J1 (left) and J3 (right), 22 pins each at 2.54 mm
+// pitch, in the order below, pin 1 at the antenna end; the strapping pins
+// GPIO0, GPIO3, GPIO45 and GPIO46. From the module's datasheet: the
+// WROOM-1 is 18 x 25.5 x 3.1 mm. Estimated, not checked against the
+// board's drawing: the board's size (about 62.7 x 25.4 x 1.6 mm), the rows
+// 22.86 mm apart, where the rows start along the board, and where the USB
+// connectors are (the first boards had Micro-USB). The board has no mount
+// holes: hold it by its edges or by its headers.
+//
+// Annotations are plain numbers: the pins are the pads on top of the
+// board, wherever the headers point.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// Pin headers soldered to the board, as it is sold.
+headers = true;
+// The side the headers' long pins stick out of.
+header_side = "down"; // [down, up]
+
+// @pin 3V3   [1.27, 58.42, 1.6] power_out 3.3V "regulator output"
+// @pin 3V3_2 [1.27, 55.88, 1.6] power_out 3.3V "regulator output"
+// @pin RST   [1.27, 53.34, 1.6] input 3.3V "EN: low resets the chip"
+// @pin 4     [1.27, 50.8, 1.6]  io 3.3V "GPIO4, ADC1_CH3, touch 4"
+// @pin 5     [1.27, 48.26, 1.6] io 3.3V "GPIO5, ADC1_CH4, touch 5"
+// @pin 6     [1.27, 45.72, 1.6] io 3.3V "GPIO6, ADC1_CH5, touch 6"
+// @pin 7     [1.27, 43.18, 1.6] io 3.3V "GPIO7, ADC1_CH6, touch 7"
+// @pin 15    [1.27, 40.64, 1.6] io 3.3V "GPIO15, ADC2_CH4, 32 kHz crystal"
+// @pin 16    [1.27, 38.1, 1.6]  io 3.3V "GPIO16, ADC2_CH5, 32 kHz crystal"
+// @pin 17    [1.27, 35.56, 1.6] io 3.3V "GPIO17, ADC2_CH6"
+// @pin 18    [1.27, 33.02, 1.6] io 3.3V "GPIO18, ADC2_CH7"
+// @pin 8     [1.27, 30.48, 1.6] io 3.3V "GPIO8, ADC1_CH7, touch 8"
+// @pin 3     [1.27, 27.94, 1.6] io 3.3V reserved "GPIO3, ADC1_CH2, touch 3, strapping (JTAG source)"
+// @pin 46    [1.27, 25.4, 1.6]  io 3.3V reserved "GPIO46, strapping (boot mode, ROM messages)"
+// @pin 9     [1.27, 22.86, 1.6] io 3.3V "GPIO9, ADC1_CH8, touch 9"
+// @pin 10    [1.27, 20.32, 1.6] io 3.3V "GPIO10, ADC1_CH9, touch 10"
+// @pin 11    [1.27, 17.78, 1.6] io 3.3V "GPIO11, ADC2_CH0, touch 11"
+// @pin 12    [1.27, 15.24, 1.6] io 3.3V "GPIO12, ADC2_CH1, touch 12"
+// @pin 13    [1.27, 12.7, 1.6]  io 3.3V "GPIO13, ADC2_CH2, touch 13"
+// @pin 14    [1.27, 10.16, 1.6] io 3.3V "GPIO14, ADC2_CH3, touch 14"
+// @pin 5V    [1.27, 7.62, 1.6]  power_out 5V "USB 5 V; or 5 V in"
+// @pin GND   [1.27, 5.08, 1.6]  ground
+// @pin GND_2 [24.13, 58.42, 1.6] ground
+// @pin TX    [24.13, 55.88, 1.6] io 3.3V "GPIO43, U0TXD"
+// @pin RX    [24.13, 53.34, 1.6] io 3.3V "GPIO44, U0RXD"
+// @pin 1     [24.13, 50.8, 1.6]  io 3.3V "GPIO1, ADC1_CH0, touch 1"
+// @pin 2     [24.13, 48.26, 1.6] io 3.3V "GPIO2, ADC1_CH1, touch 2"
+// @pin 42    [24.13, 45.72, 1.6] io 3.3V "GPIO42, MTMS (JTAG)"
+// @pin 41    [24.13, 43.18, 1.6] io 3.3V "GPIO41, MTDI (JTAG)"
+// @pin 40    [24.13, 40.64, 1.6] io 3.3V "GPIO40, MTDO (JTAG)"
+// @pin 39    [24.13, 38.1, 1.6]  io 3.3V "GPIO39, MTCK (JTAG)"
+// @pin 38    [24.13, 35.56, 1.6] io 3.3V "GPIO38, RGB LED on board v1.1"
+// @pin 37    [24.13, 33.02, 1.6] io 3.3V "GPIO37, octal PSRAM on R8 modules"
+// @pin 36    [24.13, 30.48, 1.6] io 3.3V "GPIO36, octal PSRAM on R8 modules"
+// @pin 35    [24.13, 27.94, 1.6] io 3.3V "GPIO35, octal PSRAM on R8 modules"
+// @pin 0     [24.13, 25.4, 1.6]  io 3.3V reserved "GPIO0, BOOT button, strapping (boot mode)"
+// @pin 45    [24.13, 22.86, 1.6] io 3.3V reserved "GPIO45, strapping (flash voltage)"
+// @pin 48    [24.13, 20.32, 1.6] io 3.3V "GPIO48, RGB LED on board v1.0"
+// @pin 47    [24.13, 17.78, 1.6] io 3.3V "GPIO47"
+// @pin 21    [24.13, 15.24, 1.6] io 3.3V "GPIO21"
+// @pin 20    [24.13, 12.7, 1.6]  io 3.3V "GPIO20, USB D+, ADC2_CH9"
+// @pin 19    [24.13, 10.16, 1.6] io 3.3V "GPIO19, USB D-, ADC2_CH8"
+// @pin GND_3 [24.13, 7.62, 1.6]  ground
+// @pin GND_4 [24.13, 5.08, 1.6]  ground
+// @port uart [7, 0, 3.23] -y [8.94, 3.26] "USB-C to the USB-UART bridge"
+// @port usb  [18.4, 0, 3.23] -y [8.94, 3.26] "USB-C to the ESP32-S3's own USB (GPIO19, GPIO20)"
+
+module esp32s3_devkitc1(headers = true, header_side = "down") {
+    t = 1.6;
+    length = 62.7;
+
+    color("Black") cube([25.4, length, t]);
+    // The ESP32-S3-WROOM-1 module, its antenna at the board's end.
+    color("Silver") translate([(25.4 - 18) / 2, length - 25.5, t]) cube([18, 25.5 - 6.3, 3.1]);
+    color("DarkSlateGray") translate([(25.4 - 18) / 2, length - 6.3, t]) cube([18, 6.3, 0.8]);
+    // The USB-C receptacles, flush with the edge.
+    for (x = [7, 18.4])
+        color("Silver") translate([x - 8.94 / 2, 0, t]) cube([8.94, 7.35, 3.26]);
+    if (headers)
+        for (x = [1.27, 24.13])
+            pin_header(22, [x, 5.08], t, header_side);
+}
+
+esp32s3_devkitc1(headers, header_side);

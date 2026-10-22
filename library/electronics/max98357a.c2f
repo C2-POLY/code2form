@@ -1,0 +1,47 @@
+// Adafruit MAX98357A I2S class-D mono amplifier breakout (product 3006):
+// the board, its amplifier, its 7-pin header when soldered, and the
+// speaker terminal block when soldered. Seen from above, the header along
+// the edge at y = 0, the speaker terminal on the far edge.
+// https://learn.adafruit.com/adafruit-max98357-i2s-class-d-mono-amp
+// https://www.analog.com/en/products/max98357a.html
+//
+// From the documentation: the board is about 19.3 x 17.8 mm, its seven
+// pins at 2.54 mm pitch in the order LRC, BCLK, DIN, GAIN, SD, GND, Vin;
+// Vin takes 2.5 to 5.5 V; the terminal block has a 3.5 mm pitch.
+// Estimated: the board's thickness (1.6 mm), where the speaker pads and
+// the terminal block are (and which side is +), the block's size. The
+// board has no mount holes.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// The 7-pin header soldered to the board.
+headers = false;
+// The side the header's long pins stick out of.
+header_side = "down"; // [down, up]
+// The speaker terminal block soldered to the board.
+terminal = true;
+
+// @pin LRC  [1.27, 1.27, 1.6]  input 5.5V "LRCLK: I2S word select"
+// @pin BCLK [3.81, 1.27, 1.6]  input 5.5V "I2S bit clock"
+// @pin DIN  [6.35, 1.27, 1.6]  input 5.5V "I2S data"
+// @pin GAIN [8.89, 1.27, 1.6]  input 5.5V "gain: 9 dB unconnected"
+// @pin SD   [11.43, 1.27, 1.6] input 5.5V "shutdown and channel select"
+// @pin GND  [13.97, 1.27, 1.6] ground
+// @pin VIN  [16.51, 1.27, 1.6] power_in 5.5V "2.5 to 5.5 V"
+// @pin +    [7.14, 16.8, 1.6]  output 5.5V "speaker +"
+// @pin -    [10.64, 16.8, 1.6] output 5.5V "speaker -"
+
+module max98357a(headers = false, header_side = "down", terminal = true) {
+    t = 1.6;
+
+    color("MidnightBlue") cube([17.78, 19.3, t]);
+    // The amplifier, a 3 x 3 mm TQFN.
+    color("Black") translate([7.4, 7.5, t]) cube([3, 3, 0.75]);
+    if (terminal)
+        color("LimeGreen") translate([8.89 - 3.5, 13.3, t]) cube([7, 6, 7.5]);
+    if (headers)
+        pin_header(7, [1.27, 1.27], t, header_side, along = "x");
+}
+
+max98357a(headers, header_side, terminal);

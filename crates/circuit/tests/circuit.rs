@@ -8,8 +8,13 @@ fn grogu_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grogu/grogu.c2fc")
 }
 
+/// The repository's electronics library, where Grogu's parts are.
+fn library() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library")
+}
+
 fn grogu() -> Circuit {
-    c2f_circuit::load(&grogu_path(), &[]).unwrap_or_else(|errors| {
+    c2f_circuit::load(&grogu_path(), &[library()]).unwrap_or_else(|errors| {
         panic!("{}", errors.iter().map(Error::render).collect::<String>())
     })
 }

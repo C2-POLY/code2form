@@ -14,5 +14,7 @@ toml = "1"
 
 [dev-dependencies]
 c2f-eval.workspace = true
+# Renders the library's parts, for their bounds.
+c2f-geom.workspace = true
 # Reads the JSON Schema of the format.
 serde_json = "1"
