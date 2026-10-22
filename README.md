@@ -38,64 +38,33 @@ they are. Written in Rust, it renders as you type.
   app writes the change into the code, as one step to undo. A height
   computed in the code moves there, and pauses from a library or an
   included file stay as they are.
-- **Electronics annotations**: a part declares its pins, mount holes and
-  ports in comments, in its own coordinates, which the reference
-  implementation ignores:
-  `// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`,
-  `// @mount_hole [1.5, 1.5] d=2`, `// @port usb_c [9, 0, 2] -y [9, 3.2]`.
-  After the name and position, fields come in any order: a direction
-  (`up`, `down`, `+x` … `-z`, or a vector), a pin type (`io`, `input`,
-  `output`, `power_in`, `power_out`, `ground`, `passive`, the default,
-  `nc`), the most a pin takes in volts, a `"label"`, a diameter `d=`, a
-  port's opening `[width, height]`. A badly written annotation is marked
-  on its line, and the model still renders.
-- **Circuits**: a `.c2fc` file (TOML) places annotated parts and wires
-  their pins, part by part and pin to pin, as in
-  `examples/grogu/grogu.c2fc`. Each part is a `.c2f` file next to the
-  circuit or in the library folders, placed with `at` and `rotate` as
-  `translate()` and `rotate()` would, its `params` set as `-D` sets
-  them; wires are laid in the order the file lists them. The format's
-  JSON Schema is `crates/circuit/circuit.schema.json`.
-- **Circuit checks** before soldering, from what the parts declare of
-  their pins (`c2f circuit check`; `c2f_circuit::check::check` for the
-  app). A net is the pins wires connect, a part's ground pins counting as
-  one. Errors: a supply (`power_out`) above the voltage a pin on its net
-  takes (5 V on a 3.3 V pin), two supplies of different voltages on one
-  net, a supply on a ground net, a part's `power_in` or ground pins left
-  unwired while its other pins are wired, a wired `nc` pin. Warnings:
-  grounds that are not all one net, a wired `reserved` pin, two `output`
-  pins on one net. Errors fail the check, warnings do not.
-- **Electronics library**: annotated parts in `library/electronics`, which
-  the app ships and `cargo run` finds in the repository: the XIAO
-  ESP32-S3 and the ESP32-S3-DevKitC-1, DRV8833, MAX98357A and INMP441
-  modules, capacitors, a speaker, a DC motor and a touch plate, each with
-  its headers soldered or not (`use <electronics/xiao_esp32s3.c2f>`, then
-  `xiao_esp32s3(headers = true);`). Each file links to the part's
-  documentation and says which dimensions are estimated; see
+- **Electronics**: a part declares its pins, mount holes and ports in
+  comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
+  the reference implementation ignores. A `.c2fc` circuit file (TOML)
+  places parts and wires their pins, as in `examples/grogu/grogu.c2fc`.
+  See the [electronics guide](docs/electronics.md).
+- **Circuit checks** before soldering: a supply above what a pin takes,
+  supplies tied together or to ground, a supply or ground left open, a
+  wired `nc` pin; warnings for no common ground, a wired `reserved` pin
+  and two outputs on one net.
+- **Wiring in 3D**: the app shows a circuit's parts and its wires in
+  their colors, with a legend; a click on a pin highlights its net, and
+  the Assembly mode walks through the wires one at a time, saving its
+  progress next to the circuit.
+- **Electronics library**: annotated parts in `library/electronics`
+  (XIAO ESP32-S3, ESP32-S3-DevKitC-1, DRV8833, MAX98357A, INMP441,
+  capacitors, a speaker, a DC motor, a touch plate); see
   `library/README.md`.
-- **Enclosures**: a `.c2f` file that names its circuit in a comment,
-  `// @circuit grogu.c2fc` (next to it), is drawn in the circuit's
-  coordinates and gets built-in modules that follow its parts:
-  `standoffs_for(part, height, d, hole, screw)`, a standoff under each
-  mount hole the part declares, along the hole's direction (`screw =
-  "M2"`, `"M2.5"` or `"M3"` sizes it and its pilot hole);
-  `holes_for(part, depth, hole, screw)`, the screws' clearance holes;
-  `cutout_for(part, port, clearance = 0.5, depth = 10)`, the port's
-  opening grown by the clearance, along the way it faces, to subtract from
-  a wall; `circuit_part(part)`, the part itself. The circuit is read with
-  the file, so moving a part moves them at the next render. Without
-  `@circuit` they warn and draw nothing; the reference implementation
-  ignores them as unknown modules. `examples/grogu/grogu_plate.c2f` is
-  the plate the Grogu circuit names as its `enclosure`.
+- **Enclosures**: a `.c2f` file that names its circuit
+  (`// @circuit grogu.c2fc`) gets `standoffs_for()`, `holes_for()`,
+  `cutout_for()` and `circuit_part()`, which follow the circuit's parts,
+  as `examples/grogu/grogu_plate.c2f` does.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
-  `-P preset`; `c2f pins` prints a part's annotations. `c2f circuit`
-  reads a circuit: `check` evaluates its parts and checks its wiring,
-  with the line of each finding (below), `wires` prints the wiring list in the order to lay the
-  wires (step, each pin with its label, color, length, label), `bom` the
-  bill of materials (each part file and set of params, its quantity and
-  instances), both as text or `--csv`, and `stl` and `3mf` the parts
-  assembled where the circuit places them (not the wires).
+  `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
+  checks a circuit, prints its wiring list and bill of materials, and
+  exports its assembled parts (see the
+  [guide](docs/electronics.md#6-from-the-command-line)).
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window; and describes a
