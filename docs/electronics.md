@@ -364,6 +364,23 @@ modeled: they never reach an export.
 
 The legend, at the top right of the view, lists each color with the
 labels of its wires: `red` 5 V, decoupling, keep the driver awake.
+Under it, **Wire margin** sets what is added to each wire's length for
+stripping and slack (10 mm by default, kept between sessions): a wire's
+bubble and card give its length, as "About 32 mm of wire: 22 mm routed
++ 10 mm margin".
+
+### Enclosure, collisions and cut
+
+When the circuit names an `enclosure`, the app draws it see-through
+around the parts; the **Enclosure** button in the toolbar hides and
+shows it. It follows the circuit as you type, before you save.
+
+A part that runs into the enclosure or into another part turns red, and
+the console says by how much, as "Collision: `touch` runs into the
+enclosure by 120.00 mm³". Parts that only touch are fine.
+
+To look inside, turn on **Layers**: the slider cuts the parts, the
+enclosure and the wires at a height.
 
 ### Hover, click, double-click
 
@@ -483,14 +500,16 @@ The wiring list, to print and solder from (the first rows of Grogu's):
 ```console
 $ c2f circuit wires examples/grogu/grogu.c2fc
 step  from                                          to                                        color   length  label
-   1  xiao.5V (USB 5 V; or 5 V in)                  amp.VIN (2.5 to 5.5 V)                    red      22 mm  5 V
-   2  xiao.GND                                      amp.GND                                   black    25 mm
-   3  cap.+ (longer lead)                           amp.VIN (2.5 to 5.5 V)                    red      34 mm  decoupling
-   4  cap.- (striped side)                          amp.GND                                   black    33 mm
+   1  xiao.5V (USB 5 V; or 5 V in)                  amp.VIN (2.5 to 5.5 V)                    red      32 mm  5 V
+   2  xiao.GND                                      amp.GND                                   black    35 mm
+   3  cap.+ (longer lead)                           amp.VIN (2.5 to 5.5 V)                    red      44 mm  decoupling
+   4  cap.- (striped side)                          amp.GND                                   black    43 mm
 ```
 
-The length is that of the curve drawn in the app, from pin to pin: add
-some slack when you cut the wire.
+The length is that of the curve drawn in the app, from pin to pin, plus
+a 10 mm margin for stripping and slack: `--margin 0` gives the bare
+curve, `--margin 20` more slack. `c2f circuit check` also reports, as
+warnings, the parts that run into each other or into the enclosure.
 
 The bill of materials groups the parts by file and params:
 
