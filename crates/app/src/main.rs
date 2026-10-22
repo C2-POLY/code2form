@@ -2,8 +2,11 @@ use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+mod mcp;
+
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
+       c2f mcp
 
 commands:
   ast     print the parsed program as an AST dump (`-o x.ast` layout)
@@ -14,6 +17,7 @@ commands:
   svg     evaluate, build the 2D geometry and print it as an SVG
   dxf     the same, as a DXF drawing
   check   parse only and report syntax errors
+  mcp     serve AI agents (Model Context Protocol) on stdin and stdout
 
 options:
   -D name=value   sets a variable, as if assigned at the end of the file
@@ -74,6 +78,9 @@ impl Options {
 
 fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["mcp"] {
+        return mcp::serve();
+    }
     let Some(options) = Options::parse(&args) else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
@@ -122,11 +129,8 @@ fn run() -> ExitCode {
             ExitCode::SUCCESS
         }
         "check" => ExitCode::SUCCESS,
-        "csg" => csg(&program, None),
-        "stl" => csg(&program, Some(Export::Stl)),
-        "svg" => csg(&program, Some(Export::Svg)),
-        "dxf" => csg(&program, Some(Export::Dxf)),
-        _ => csg(&program, Some(Export::ThreeMf)),
+        // `csg`, or an export format.
+        command => csg(&program, Export::named(command)),
     }
 }
 
@@ -148,6 +152,45 @@ enum Export {
     Dxf,
 }
 
+impl Export {
+    /// The format of a command or file extension.
+    fn named(name: &str) -> Option<Export> {
+        match name.to_ascii_lowercase().as_str() {
+            "stl" => Some(Export::Stl),
+            "3mf" => Some(Export::ThreeMf),
+            "svg" => Some(Export::Svg),
+            "dxf" => Some(Export::Dxf),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Export::Stl => "STL",
+            Export::ThreeMf => "3MF",
+            Export::Svg => "SVG",
+            Export::Dxf => "DXF",
+        }
+    }
+
+    /// The file in this format, or why there is none.
+    fn write(self, rendered: &c2f_geom::Rendered) -> Result<Vec<u8>, String> {
+        let (bytes, other) = match self {
+            Export::Stl => (rendered.stl().map(String::into_bytes), "2D"),
+            Export::ThreeMf => (rendered.three_mf(), "2D"),
+            Export::Svg => (rendered.svg().map(String::into_bytes), "3D"),
+            Export::Dxf => (rendered.dxf().map(String::into_bytes), "3D"),
+        };
+        bytes.ok_or_else(|| format!("the model is empty or {other}; no {} written", self.name()))
+    }
+}
+
+/// Builds the geometry of an evaluated program, reading data files next to
+/// its main file.
+fn render(program: &c2f_eval::Program, output: &c2f_eval::Output) -> c2f_geom::Rendered {
+    c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")))
+}
+
 /// Prints the CSG tree, or with `export` the geometry in that format.
 fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
     let output = c2f_eval::evaluate(program);
@@ -158,26 +201,20 @@ fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
         eprintln!("WARNING: {warning}");
     }
     if let Some(export) = export {
-        let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")));
+        let rendered = render(program, &output);
         for warning in &rendered.warnings {
             eprintln!("WARNING: {warning}");
         }
-        let (bytes, name, other) = match export {
-            Export::Stl => (rendered.stl().map(String::into_bytes), "STL", "2D"),
-            Export::ThreeMf => (rendered.three_mf(), "3MF", "2D"),
-            Export::Svg => (rendered.svg().map(String::into_bytes), "SVG", "3D"),
-            Export::Dxf => (rendered.dxf().map(String::into_bytes), "DXF", "3D"),
-        };
-        match bytes {
-            Some(bytes) => {
+        match export.write(&rendered) {
+            Ok(bytes) => {
                 // Flushed here: the flush at exit would drop a write error.
                 let mut out = std::io::stdout().lock();
                 if let Err(err) = out.write_all(&bytes).and_then(|()| out.flush()) {
-                    eprintln!("error: cannot write the {name}: {err}");
+                    eprintln!("error: cannot write the {}: {err}", export.name());
                     return ExitCode::FAILURE;
                 }
             }
-            None => eprintln!("WARNING: the model is empty or {other}; no {name} written"),
+            Err(why) => eprintln!("WARNING: {why}"),
         }
         let s = rendered.stats;
         if rendered.is_2d {

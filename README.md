@@ -23,6 +23,36 @@ they are. Written in Rust, it renders as you type.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`.
+- **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
+  agent such as Claude Code writes a model, renders it, looks at a
+  picture of it and exports it, without a window.
+
+## AI agents (MCP)
+
+`c2f mcp` serves the Model Context Protocol on stdin and stdout. To add it
+to Claude Code, with `c2f` on your `PATH` (or its full path instead):
+
+```sh
+claude mcp add code2form -- c2f mcp
+```
+
+The agent works on files and code it renders, not in the open app. Each
+tool takes the program's text as `code` (its includes resolving from
+`working_dir`, by default the server's current directory) or a file as
+`path` (resolving from its folder), and, but for `parameters`, customizer
+values as `parameters`, such as `{"width": 30, "label": "A"}`.
+
+| Tool | What it returns |
+|---|---|
+| `render` | The error that stops the model, with its file, line and column; the echo output and warnings; whether it is 3D or 2D, its triangles, volume (area in 2D) and bounding box |
+| `parameters` | The customizer parameters: name, group, description, default and widget |
+| `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report |
+| `export` | Writes a solid as STL or 3MF, or a 2D model as SVG or DXF, to `output`, in the `format` its extension gives |
+
+The picture comes from a small software renderer in `c2f-geom`, needing
+no screen or GPU: the app's colors, lighting and framing, with outlines
+and creases drawn darker. A 2D model shows as the 1 mm slab the app
+draws, best seen from `top`.
 
 ## Compatibility
 
@@ -72,8 +102,8 @@ names.
 |---|---|
 | `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, AST dump |
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
-| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, SVG and DXF exports |
-| `crates/app` (`c2f-cli`) | The `c2f` command |
+| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, SVG and DXF exports, PNG pictures |
+| `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |
 
 ## Tests

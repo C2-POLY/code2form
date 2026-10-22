@@ -533,6 +533,8 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "miniz_oxide 0.8.9",
+ "serde_json",
 ]
 
 [[package]]
