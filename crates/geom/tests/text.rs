@@ -5,10 +5,12 @@
 //! snippet was exported with its `-o out.svg`, and the contours,
 //! vertices, area (shoelace over the exported points) and bounds read
 //! from the SVG path (y negated back). The SVG prints six significant
-//! digits, hence the tolerances.
+//! digits, hence the tolerances. The two `text("Code2Form")` cases were
+//! measured with this implementation, from the same fonts, after it
+//! matched the reference's numbers to the digit on another word.
 //!
-//! The fonts are read from the reference's application bundle (or from
-//! `OPENSCAD_FONT_PATH`); these tests fail if neither has them.
+//! The fonts are read from the repository's `fonts` folder (or from
+//! `C2F_FONT_PATH`); these tests fail if neither has them.
 
 use std::path::Path;
 
@@ -21,7 +23,7 @@ fn render(src: &str) -> (Option<CrossSection>, Vec<String>) {
     let rendered = c2f_geom::render(&output.nodes);
     assert!(
         !rendered.warnings.iter().any(|w| w.contains("nor Liberation Sans")),
-        "the Liberation fonts were not found: install the reference release (2021.01) or set OPENSCAD_FONT_PATH"
+        "the Liberation fonts were not found: keep the repository's fonts folder or set C2F_FONT_PATH"
     );
     match rendered.model {
         Model::Flat(section) => (Some(section), rendered.warnings),
@@ -66,11 +68,11 @@ fn check(src: &str, expected: Oracle) {
 #[test]
 fn default_text() {
     check(
-        r#"text("OpenSCAD");"#,
+        r#"text("Code2Form");"#,
         Oracle {
-            contours: &[44, 32, 130, 66, 8, 13, 23, 23, 43, 17, 60, 50, 36],
-            area: 219.534134,
-            bounds: [0.657791, -2.88199, 70.4331, 9.69719],
+            contours: &[47, 66, 81, 10, 28, 43, 28, 38, 92, 32, 32, 17, 32],
+            area: 209.976572,
+            bounds: [0.705292, -0.13559, 70.9664, 10.0634],
         },
     );
 }
@@ -95,11 +97,11 @@ fn serif_italic() {
 fn fn_sets_curve_segments() {
     // $fn = 64: 64 / 8 + 1 = 9 segments per curve instead of 4.
     check(
-        r#"text("OpenSCAD", $fn=64);"#,
+        r#"text("Code2Form", $fn=64);"#,
         Oracle {
-            contours: &[99, 72, 290, 146, 8, 22, 48, 48, 93, 37, 121, 105, 81],
-            area: 220.315639,
-            bounds: [0.657791, -2.88199, 70.4331, 9.69719],
+            contours: &[97, 146, 176, 10, 63, 93, 63, 78, 188, 72, 72, 37, 72],
+            area: 211.016054,
+            bounds: [0.705292, -0.13559, 70.9664, 10.0634],
         },
     );
 }

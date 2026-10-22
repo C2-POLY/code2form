@@ -195,7 +195,7 @@ pub fn on_ground(ray: &Ray) -> Option<[f64; 2]> {
 /// The user's own parts folder, a default library folder: where new parts
 /// go.
 pub fn user_folder() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("HOME")?).join("Documents/OpenSCAD/libraries").join(FOLDER))
+    Some(PathBuf::from(std::env::var_os("HOME")?).join(c2f_eval::USER_LIBRARIES).join(FOLDER))
 }
 
 /// Whether `name` makes a part file's name and module.

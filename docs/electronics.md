@@ -216,7 +216,7 @@ label = "I2C"
 | `allow` | warnings accepted for the pins at its two ends: `["reserved"]`, `["two_outputs"]`, `["common_ground"]` (see [Check the wiring](#3-check-the-wiring)) |
 
 A part's file is found next to the circuit first, then in the library
-folders (those in `OPENSCADPATH`, then the library the app ships). That
+folders (those in `C2F_LIBRARY_PATH`, then the library the app ships). That
 is why `electronics/xiao_esp32s3.c2f` needs no path. The file's own
 customizer parameters can be set with `params`, as Grogu does for the
 amplifier's headers and the capacitor's size.
@@ -400,7 +400,7 @@ enclosure and the wires at a height.
 
 The **Catalogue** button in the toolbar (for a circuit) opens a panel
 of every part under `electronics/` in the library folders: the
-library's, the app's and your own (`~/Documents/OpenSCAD/libraries/electronics`),
+library's, the app's and your own (`~/Documents/Code2Form/libraries/electronics`),
 a part found in several listed once, from the first folder searched.
 Each row shows a picture of the part, its name, the first sentence of
 its opening comment and its number of pins; the search field filters on
