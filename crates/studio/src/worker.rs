@@ -42,6 +42,9 @@ pub struct Scene {
     /// For a circuit, the vertices of each of its parts in `solid`, in the
     /// order of the circuit's parts.
     pub parts: Vec<std::ops::Range<usize>>,
+    /// For a circuit, the vertices of its enclosure in `solid`, after the
+    /// parts': see-through.
+    pub enclosure: std::ops::Range<usize>,
 }
 
 impl Scene {
@@ -266,6 +269,7 @@ fn render_source(
                 pauses: rendered.pauses.clone(),
                 source: source.to_string(),
                 parts: Vec::new(),
+                enclosure: 0..0,
             };
             (Ok(scene), Some(rendered))
         }
@@ -306,7 +310,11 @@ fn render_circuit(
                 .find(|f| f.severity == c2f_circuit::check::Severity::Error)
                 .map(|f| lines.line(f.span.start as usize));
             let rendered = parts.update(&found, library_paths, render_part);
-            Ok(circuit::scene(&found, &rendered, source, &mut console))
+            let enclosure = parts.enclosure(&found, source, |text, enclosure_path| {
+                render_enclosure(text, enclosure_path, path, &found, library_paths)
+            });
+            let collisions = circuit::collisions(&found, &rendered, enclosure.as_deref());
+            Ok(circuit::scene(&found, &rendered, enclosure.as_deref(), &collisions, source, &mut console))
         }
         Err(errors) => {
             console.extend(errors.iter().map(|err| Line::new(Level::Error, err.render())));
@@ -336,14 +344,64 @@ pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> Part
             highlights: rendered.highlights,
             backgrounds: rendered.backgrounds,
             console,
+            model: rendered.model,
         },
-        Err(_) => PartRender {
-            solid: RenderMesh::default(),
-            highlights: RenderMesh::default(),
+        Err(_) => PartRender::failed(console),
+    }
+}
+
+/// Renders the enclosure `source` at `path` as a design of its own. When
+/// it names the circuit at `circuit_path` in `// @circuit`, it gets
+/// `circuit`, as read from the editor, rather than the file on disk.
+pub fn render_enclosure(
+    source: &str,
+    path: &Path,
+    circuit_path: &Path,
+    circuit: &c2f_circuit::Circuit,
+    library_paths: &[PathBuf],
+) -> PartRender {
+    let mut console = Vec::new();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let mut program = match c2f_eval::Program::load(source, path, library_paths) {
+            Ok(program) => program,
+            Err(err) => {
+                console.push(Line::new(Level::Error, err.render()));
+                return None;
+            }
+        };
+        let same = |a: &Path| {
+            let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            canonical(a) == canonical(circuit_path)
+        };
+        if program.circuit_path.as_deref().is_some_and(same) {
+            program.circuit = Some(circuit.clone());
+            program.warnings.retain(|w| !w.starts_with("Can't read circuit"));
+        }
+        let output = c2f_eval::evaluate(&program);
+        console.extend(output.echo.into_iter().map(|text| Line::new(Level::Echo, text)));
+        console.extend(output.warnings.into_iter().map(|text| Line::new(Level::Warning, text)));
+        if let Some(error) = output.error {
+            console.push(Line::new(Level::Error, error));
+            return None;
+        }
+        Some(c2f_geom::render_in(&output.nodes, path.parent().unwrap_or(Path::new(""))))
+    }))
+    .unwrap_or_else(|panic| {
+        console.push(Line::new(Level::Error, format!("internal error in {}: {}", path.display(), panic_message(&*panic))));
+        None
+    });
+    let console = circuit::label_lines(console, path);
+    match result {
+        // Its `%` parts are the circuit's, already shown.
+        Some(rendered) => PartRender {
+            triangles: rendered.stats.triangles,
+            solid: rendered.solid,
+            highlights: rendered.highlights,
             backgrounds: RenderMesh::default(),
-            triangles: 0,
             console,
+            model: rendered.model,
         },
+        None => PartRender::failed(console),
     }
 }
 

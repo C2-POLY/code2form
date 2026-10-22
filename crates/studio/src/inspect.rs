@@ -49,13 +49,29 @@ fn capitalize(text: &str) -> String {
     chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
 }
 
+/// How much wire to cut: the length routed and the margin, which
+/// [`Lengths::of`] adds up.
+#[derive(Clone, Copy, Debug)]
+pub struct Lengths<'a> {
+    /// Each wire's routed length, in millimeters.
+    pub routed: &'a [f64],
+    pub margin: f64,
+}
+
+impl Lengths<'_> {
+    pub fn of(&self, wire: usize) -> f64 {
+        self.routed.get(wire).copied().unwrap_or(0.0) + self.margin
+    }
+}
+
 /// The one line shown next to the pointer.
-pub fn bubble(circuit: &Circuit, hit: Hit) -> String {
+pub fn bubble(circuit: &Circuit, hit: Hit, lengths: Lengths) -> String {
     match hit {
         Hit::Pin(end) => pin_name(circuit, end),
         Hit::Wire(index) => {
             let wire = &circuit.wires[index];
-            format!("{}: {} ➡ {}", wire_title(circuit, index), circuit.end_name(wire.from), circuit.end_name(wire.to))
+            let (title, from, to) = (wire_title(circuit, index), circuit.end_name(wire.from), circuit.end_name(wire.to));
+            format!("{title}: {from} ➡ {to} · {:.0} mm", lengths.of(index))
         }
         Hit::Part(index) => {
             let part = &circuit.parts[index];
@@ -66,7 +82,7 @@ pub fn bubble(circuit: &Circuit, hit: Hit) -> String {
 
 /// The lines of the selection's card: a title, then details. `source` is
 /// the circuit's text, for the line a wire is written on.
-pub fn card(circuit: &Circuit, hit: Hit, source: &str) -> (String, Vec<String>) {
+pub fn card(circuit: &Circuit, hit: Hit, source: &str, lengths: Lengths) -> (String, Vec<String>) {
     match hit {
         Hit::Pin(end) => {
             let pin = circuit.pin(end);
@@ -95,7 +111,13 @@ pub fn card(circuit: &Circuit, hit: Hit, source: &str) -> (String, Vec<String>) 
                 .filter(|&&b| b == b'\n')
                 .count();
             let ends = format!("{} ➡ {}", end_text(circuit, wire.from), end_text(circuit, wire.to));
-            (wire_title(circuit, index), vec![ends, format!("Line {} of the circuit", line + 1)])
+            let length = format!(
+                "About {:.0} mm of wire: {:.0} mm routed + {} mm margin",
+                lengths.of(index),
+                lengths.routed.get(index).copied().unwrap_or(0.0),
+                crate::pause_edit::number(lengths.margin as f32)
+            );
+            (wire_title(circuit, index), vec![ends, length, format!("Line {} of the circuit", line + 1)])
         }
         Hit::Part(index) => {
             let part = &circuit.parts[index];
@@ -153,24 +175,26 @@ mod tests {
     fn says_what_a_pin_a_wire_and_a_part_are() {
         let circuit = circuit();
         let a = End { part: 0, pin: 0 };
-        assert_eq!(bubble(&circuit, Hit::Pin(a)), "a · A · first");
-        assert_eq!(bubble(&circuit, Hit::Pin(End { part: 0, pin: 1 })), "a · B");
-        assert_eq!(bubble(&circuit, Hit::Wire(0)), "Red wire · 5 V: a.A ➡ b.A");
-        assert_eq!(bubble(&circuit, Hit::Wire(2)), "Wire: a.B ➡ b.B");
-        assert_eq!(bubble(&circuit, Hit::Part(1)), "b · board.c2f");
+        let lengths = Lengths { routed: &[40.2, 41.0, 37.6], margin: 10.0 };
+        assert_eq!(bubble(&circuit, Hit::Pin(a), lengths), "a · A · first");
+        assert_eq!(bubble(&circuit, Hit::Pin(End { part: 0, pin: 1 }), lengths), "a · B");
+        assert_eq!(bubble(&circuit, Hit::Wire(0), lengths), "Red wire · 5 V: a.A ➡ b.A · 50 mm");
+        assert_eq!(bubble(&circuit, Hit::Wire(2), lengths), "Wire: a.B ➡ b.B · 48 mm");
+        assert_eq!(bubble(&circuit, Hit::Part(1), lengths), "b · board.c2f");
 
-        let (title, lines) = card(&circuit, Hit::Pin(a), "");
+        let (title, lines) = card(&circuit, Hit::Pin(a), "", lengths);
         assert_eq!(title, "a · A · first");
         assert_eq!(lines, ["passive", "Net: a.B, b.A, b.B (3 wires)"]);
-        let (_, lines) = card(&circuit, Hit::Pin(End { part: 0, pin: 2 }), "");
+        let (_, lines) = card(&circuit, Hit::Pin(End { part: 0, pin: 2 }), "", lengths);
         assert_eq!(lines[1], "Not wired");
         let source = "x\ny\n\nfrom = \"a.A\"";
         let mut circuit = (*circuit).clone();
         circuit.wires[0].span = c2f_lang::Span::new(5, 9);
-        let (title, lines) = card(&circuit, Hit::Wire(0), source);
+        let (title, lines) = card(&circuit, Hit::Wire(0), source, Lengths { margin: 12.5, ..lengths });
         assert_eq!(title, "Red wire · 5 V");
-        assert_eq!(lines, ["a A (first) ➡ b A (first)", "Line 4 of the circuit"]);
-        let (_, lines) = card(&circuit, Hit::Part(0), "");
+        let length = "About 53 mm of wire: 40 mm routed + 12.5 mm margin";
+        assert_eq!(lines, ["a A (first) ➡ b A (first)", length, "Line 4 of the circuit"]);
+        let (_, lines) = card(&circuit, Hit::Part(0), "", lengths);
         assert_eq!(lines, ["No parameters", "Double-click to open board.c2f"]);
     }
 }

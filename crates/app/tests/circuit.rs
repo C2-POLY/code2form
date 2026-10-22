@@ -159,3 +159,34 @@ fn wiring_errors_fail_and_warnings_do_not() {
     assert!(output.status.success());
     assert_eq!(text(&output.stdout), "warned.c2fc: 1 part, 1 wire: no errors, 1 warning\n");
 }
+
+#[test]
+fn wire_lengths_take_a_margin() {
+    let length = |args: &[&str]| -> f64 {
+        let csv = text(&grogu(args).stdout);
+        csv.lines().nth(1).unwrap().rsplit(',').next().unwrap().parse().unwrap()
+    };
+    let default = length(&["wires", "--csv", "grogu.c2fc"]);
+    assert!((default - length(&["wires", "--csv", "--margin", "0", "grogu.c2fc"]) - 10.0).abs() < 0.11);
+    assert!((length(&["wires", "--csv", "--margin=25", "grogu.c2fc"]) - default - 15.0).abs() < 0.11);
+    let dir = manifest().join("../../examples/grogu");
+    assert_eq!(c2f(&dir, &["wires", "--margin", "-1", "grogu.c2fc"]).status.code(), Some(2));
+    assert_eq!(c2f(&dir, &["bom", "--margin", "5", "grogu.c2fc"]).status.code(), Some(2));
+}
+
+#[test]
+fn collisions_are_warnings() {
+    let block = "// @pin A [0, 0, 1]\ncube(10);\n";
+    let enclosure = "translate([-20, -20, -2]) cube([60, 40, 2]);\n";
+    let circuit = "enclosure = \"box.c2f\"\n\n[parts.a]\npart = \"block.c2f\"\n\n[parts.b]\npart = \"block.c2f\"\nat = [8, 0, 0]\n\n\
+                   [parts.c]\npart = \"block.c2f\"\nat = [0, -15, -1]\n\n[parts.d]\npart = \"block.c2f\"\nat = [18, 0, 0]\n";
+    let folder = Folder::new("collide", &[("block.c2f", block), ("box.c2f", enclosure), ("test.c2fc", circuit)]);
+    let output = c2f(&folder.0, &["check", "test.c2fc"]);
+    assert!(output.status.success());
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("WARNING: collision: `a` and `b` overlap by 200.00 mm³\n"), "{stderr}");
+    assert!(stderr.contains("WARNING: collision: `c` runs into the enclosure by 100.00 mm³\n"), "{stderr}");
+    // b and d only touch, as the parts that sit on the plate do.
+    assert_eq!(stderr.matches("collision").count(), 2, "{stderr}");
+    assert_eq!(text(&output.stdout), "test.c2fc: 4 parts, 0 wires: no errors, 2 warnings\n");
+}

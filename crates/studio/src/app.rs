@@ -26,6 +26,7 @@ use crate::viewer::{self, PauseEdit, Viewer};
 use crate::inspect;
 use crate::mount::{self, Mount};
 use crate::pick::{self, Hit};
+use crate::prefs::WireMargin;
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
@@ -116,6 +117,8 @@ pub struct StudioApp {
     shown_parts: Vec<Emphasis>,
     /// The assembly mode, and its progress.
     mount: Mount,
+    /// Added to each wire's routed length.
+    wire_margin: WireMargin,
     /// When the app started, for the pins that pulse.
     started: Instant,
     /// Where the 3D view is, as last shown.
@@ -168,6 +171,7 @@ impl StudioApp {
             part_boxes: Vec::new(),
             shown_parts: Vec::new(),
             mount: Mount::default(),
+            wire_margin: WireMargin::load(crate::prefs::wire_margin_store()),
             started: Instant::now(),
             view_rect: egui::Rect::NOTHING,
             circuit_generation: 0,
@@ -322,7 +326,11 @@ impl StudioApp {
 
     /// Shows a circuit just read, or none, and watches its part files.
     fn set_circuit(&mut self, found: Option<Arc<c2f_circuit::Circuit>>) {
-        let mut files: Vec<PathBuf> = found.iter().flat_map(|c| c.parts.iter().map(|p| p.path.clone())).collect();
+        // The parts' files and the enclosure's: an edit to one renders again.
+        let mut files: Vec<PathBuf> = found
+            .iter()
+            .flat_map(|c| c.parts.iter().map(|p| p.path.clone()).chain(c.enclosure.clone()))
+            .collect();
         files.sort();
         files.dedup();
         let known = std::mem::take(&mut self.part_files);
@@ -949,6 +957,13 @@ impl StudioApp {
                         if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
                             self.set_mount(!self.mount.active);
                         }
+                        if self.viewer.has_enclosure() {
+                            let mut shown = self.viewer.shows_enclosure();
+                            let toggle = ui.toggle_value(&mut shown, "Enclosure");
+                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
+                                self.viewer.set_show_enclosure(shown);
+                            }
+                        }
                         toolbar_separator(ui);
                     }
                     let mut shown = self.customizer_shown();
@@ -1208,15 +1223,38 @@ impl StudioApp {
                 let right = if self.viewer.layer_view { 70.0 } else { 12.0 };
                 // Below the assembly bar, when it is shown.
                 let top = if self.mount.active { 110.0 } else { 12.0 };
-                wiring::paint_legend(&painter, response.rect, right, top, &wiring.legend());
+                let legend = wiring::paint_legend(&painter, response.rect, right, top, &wiring.legend());
+                let lengths = inspect::Lengths { routed: &wiring.lengths, margin: self.wire_margin.mm };
                 if let Some(selection) = self.selection.filter(|_| !self.mount.active) {
-                    let (title, lines) = inspect::card(&wiring.circuit, selection, &self.text);
+                    let (title, lines) = inspect::card(&wiring.circuit, selection, &self.text, lengths);
                     inspect::paint_card(&painter, response.rect, &title, &lines);
                 }
                 if let (Some(hover), Some(pos)) = (self.hover, response.hover_pos()) {
                     if !response.dragged() {
-                        inspect::paint_bubble(&painter, response.rect, pos, &inspect::bubble(&wiring.circuit, hover));
+                        let text = inspect::bubble(&wiring.circuit, hover, lengths);
+                        inspect::paint_bubble(&painter, response.rect, pos, &text);
                         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                }
+                // The margin added to each wire's length, under the legend.
+                if !wiring.circuit.wires.is_empty() {
+                    let field = egui::Rect::from_min_size(
+                        legend.left_bottom() + Vec2::new(0.0, 6.0),
+                        Vec2::new(legend.width().max(190.0), 22.0),
+                    );
+                    let mut mm = self.wire_margin.mm;
+                    let value = egui::DragValue::new(&mut mm)
+                        .range(0.0..=500.0)
+                        .speed(0.5)
+                        .max_decimals(1)
+                        .prefix("Wire margin: ")
+                        .suffix(" mm");
+                    let hint = "Added to each wire's routed length, for its stripped ends and some slack";
+                    if ui.put(field, value).on_hover_text(hint).changed() {
+                        self.wire_margin.mm = mm;
+                        if let Err(err) = self.wire_margin.save() {
+                            self.console.log(Level::Warning, format!("Cannot save the wire margin: {err}"));
+                        }
                     }
                 }
             }

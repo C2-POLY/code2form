@@ -14,6 +14,7 @@ mod mount;
 mod open_events;
 mod pause_edit;
 mod pick;
+mod prefs;
 mod recent;
 mod renderer;
 mod screenshot;

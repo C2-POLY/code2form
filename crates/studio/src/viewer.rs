@@ -96,6 +96,12 @@ pub struct Viewer {
     /// solid's colors as rendered.
     part_ranges: Vec<std::ops::Range<usize>>,
     solid_colors: Vec<[f32; 4]>,
+    /// How each part shows, as the app last said.
+    part_emphasis: Vec<Emphasis>,
+    /// A circuit's enclosure: its vertices in the solid, and whether it
+    /// shows.
+    enclosure: std::ops::Range<usize>,
+    show_enclosure: bool,
     /// A double-click frames the view; the app turns it off while the
     /// pointer is over something a double-click opens.
     pub frame_on_double_click: bool,
@@ -139,6 +145,9 @@ impl Viewer {
             overlay_bounds: None,
             part_ranges: Vec::new(),
             solid_colors: Vec::new(),
+            part_emphasis: Vec::new(),
+            enclosure: 0..0,
+            show_enclosure: true,
             frame_on_double_click: true,
             pauses: Vec::new(),
             scene_source: String::new(),
@@ -172,6 +181,7 @@ impl Viewer {
         };
         self.scene_source = scene.source.clone();
         self.part_ranges = scene.parts.clone();
+        self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
@@ -182,6 +192,8 @@ impl Viewer {
                 r.set_grid(self.grid);
             }
         }
+        // The new solid comes in its own colors.
+        self.recolor();
         if frame {
             self.view_all();
         }
@@ -201,15 +213,47 @@ impl Viewer {
     /// Shows each part of a circuit as `emphasis` says, by part index;
     /// parts left out show as rendered.
     pub fn set_part_emphasis(&mut self, emphasis: &[Emphasis]) {
-        if self.solid_colors.is_empty() {
+        self.part_emphasis = emphasis.to_vec();
+        self.recolor();
+    }
+
+    /// Whether a circuit's enclosure shows.
+    pub fn shows_enclosure(&self) -> bool {
+        self.show_enclosure
+    }
+
+    /// Shows or hides a circuit's enclosure.
+    pub fn set_show_enclosure(&mut self, show: bool) {
+        if show != self.show_enclosure {
+            self.show_enclosure = show;
+            self.recolor();
+        }
+    }
+
+    /// Whether the scene has an enclosure.
+    pub fn has_enclosure(&self) -> bool {
+        !self.enclosure.is_empty()
+    }
+
+    /// Sends the solid's colors, as the parts' emphasis and the
+    /// enclosure's toggle make them, when they differ from the scene's.
+    fn recolor(&self) {
+        let plain = self.part_emphasis.iter().all(|&e| e == Emphasis::Normal) && self.show_enclosure;
+        if self.solid_colors.is_empty() || (plain && self.part_emphasis.is_empty()) {
             return;
         }
         let mut colors = self.solid_colors.clone();
-        for (range, &e) in self.part_ranges.iter().zip(emphasis) {
+        for (range, &e) in self.part_ranges.iter().zip(&self.part_emphasis) {
             if e != Emphasis::Normal {
                 for color in &mut colors[range.clone()] {
                     *color = shade(*color, e);
                 }
+            }
+        }
+        if !self.show_enclosure {
+            // Fully see-through: the translucent pass draws nothing of it.
+            for color in colors.get_mut(self.enclosure.clone()).unwrap_or_default() {
+                color[3] = 0.0;
             }
         }
         if let Ok(renderer) = &self.renderer {
@@ -862,6 +906,7 @@ mod tests {
             pauses: Vec::new(),
             source: String::new(),
             parts: Vec::new(),
+            enclosure: 0..0,
         }
     }
 

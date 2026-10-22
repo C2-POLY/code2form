@@ -76,6 +76,8 @@ pub struct Wiring {
     /// The curve of each wire, in the order of the circuit's wires.
     pub paths: Vec<Vec<[f64; 3]>>,
     pub colors: Vec<[f32; 4]>,
+    /// The length of each curve, in millimeters.
+    pub lengths: Vec<f64>,
     /// Pins that have a wire.
     pub wired: HashSet<End>,
 }
@@ -85,7 +87,8 @@ impl Wiring {
         let paths = route::paths(&circuit);
         let colors = circuit.wires.iter().map(|w| wire_color(w.color.as_deref())).collect();
         let wired = circuit.wires.iter().flat_map(|w| [w.from, w.to]).collect();
-        Wiring { circuit, paths, colors, wired }
+        let lengths = paths.iter().map(|path| route::length_of(path)).collect();
+        Wiring { circuit, paths, colors, lengths, wired }
     }
 
     /// Every pin of every part.
@@ -184,9 +187,10 @@ pub fn color32(c: [f32; 4]) -> Color32 {
 /// The legend, in the top-right corner of the view, `right` and `top`
 /// points from its edges: a swatch per color, its name and its wires' labels, on a dark
 /// card that reads the same whatever is behind it.
-pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, top: f32, entries: &[LegendEntry]) {
+/// Returns the card's rectangle, for what goes under it.
+pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, top: f32, entries: &[LegendEntry]) -> Rect {
     if entries.is_empty() {
-        return;
+        return Rect::from_min_size(Pos2::new(rect.right() - right, rect.top() + top), Vec2::ZERO);
     }
     let font = FontId::proportional(12.0);
     let rows: Vec<_> = entries
@@ -214,6 +218,7 @@ pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, top: f32, e
         painter.galley(Pos2::new(card.left() + 28.0, y - name.size().y / 2.0), name, TEXT);
         painter.galley(Pos2::new(card.left() + 28.0 + name_width + 12.0, y - labels.size().y / 2.0), labels, TEXT_DIM);
     }
+    card
 }
 
 /// Light text on the view's dark overlays.
