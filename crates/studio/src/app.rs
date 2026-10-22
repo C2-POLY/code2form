@@ -2922,7 +2922,7 @@ fn names(actions: &[Action]) -> String {
 /// The STL format and where exports go; the change asked for in the folder.
 fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
     section_heading(ui, "STL files", "3D printers' slicers read both.");
-    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, as OpenSCAD writes it");
+    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
     ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
     ui.add_space(14.0);
     section_heading(ui, "Export folder", "Where Export… opens.");
@@ -2954,14 +2954,14 @@ fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>
     section_heading(
         ui,
         "Library folders",
-        "Searched for include <…> and use <…> before ~/Documents/OpenSCAD/libraries, OPENSCADPATH and the app's own.",
+        "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
     );
     let libraries = folder_list(ui, "libraries", &settings.library_folders);
     ui.add_space(14.0);
     section_heading(
         ui,
         "Font folders",
-        "Searched for text()'s fonts, with their subfolders, before OPENSCAD_FONT_PATH, the app's and the system's.",
+        "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
     );
     let fonts = folder_list(ui, "fonts", &settings.font_folders);
     (libraries, fonts)

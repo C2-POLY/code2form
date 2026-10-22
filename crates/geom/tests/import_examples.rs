@@ -1,11 +1,9 @@
 //! The examples bundled with the reference implementation (2021.01) that
 //! read data files (DXF, STL, DAT, PNG), rendered and compared with the
 //! volumes the reference gives them (binary STL exports). They are read
-//! from the reference's install and skipped when it is absent.
+//! from the folder `C2F_REFERENCE_EXAMPLES` names, and skipped without it.
 
 use std::path::{Path, PathBuf};
-
-const EXAMPLES: &str = "/Applications/OpenSCAD-2021.01.app/Contents/Resources/examples";
 
 /// Example, and the volume (area for 2D) of its render by the reference
 /// release (2021.01).
@@ -23,13 +21,11 @@ const CASES: &[(&str, f64)] = &[
 ];
 
 fn examples() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("C2F_REFERENCE_EXAMPLES").unwrap_or_else(|| EXAMPLES.into()));
-    if dir.is_dir() {
-        Some(dir)
-    } else {
-        eprintln!("skipped: the examples of the reference release (2021.01) are not at {} (set C2F_REFERENCE_EXAMPLES)", dir.display());
-        None
-    }
+    let Some(dir) = std::env::var_os("C2F_REFERENCE_EXAMPLES").map(PathBuf::from).filter(|d| d.is_dir()) else {
+        eprintln!("skipped: set C2F_REFERENCE_EXAMPLES to the examples folder of the reference release (2021.01)");
+        return None;
+    };
+    Some(dir)
 }
 
 fn render(path: &Path) -> c2f_geom::Rendered {

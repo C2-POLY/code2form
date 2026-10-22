@@ -16,13 +16,11 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Where the reference release (2021.01) keeps the fonts it bundles;
-/// `OPENSCAD_FONT_PATH` (colon-separated), then the studio app's own
-/// copy, are searched before these.
-const BUNDLED_DIRS: &[&str] = &[
-    "/Applications/OpenSCAD-2021.01.app/Contents/Resources/fonts",
-    "/Applications/OpenSCAD.app/Contents/Resources/fonts",
-];
+/// The repository's copy of the bundled fonts, found when this program
+/// runs where it was built (`cargo run`, `cargo test`); `C2F_FONT_PATH`
+/// (colon-separated), then the studio app's own copy, are searched before
+/// it.
+const REPOSITORY_FONTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fonts");
 
 /// System font directories (macOS first), searched after the bundled ones.
 const SYSTEM_DIRS: &[&str] = &["/System/Library/Fonts", "/Library/Fonts", "/usr/share/fonts", "/usr/local/share/fonts"];
@@ -83,7 +81,7 @@ pub fn load(name: &str, warnings: &mut Vec<String>) -> Option<Font> {
                 }
                 None => {
                     warnings.push(format!(
-                        "Can't find font \"{name}\" nor {DEFAULT_FAMILY}: install the Liberation fonts or set OPENSCAD_FONT_PATH"
+                        "Can't find font \"{name}\" nor {DEFAULT_FAMILY}: install the Liberation fonts or set C2F_FONT_PATH"
                     ));
                     return None;
                 }
@@ -238,11 +236,11 @@ fn slant_value(value: &str) -> Option<Slant> {
 fn bundled() -> &'static [Entry] {
     static BUNDLED: OnceLock<Vec<Entry>> = OnceLock::new();
     BUNDLED.get_or_init(|| {
-        let mut dirs: Vec<PathBuf> = std::env::var_os("OPENSCAD_FONT_PATH")
+        let mut dirs: Vec<PathBuf> = std::env::var_os("C2F_FONT_PATH")
             .map(|paths| std::env::split_paths(&paths).collect())
             .unwrap_or_default();
         dirs.extend(c2f_eval::app_resources().map(|resources| resources.join("fonts")));
-        dirs.extend(BUNDLED_DIRS.iter().map(PathBuf::from));
+        dirs.push(PathBuf::from(REPOSITORY_FONTS));
         scan(&dirs)
     })
 }
