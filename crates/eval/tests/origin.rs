@@ -79,3 +79,25 @@ fn an_included_statement_is_not_in_the_main_file() {
     assert!(!origins[0].in_main_file());
     assert!(origins[1].in_main_file());
 }
+
+#[test]
+fn two_runs_of_one_statement_have_the_same_shape() {
+    // What lets a renderer build the outline of a repeated projection once.
+    let src = "for (i = [0:1]) projection() cube(5);\nprojection() cube(6);";
+    let output = evaluate(src);
+    let mut found = Vec::new();
+    projections(&output.nodes, &mut found);
+    assert_eq!(found.len(), 3);
+    assert_ne!(found[0], found[1], "each run has its own origins");
+    assert!(found[0].same_shape(found[1]));
+    assert!(!found[0].same_shape(found[2]));
+}
+
+fn projections<'a>(nodes: &'a [Node], out: &mut Vec<&'a Node>) {
+    for node in nodes {
+        if matches!(node.kind, c2f_eval::node::NodeKind::Projection { .. }) {
+            out.push(node);
+        }
+        projections(&node.children, out);
+    }
+}

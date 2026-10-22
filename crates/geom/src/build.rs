@@ -66,9 +66,22 @@ pub fn render_in(nodes: &[Node], base_dir: &Path) -> Rendered {
     let mut builder = Builder { base_dir: base_dir.to_path_buf(), ..Builder::default() };
     let ctx = Ctx { color: None, cut: false, origin: 0 };
     let parts: Vec<Model> = nodes.iter().map(|n| builder.node(n, ctx)).collect();
+    // A 2D model is drawn as a slab that carries no origin of its own: keep
+    // each top-level shape, with its statement, to draw them apart.
+    let flats: Vec<(u32, CrossSection)> = nodes
+        .iter()
+        .zip(&parts)
+        .filter_map(|(node, part)| match part {
+            Model::Flat(c) => Some((node.origin.map_or(0, |o| o.saturating_add(1)), c.clone())),
+            _ => None,
+        })
+        .collect();
     let model = builder.union(parts);
     let is_2d = matches!(model, Model::Flat(_));
-    let solid = display(&model, None);
+    let solid = match is_2d {
+        true => display_flats(flats),
+        false => display(&model, None),
+    };
     let stats = match &model {
         Model::Solid(m) => Stats { triangles: m.num_tri(), vertices: m.num_vert(), volume: m.volume() },
         Model::Flat(c) => Stats { triangles: 0, vertices: c.num_vert(), volume: c.area() },
@@ -171,6 +184,27 @@ impl Builder {
         model
     }
 
+    /// How many highlights, backgrounds and cutters there are so far, for
+    /// [`Builder::transform_side_parts`].
+    fn side_lengths(&self) -> [usize; 3] {
+        [self.highlights.len(), self.backgrounds.len(), self.cutters.len()]
+    }
+
+    /// Moves the highlights, backgrounds and cutters built since `since`
+    /// by `m`. They are kept aside as they are built, under the transforms
+    /// around them, which only move the model a node returns: without this,
+    /// `translate([50, 0, 0]) #cube(5);` would show its cube at the origin
+    /// (the reference shows it moved), and a cutter under a `translate`
+    /// would be picked away from its hole.
+    fn transform_side_parts(&mut self, since: [usize; 3], m: &Matrix) {
+        let [h, b, c] = since;
+        for list in [&mut self.highlights[h..], &mut self.backgrounds[b..], &mut self.cutters[c..]] {
+            for part in list {
+                *part = transform(std::mem::take(part), m);
+            }
+        }
+    }
+
     fn children(&mut self, node: &Node, ctx: Ctx) -> Vec<Model> {
         node.children.iter().map(|child| self.node(child, ctx)).collect()
     }
@@ -201,8 +235,10 @@ impl Builder {
                 self.union(parts)
             }
             NodeKind::Transform(m) => {
+                let since = self.side_lengths();
                 let parts = self.children(node, ctx);
                 let model = self.union(parts);
+                self.transform_side_parts(since, m);
                 transform(model, m)
             }
             NodeKind::Cube { size, center } => solid(primitives::cube(*size, *center), ctx),
@@ -314,10 +350,12 @@ impl Builder {
             }
             NodeKind::Projection { cut, .. } => {
                 // Marked children add to the highlights and backgrounds as
-                // they are built, so only unmarked ones are reused.
+                // they are built, so only unmarked ones are reused. Each
+                // instantiation has its own origins, which the outline does
+                // not carry: compare the shapes alone.
                 let reusable = unmarked(node);
                 if reusable {
-                    if let Some((_, model)) = self.projections.iter().find(|(n, _)| n == node) {
+                    if let Some((_, model)) = self.projections.iter().find(|(n, _)| n.same_shape(node)) {
                         return model.clone();
                     }
                 }
@@ -332,9 +370,12 @@ impl Builder {
                 model
             }
             NodeKind::Resize { size, auto, .. } => {
+                let since = self.side_lengths();
                 let parts = self.children(node, ctx);
                 let model = self.union(parts);
-                resize(model, *size, *auto)
+                let Some(m) = resize_matrix(&model, *size, *auto) else { return model };
+                self.transform_side_parts(since, &m);
+                transform(model, &m)
             }
             NodeKind::Text(params) => {
                 let mut warnings = Vec::new();
@@ -651,8 +692,10 @@ fn transform(model: Model, m: &Matrix) -> Model {
     }
 }
 
-fn resize(model: Model, size: [f64; 3], auto: [bool; 3]) -> Model {
-    let (lo, hi) = match &model {
+/// The scaling that brings `model` to `size` (`auto` axes, left at 0,
+/// following the largest scale asked for); `None` for an empty model.
+fn resize_matrix(model: &Model, size: [f64; 3], auto: [bool; 3]) -> Option<Matrix> {
+    let (lo, hi) = match model {
         Model::Solid(m) => {
             let b = m.bounding_box();
             ([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z])
@@ -661,7 +704,7 @@ fn resize(model: Model, size: [f64; 3], auto: [bool; 3]) -> Model {
             let r = c.bounds();
             ([r.min.x, r.min.y, 0.0], [r.max.x, r.max.y, 0.0])
         }
-        Model::Empty => return model,
+        Model::Empty => return None,
     };
     let mut scale = [1.0; 3];
     for i in 0..3 {
@@ -680,21 +723,45 @@ fn resize(model: Model, size: [f64; 3], auto: [bool; 3]) -> Model {
     for (i, s) in scale.iter().enumerate() {
         m[i][i] = *s;
     }
-    transform(model, &m)
+    Some(m)
+}
+
+/// The top-level shapes of a 2D model, each as a slab carrying its
+/// statement (as [`ORIGIN_PROP`] stores it), so that a click picks it.
+/// Each shows only where the shapes before it do not, as their union does,
+/// so that overlaps draw no doubled faces.
+fn display_flats(flats: Vec<(u32, CrossSection)>) -> RenderMesh {
+    let mut out = RenderMesh::default();
+    let mut below: Option<CrossSection> = None;
+    for (origin, part) in flats {
+        let shown = match &below {
+            Some(below) => part.difference(below),
+            None => part.clone(),
+        };
+        below = Some(match below {
+            Some(below) => below.union(&part),
+            None => part,
+        });
+        out.append(display_slab(&shown, origin, None));
+    }
+    out
+}
+
+/// A 2D shape as a 1-unit slab, as in the reference's preview, carrying
+/// `origin`.
+fn display_slab(section: &CrossSection, origin: u32, paint: Option<[f32; 4]>) -> RenderMesh {
+    let slab = Manifold::extrude(&section.to_polygons(), 1.0, 0, 0.0, Vec2::new(1.0, 1.0));
+    match colored(slab, Ctx { color: None, cut: false, origin }) {
+        Model::Solid(m) => display(&Model::Solid(m), paint),
+        _ => RenderMesh::default(),
+    }
 }
 
 /// Flat-shaded triangles for drawing; `paint` overrides the colors.
 fn display(model: &Model, paint: Option<[f32; 4]>) -> RenderMesh {
     let manifold = match model {
         Model::Solid(m) => m.clone(),
-        // 2D shapes show as a 1-unit slab, as in the reference's preview.
-        Model::Flat(c) => {
-            let slab = Manifold::extrude(&c.to_polygons(), 1.0, 0, 0.0, Vec2::new(1.0, 1.0));
-            match colored(slab, Ctx { color: None, cut: false, origin: 0 }) {
-                Model::Solid(m) => m,
-                _ => return RenderMesh::default(),
-            }
-        }
+        Model::Flat(c) => return display_slab(c, 0, paint),
         Model::Empty => return RenderMesh::default(),
     };
     let mesh = manifold.get_mesh_gl64(-1);

@@ -139,7 +139,12 @@ fn parents_offset(src: &str, picking: &Picking, key: Statement) -> Result<DVec3,
     }
     let mut offset = DVec3::ZERO;
     let mut climbing = true;
-    let mut inner = key.span.range();
+    let own = key.span.range();
+    let contains = |outer: &Range<usize>, inner: &Range<usize>| outer.start <= inner.start && inner.end <= outer.end;
+    // The statement last climbed through. A parent that does not hold it
+    // in its text is in the body of a module the climb went into (through
+    // its `children()`): it places the object, it is not its own chain.
+    let mut inner = own.clone();
     let mut at = picking.origins[first].parent;
     while let Some(index) = at {
         let origin = &picking.origins[index as usize];
@@ -152,8 +157,11 @@ fn parents_offset(src: &str, picking: &Picking, key: Statement) -> Result<DVec3,
         }
         let range = origin.span.range();
         if origin.kind == c2f_eval::CallKind::Module {
-            // Its children are written inside the call; its body elsewhere.
-            if range.start <= inner.start && inner.end <= range.end {
+            // Its children are written inside the call, its body elsewhere:
+            // an object written in the call is one of its children, which
+            // the module places as it likes. Checked against the object's
+            // own text, as the climb may have gone through the body.
+            if contains(&range, &own) {
                 return Err(AROUND.into());
             }
             climbing = false;
@@ -161,6 +169,9 @@ fn parents_offset(src: &str, picking: &Picking, key: Statement) -> Result<DVec3,
             continue;
         }
         let call = code_edit::call_at(src, range.clone())?;
+        if !contains(&range, &inner) {
+            climbing = false;
+        }
         inner = range;
         if climbing && WRAPPERS.contains(&call.name.as_str()) && call.children.len() == 1 {
             continue;
@@ -550,9 +561,15 @@ impl StudioApp {
         state.hot = None;
         if state.gesture.is_none() {
             if let Some((key, range)) = self.handles_target() {
-                let (pointer, pressed, press) =
-                    ctx.input(|i| (i.pointer.hover_pos(), i.pointer.primary_pressed(), i.pointer.press_origin()));
-                let pointer = if pressed { press } else { pointer };
+                let (pointer, pressed, press, dragging) = ctx.input(|i| {
+                    let p = &i.pointer;
+                    (p.hover_pos(), p.primary_pressed(), p.press_origin(), p.any_down() && !p.any_pressed())
+                });
+                // A button held since an earlier frame is a drag of the view
+                // (a gesture would be under way otherwise): passing over a
+                // handle while turning the camera must not light it, nor
+                // take the pointer from the camera mid-turn.
+                let pointer = if pressed { press } else if dragging { None } else { pointer };
                 // Not through a menu, a popup or the settings bar.
                 let free = |p: Pos2| {
                     rect.contains(p)
@@ -957,6 +974,11 @@ mod tests {
         assert_eq!(offset(src, "cube(1);"), Err(AROUND.to_string()));
         let src = "for (i = [0 : 2]) translate([i * 5, 0, 0]) cube(1);";
         assert_eq!(offset(src, "cube(1);"), Err(COPIES.to_string()));
+        // A module's child is placed by the module's body, here turned.
+        let src = "module m() rotate([0, 0, 90]) children();\nm() cube(1);";
+        assert_eq!(offset(src, "cube(1);"), Err(AROUND.to_string()));
+        let src = "module m() translate([5, 0, 0]) children();\ntranslate([0, 1, 0]) m() translate([1, 0, 0]) cube(1);";
+        assert_eq!(offset(src, "cube(1);"), Err(AROUND.to_string()));
     }
 
     #[test]

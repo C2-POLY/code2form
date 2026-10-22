@@ -123,6 +123,17 @@ impl Node {
         }
     }
 
+    /// Whether `other` makes the same geometry: equal but for the
+    /// origins, which differ between two instantiations of one call (in a
+    /// loop, or a module used twice) although their shapes do not.
+    pub fn same_shape(&self, other: &Node) -> bool {
+        self.kind == other.kind
+            && self.highlight == other.highlight
+            && self.background == other.background
+            && self.children.len() == other.children.len()
+            && self.children.iter().zip(&other.children).all(|(a, b)| a.same_shape(b))
+    }
+
     pub fn group(children: Vec<Node>) -> Self {
         Node::new(NodeKind::Group, children)
     }

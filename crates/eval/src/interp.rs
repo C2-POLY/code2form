@@ -340,7 +340,9 @@ impl<'p> Interp<'p> {
         let origin = self.origins.len() as u32;
         self.origins.push(crate::Origin {
             unit: env::unit_of(env),
-            span: self.statements.get(&(inst as *const Instance as usize)).copied().unwrap_or_default(),
+            // A statement the map misses (none should) gets a span in no
+            // file, so that it never reads as editable text at 0..0.
+            span: self.statements.get(&(inst as *const Instance as usize)).copied().unwrap_or(NOWHERE),
             parent: self.origin_stack.last().copied(),
             kind: call_kind(inst, env),
         });
@@ -1234,6 +1236,10 @@ fn call_kind(inst: &Instance, env: &Env) -> crate::CallKind {
         }
     }
 }
+
+/// The span of a statement found in no file: `file` matches none, so
+/// [`crate::Origin::in_main_file`] is false.
+const NOWHERE: c2f_lang::Span = c2f_lang::Span { start: 0, end: 0, file: u32::MAX };
 
 /// The span of every instance statement in the program's files, by the
 /// address of its instance.

@@ -97,6 +97,10 @@ struct MeshProgram {
     pass: Option<glow::UniformLocation>,
     cut: Option<glow::UniformLocation>,
     cut_face: Option<glow::UniformLocation>,
+    /// Where the mesh's vertices go in the model's space, and how its
+    /// normals turn: the identity but for a handle's preview.
+    model: Option<glow::UniformLocation>,
+    normal: Option<glow::UniformLocation>,
 }
 
 struct LineProgram {
@@ -132,6 +136,9 @@ pub struct Renderer {
     backgrounds: Option<GpuBuffer>,
     /// The objects selected or hovered in a design, drawn over the model.
     selection: Option<GpuBuffer>,
+    /// How the selection is moved as drawn: where a handle's drag has it,
+    /// applied on the GPU so that a drag uploads nothing.
+    selection_transform: Mat4,
     pause_planes: Option<GpuBuffer>,
     pause_outlines: Option<GpuBuffer>,
     /// A circuit's wires and pins, drawn over its parts.
@@ -186,6 +193,8 @@ impl Renderer {
                     pass: gl.get_uniform_location(mesh, "u_pass"),
                     cut: gl.get_uniform_location(mesh, "u_cut"),
                     cut_face: gl.get_uniform_location(mesh, "u_cut_face"),
+                    model: gl.get_uniform_location(mesh, "u_model"),
+                    normal: gl.get_uniform_location(mesh, "u_normal"),
                     program: mesh,
                 },
                 line: LineProgram {
@@ -206,6 +215,7 @@ impl Renderer {
                 highlights: None,
                 backgrounds: None,
                 selection: None,
+                selection_transform: Mat4::IDENTITY,
                 pause_planes: None,
                 pause_outlines: None,
                 wires: None,
@@ -244,6 +254,12 @@ impl Renderer {
     /// Replaces the highlight of the selected objects on the next paint.
     pub fn set_selection(&mut self, mesh: RenderMesh) {
         self.pending_selection = Some(mesh);
+    }
+
+    /// Draws the highlight of the selected objects moved by `transform`,
+    /// as a handle's drag previews it, without uploading it again.
+    pub fn set_selection_transform(&mut self, transform: Mat4) {
+        self.selection_transform = transform;
     }
 
     /// Replaces a circuit's wires and pin dots on the next paint.
@@ -408,7 +424,7 @@ impl Renderer {
                 }
                 if let Some(selection) = &self.selection {
                     gl.polygon_offset(-2.0, -8.0);
-                    self.draw_mesh(gl, frame, selection, Pass::All, false);
+                    self.draw_mesh_moved(gl, frame, selection, Pass::All, false, self.selection_transform);
                     gl.polygon_offset(-1.0, -4.0);
                 }
                 gl.disable(glow::POLYGON_OFFSET_FILL);
@@ -432,7 +448,26 @@ impl Renderer {
     /// Draws a mesh, cut at the layer view's height; `solid` colors the
     /// inside of a cut model as the cut face.
     unsafe fn draw_mesh(&self, gl: &glow::Context, frame: &Frame, buffer: &GpuBuffer, pass: Pass, solid: bool) {
+        unsafe { self.draw_mesh_moved(gl, frame, buffer, pass, solid, Mat4::IDENTITY) }
+    }
+
+    /// [`Renderer::draw_mesh`], its vertices moved by `model`.
+    unsafe fn draw_mesh_moved(
+        &self,
+        gl: &glow::Context,
+        frame: &Frame,
+        buffer: &GpuBuffer,
+        pass: Pass,
+        solid: bool,
+        model: Mat4,
+    ) {
         unsafe {
+            // Normals turn by the inverse transpose, for a scale along one
+            // axis to tilt them as it tilts the faces.
+            let normal = glam::Mat3::from_mat4(model).inverse().transpose();
+            let normal = if normal.is_finite() { normal } else { glam::Mat3::IDENTITY };
+            gl.uniform_matrix_4_f32_slice(self.mesh.model.as_ref(), false, &model.to_cols_array());
+            gl.uniform_matrix_3_f32_slice(self.mesh.normal.as_ref(), false, &normal.to_cols_array());
             gl.use_program(Some(self.mesh.program));
             gl.uniform_1_f32(self.mesh.cut.as_ref(), frame.cut.map_or(NO_CUT, |z| z + CUT_TOLERANCE));
             gl.uniform_1_i32(self.mesh.cut_face.as_ref(), i32::from(solid && frame.cut.is_some()));
@@ -664,15 +699,18 @@ in vec3 a_normal;
 in vec4 a_color;
 uniform mat4 u_view;
 uniform mat4 u_projection;
+uniform mat4 u_model;
+uniform mat3 u_normal;
 out vec3 v_position;
 out vec3 v_normal;
 out vec4 v_color;
 out float v_height;
 void main() {
-    v_height = a_position.z;
-    vec4 p = u_view * vec4(a_position, 1.0);
+    vec4 world = u_model * vec4(a_position, 1.0);
+    v_height = world.z;
+    vec4 p = u_view * world;
     v_position = p.xyz;
-    v_normal = mat3(u_view) * a_normal;
+    v_normal = mat3(u_view) * (u_normal * a_normal);
     v_color = a_color;
     gl_Position = u_projection * p;
 }

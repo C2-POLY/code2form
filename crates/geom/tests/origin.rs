@@ -81,3 +81,42 @@ fn backgrounds_and_highlights_keep_their_origins() {
     // The `#` is on the translate, but the triangles are the sphere's.
     assert_eq!(case.statements(&case.rendered.highlights), BTreeSet::from(["sphere(1);"]));
 }
+
+/// The lowest and highest corner of `mesh`.
+fn bounds(mesh: &c2f_geom::RenderMesh) -> ([f32; 3], [f32; 3]) {
+    assert!(mesh.triangle_count() > 0, "nothing drawn");
+    mesh.positions.iter().fold(([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]), |(lo, hi), p| {
+        (std::array::from_fn(|i| lo[i].min(p[i])), std::array::from_fn(|i| hi[i].max(p[i])))
+    })
+}
+
+fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 1e-3)
+}
+
+#[test]
+fn cutters_move_with_the_transforms_around_their_difference() {
+    let case = render(
+        "translate([50, 0, 0]) difference() {\n    cube(20);\n    translate([10, 10, -1]) cylinder(h = 30, r = 3, $fn = 4);\n}",
+    );
+    let (lo, hi) = bounds(&case.rendered.cutters);
+    assert!(near(lo, [57.0, 7.0, -1.0]) && near(hi, [63.0, 13.0, 29.0]), "cutter at {lo:?}..{hi:?}");
+}
+
+#[test]
+fn highlights_and_backgrounds_move_with_the_transforms_around_them() {
+    let case = render("translate([50, 0, 0]) #cube(5);\nrotate([0, 0, 90]) %cube(2);\nresize([10, 0, 0], auto = true) translate([1, 0, 0]) #cube(1);");
+    let (lo, hi) = bounds(&case.rendered.highlights);
+    assert!(near(lo, [10.0, 0.0, 0.0]) && near(hi, [55.0, 10.0, 10.0]), "highlights at {lo:?}..{hi:?}");
+    let (lo, hi) = bounds(&case.rendered.backgrounds);
+    assert!(near(lo, [-2.0, 0.0, 0.0]) && near(hi, [0.0, 2.0, 2.0]), "background at {lo:?}..{hi:?}");
+}
+
+#[test]
+fn the_shapes_of_a_flat_design_keep_their_statements() {
+    let case = render("square(4);\ntranslate([4, 2]) circle(2);\ntranslate([10, 0]) square(1);");
+    assert_eq!(
+        case.statements(&case.rendered.solid),
+        BTreeSet::from(["square(4);", "translate([4, 2]) circle(2);", "translate([10, 0]) square(1);"])
+    );
+}

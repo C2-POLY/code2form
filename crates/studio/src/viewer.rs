@@ -142,6 +142,17 @@ pub struct Viewer {
     /// Where a handle's drag has the selection, as a transform of its
     /// highlight, until the design renders again.
     preview: Option<Mat4>,
+    /// The box around the selection, for the picking and selection it was
+    /// found for: the handles ask for it every frame, and finding it reads
+    /// every triangle of the scene.
+    selection_box: Mutex<Option<SelectionBox>>,
+}
+
+/// [`Viewer::selection_bounds`] as last found.
+struct SelectionBox {
+    picking: Arc<Picking>,
+    selection: Vec<Statement>,
+    bounds: Option<(Vec3, Vec3)>,
 }
 
 /// How a click picks: Shift adds to the selection, Alt reaches the shapes
@@ -204,6 +215,7 @@ impl Viewer {
             select_after: None,
             shown_highlight: (Vec::new(), Vec::new()),
             preview: None,
+            selection_box: Mutex::new(None),
         };
         viewer.reset();
         viewer
@@ -227,15 +239,21 @@ impl Viewer {
                 .collect(),
             None => Vec::new(),
         };
-        self.scene_source = scene.source.clone();
+        let old_source = std::mem::replace(&mut self.scene_source, scene.source.clone());
         self.part_ranges = scene.parts.clone();
         self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
         self.solid_positions = if scene.parts.is_empty() { Vec::new() } else { scene.solid.positions.clone() };
-        // What is still in the new scene stays selected.
+        // What is still in the new scene stays selected: a statement of
+        // the main file only if its bytes still hold the same text, not
+        // another statement that came to the same place (an undo swapping
+        // two statements of one length).
         self.picking = scene.picking.clone();
         match &self.picking {
-            Some(picking) => self.selection.retain(|key| picking.contains(key)),
+            Some(picking) => self.selection.retain(|key| {
+                let same_text = key.range().is_none_or(|r| old_source.get(r.clone()) == scene.source.get(r));
+                same_text && picking.contains(key)
+            }),
             None => self.selection.clear(),
         }
         if let Some((source, ranges)) = self.select_after.take() {
@@ -254,6 +272,7 @@ impl Viewer {
         self.at_cursor = None;
         self.shown_highlight = (Vec::new(), Vec::new());
         self.preview = None;
+        self.send_preview();
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
         self.menu = None;
@@ -301,9 +320,19 @@ impl Viewer {
         Some((point, normal, hit.origin.and_then(|o| picking.target(o, false))))
     }
 
-    /// The box around what is selected.
+    /// The box around what is selected, found again only when the
+    /// selection or the scene changed.
     pub fn selection_bounds(&self) -> Option<(Vec3, Vec3)> {
-        self.picking.as_ref()?.bounds(&self.selection)
+        let picking = self.picking.as_ref()?;
+        let mut cached = self.selection_box.lock().unwrap_or_else(|e| e.into_inner());
+        match &*cached {
+            Some(c) if Arc::ptr_eq(&c.picking, picking) && c.selection == self.selection => c.bounds,
+            _ => {
+                let bounds = picking.bounds(&self.selection);
+                *cached = Some(SelectionBox { picking: picking.clone(), selection: self.selection.clone(), bounds });
+                bounds
+            }
+        }
     }
 
     /// The statement last clicked in the view, once.
@@ -378,7 +407,17 @@ impl Viewer {
     pub fn preview_selection(&mut self, transform: Option<Mat4>) {
         if transform != self.preview {
             self.preview = transform;
-            self.send_highlight(true);
+            self.send_preview();
+        }
+    }
+
+    /// Hands the preview's transform to the renderer, which moves the
+    /// highlight already uploaded as it draws it: a drag rebuilds nothing.
+    fn send_preview(&self) {
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_selection_transform(self.preview.unwrap_or(Mat4::IDENTITY));
+            }
         }
     }
 
@@ -434,19 +473,11 @@ impl Viewer {
         if !force && wanted == self.shown_highlight {
             return;
         }
-        let mut mesh = match &self.picking {
+        // A handle's preview moves it as it is drawn ([`Self::send_preview`]).
+        let mesh = match &self.picking {
             Some(picking) => picking.highlight(&wanted.0, &wanted.1),
             None => RenderMesh::default(),
         };
-        if let Some(m) = self.preview {
-            // Rebuilt triangle by triangle, for their normals to turn too.
-            let mut moved = RenderMesh::default();
-            for (corners, colors) in mesh.positions.chunks_exact(3).zip(mesh.colors.chunks_exact(3)) {
-                let corners = [0, 1, 2].map(|i| m.transform_point3(Vec3::from(corners[i])).to_array());
-                moved.push_triangle(corners, [colors[0], colors[1], colors[2]]);
-            }
-            mesh = moved;
-        }
         self.shown_highlight = wanted;
         if let Ok(renderer) = &self.renderer {
             if let Ok(mut r) = renderer.lock() {
@@ -1243,6 +1274,40 @@ mod tests {
             enclosure: 0..0,
             picking: None,
         }
+    }
+
+    fn statement(range: std::ops::Range<usize>) -> Statement {
+        Statement { unit: 0, span: c2f_lang::Span::new(range.start, range.end) }
+    }
+
+    #[test]
+    fn a_selection_stays_only_on_the_same_text() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design("cube(2);\ncube(3);"), false);
+        viewer.select_range(0..8, false);
+        assert_eq!(viewer.selection(), [statement(0..8)]);
+        // Changed elsewhere: still selected.
+        viewer.set_scene(design("cube(2);\ncube(4);"), false);
+        assert_eq!(viewer.selection(), [statement(0..8)]);
+        // The two statements swapped: the bytes hold another one now.
+        viewer.set_scene(design("cube(4);\ncube(2);"), false);
+        assert!(viewer.selection().is_empty());
+    }
+
+    #[test]
+    fn the_selection_box_follows_the_selection_and_the_scene() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design("m();\nsphere(1);\nmodule m() cube(2);"), false);
+        assert_eq!(viewer.selection_bounds(), None);
+        viewer.select_range(0..4, false);
+        assert_eq!(viewer.selection_bounds(), Some((Vec3::ZERO, Vec3::splat(2.0))));
+        assert_eq!(viewer.selection_bounds(), Some((Vec3::ZERO, Vec3::splat(2.0))));
+        // The same statement, which makes something else now.
+        viewer.set_scene(design("m();\nsphere(1);\nmodule m() cube(4);"), false);
+        assert_eq!(viewer.selection_bounds(), Some((Vec3::ZERO, Vec3::splat(4.0))));
+        viewer.select_range(5..15, false);
+        let (lo, hi) = viewer.selection_bounds().unwrap();
+        assert!(lo.x < -0.5 && hi.x > 0.5 && hi.z < 1.0, "the sphere, not the cube: {lo} {hi}");
     }
 
     /// A 20 mm model in the layer view, with a pause at 10 mm whose height
