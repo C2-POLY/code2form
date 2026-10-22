@@ -40,7 +40,6 @@ impl StudioApp {
     /// The statements selected in the view, as byte ranges of the code;
     /// `None` while the code is not the one on screen (typed since the last
     /// render), which the ranges would not point into.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub(super) fn selected_ranges(&self) -> Option<Vec<Range<usize>>> {
         if self.doc.viewer.scene_source() != self.doc.text {
             return None;
@@ -51,14 +50,12 @@ impl StudioApp {
     /// Applies an edit of the code as one step of the editor's undo
     /// history, logs `done`, renders, and selects what the edit left
     /// selected once rendered. A refused edit logs why.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub(super) fn apply_code_edit(&mut self, ctx: &egui::Context, result: Result<Edit, String>, done: &str) {
         self.apply_code_edits(ctx, result.map(|edit| (edit.text, edit.cursor, vec![edit.selection])), done);
     }
 
     /// [`Self::apply_code_edit`] for an edit that leaves several objects
     /// selected: the new text, the cursor (a char index) and their ranges.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub(super) fn apply_code_edits(
         &mut self,
         ctx: &egui::Context,

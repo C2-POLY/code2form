@@ -265,7 +265,6 @@ impl Viewer {
     // ---- Selection ----
 
     /// The statements selected in the view.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub fn selection(&self) -> &[Statement] {
         &self.selection
     }
@@ -273,7 +272,6 @@ impl Viewer {
     /// Selects the statements at these bytes of `source` once the scene
     /// rendered from it arrives, as an edit of the code asks; the
     /// selection shown until then is cleared.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub fn select_after_render(&mut self, source: String, ranges: Vec<std::ops::Range<usize>>) {
         self.select_after = Some((source, ranges));
         self.clear_selection();
@@ -349,6 +347,16 @@ impl Viewer {
     pub fn select_at(&mut self, offset: usize) {
         let key = self.picking.as_ref().and_then(|p| p.at_offset(offset));
         self.click(key, Click::default());
+    }
+
+    /// Selects the statement at these bytes of the main file, as a click
+    /// on its row in the tree does: `add` (Shift) adds it to the selection
+    /// or takes it out. A statement the scene has no run of (left out with
+    /// `*`) selects nothing.
+    pub fn select_range(&mut self, range: std::ops::Range<usize>, add: bool) {
+        let key = Statement { unit: 0, span: c2f_lang::Span::new(range.start, range.end) };
+        let key = self.picking.as_ref().filter(|p| p.contains(&key)).map(|_| key);
+        self.click(key, Click { add, ..Click::default() });
     }
 
     /// Empties the selection.

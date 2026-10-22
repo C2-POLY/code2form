@@ -68,6 +68,8 @@ const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Ke
 const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::G);
 const CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
 const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+/// Hides or shows the code editor: the code-free mode.
+const CODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::E);
 
 /// The app icons in the settings, in points, and how many in a row.
 const ICON_CHOICE: f32 = 56.0;
@@ -351,6 +353,8 @@ pub struct StudioApp {
     allow_close: bool,
     title: String,
     screenshot: Option<Screenshot>,
+    /// The tree of the active tab's program, as last read.
+    tree: tree::TreeState,
 }
 
 impl StudioApp {
@@ -411,6 +415,7 @@ impl StudioApp {
             allow_close: false,
             title: String::new(),
             screenshot: Screenshot::from_env(),
+            tree: tree::TreeState::default(),
         };
         app.apply_settings(ctx);
         // The tabs of the last session, quietly: a file gone since is
@@ -1667,10 +1672,13 @@ impl StudioApp {
         if self.confirm.is_some() {
             return;
         }
-        let [save_as, save, open, new, render, export, close, settings] = ctx.input_mut(|i| {
+        let [save_as, save, open, new, render, export, close, settings, code] = ctx.input_mut(|i| {
             // Shift+Cmd+S first: Cmd+S also matches it.
-            [SAVE_AS, SAVE, OPEN, NEW, RENDER, EXPORT, CLOSE_TAB, SETTINGS].map(|s| i.consume_shortcut(&s))
+            [SAVE_AS, SAVE, OPEN, NEW, RENDER, EXPORT, CLOSE_TAB, SETTINGS, CODE].map(|s| i.consume_shortcut(&s))
         });
+        if code {
+            self.toggle_code(ctx);
+        }
         if settings {
             self.settings_open = true;
         }
@@ -1811,6 +1819,7 @@ impl StudioApp {
                         }
                         toolbar_separator(ui);
                     }
+                    self.tree_toggles(ctx, ui);
                     // A circuit has no parameters: room for its own toggles.
                     if self.doc.is_circuit() {
                         let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
@@ -2009,6 +2018,10 @@ impl StudioApp {
     }
 
     fn editor_panel(&mut self, ctx: &egui::Context) {
+        // The code-free mode.
+        if !self.settings.show_code {
+            return;
+        }
         let width = ctx.screen_rect().width();
         egui::SidePanel::left("editor")
             .frame(Frame::new().fill(theme::EDITOR))

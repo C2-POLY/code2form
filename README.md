@@ -52,6 +52,16 @@ they are. Written in Rust, it renders as you type.
   inside; Shift-click adds to the selection, Alt-click reaches the shape
   a `difference()` subtracts (shown see-through), and Escape clears it.
   Shapes from a library or an included file are read-only.
+- **Tree** of the program, between the editor and the view: its
+  operations, transforms, shapes and module calls, nested as in the code
+  and named by the `// name` comment ending their line. A click selects
+  the object in the view (Shift-click adds), and what the view selects
+  lights up in the tree; a double-click or F2 renames it, the eye hides
+  it (`*`), `!` isolates it and `%` makes it see-through, and a drag
+  moves it before, after or into another, as into a `difference()`.
+  Each is one edit of the code, one step to undo. The **Code** toggle
+  (⌘E) hides the editor, to model with the view, the tree and the panels
+  alone.
 - **Electronics**: a part declares its pins, mount holes and ports in
   comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
   the reference implementation ignores. A `.c2fc` circuit file (TOML)

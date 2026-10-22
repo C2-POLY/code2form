@@ -34,6 +34,11 @@ pub struct Settings {
     pub show_grid: bool,
     pub show_axes: bool,
     pub layer_height: f32,
+    /// The code editor shows; off, the code-free mode leaves the view,
+    /// the tree and the panels around it.
+    pub show_code: bool,
+    /// The tree of the program shows, between the editor and the view.
+    pub show_tree: bool,
 }
 
 impl Default for Settings {
@@ -48,6 +53,8 @@ impl Default for Settings {
             show_grid: true,
             show_axes: true,
             layer_height: LAYER_HEIGHT,
+            show_code: true,
+            show_tree: true,
         }
     }
 }
@@ -91,6 +98,8 @@ impl Settings {
                 "code-size" => set(&mut settings.code_size, finite(value).map(|v| clamp(v, &CODE_SIZES))),
                 "grid" => set(&mut settings.show_grid, value.parse().ok()),
                 "axes" => set(&mut settings.show_axes, value.parse().ok()),
+                "code" => set(&mut settings.show_code, value.parse().ok()),
+                "tree" => set(&mut settings.show_tree, value.parse().ok()),
                 "layer-height" => set(&mut settings.layer_height, finite(value).map(|v| clamp(v, &LAYER_HEIGHTS))),
                 _ => {}
             }
@@ -111,6 +120,8 @@ impl Settings {
         text.push_str(&format!("grid = {}\n", self.show_grid));
         text.push_str(&format!("axes = {}\n", self.show_axes));
         text.push_str(&format!("layer-height = {}\n", self.layer_height));
+        text.push_str(&format!("code = {}\n", self.show_code));
+        text.push_str(&format!("tree = {}\n", self.show_tree));
         text
     }
 }
@@ -180,6 +191,8 @@ mod tests {
             show_grid: false,
             show_axes: true,
             layer_height: 0.12,
+            show_code: false,
+            show_tree: false,
         };
         settings.save(Some(&store)).unwrap();
         assert_eq!(Settings::load(Some(&store)), settings);
