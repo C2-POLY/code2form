@@ -4,6 +4,10 @@
 //! The geometry (`c2f_geom::Rendered`) stays on the worker thread; the UI
 //! gets plain triangles back, and asks the worker for exports of the model
 //! it shows: STL or 3MF for a solid, SVG or DXF for a 2D model.
+//!
+//! A circuit (`.c2fc`) is read first, and the circuit goes back at once so
+//! that its wires show; then its parts render, several at a time, into one
+//! scene.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -16,10 +20,11 @@ use eframe::egui;
 use c2f_eval::customizer::{Literal, Parameter};
 use c2f_geom::{Model, RenderMesh, Rendered, Stats};
 
+use crate::circuit::{self, PartCache, PartRender};
 use crate::console::{Level, Line};
 
 /// Reserved, not committed: deeply recursive scripts need a deep stack.
-const STACK: usize = 1 << 30;
+pub const STACK: usize = 1 << 30;
 
 /// What the viewer draws, in plain data.
 pub struct Scene {
@@ -34,6 +39,9 @@ pub struct Scene {
     pub pauses: Vec<c2f_eval::Pause>,
     /// The text rendered, where the pauses' sources point.
     pub source: String,
+    /// For a circuit, the vertices of each of its parts in `solid`, in the
+    /// order of the circuit's parts.
+    pub parts: Vec<std::ops::Range<usize>>,
 }
 
 impl Scene {
@@ -71,6 +79,9 @@ pub struct RenderOutcome {
 
 pub enum Reply {
     Rendered(Box<RenderOutcome>),
+    /// A circuit as read, before its parts render: the reply to the same
+    /// generation follows with them.
+    Circuit { generation: u64, circuit: Arc<c2f_circuit::Circuit> },
     Exported { target: PathBuf, result: Result<String, String> },
 }
 
@@ -169,6 +180,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
     let library_paths = c2f_eval::default_library_paths();
     // The geometry of the model on screen, for exports.
     let mut shown: Option<Rendered> = None;
+    let mut parts = PartCache::default();
     while let Ok(first) = requests.recv() {
         // Only the newest render matters; exports are all honored.
         let mut render = None;
@@ -180,7 +192,24 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
             }
         }
         if let Some((generation, source, path, values)) = render {
-            if generation == latest.load(Ordering::Acquire) {
+            if generation == latest.load(Ordering::Acquire) && circuit::is_circuit(&path) {
+                let current = || generation == latest.load(Ordering::Acquire);
+                let read = |circuit: Arc<c2f_circuit::Circuit>| {
+                    if current() {
+                        let _ = replies.send(Reply::Circuit { generation, circuit });
+                        ctx.request_repaint();
+                    }
+                };
+                let outcome = render_circuit(generation, &source, &path, &library_paths, &mut parts, read);
+                if current() {
+                    // A circuit is not exported.
+                    shown = None;
+                    if replies.send(Reply::Rendered(Box::new(outcome))).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
+                }
+            } else if generation == latest.load(Ordering::Acquire) {
                 let (outcome, rendered) = render_source(generation, &source, &path, &values, &library_paths);
                 // A newer request arrived meanwhile: this result is stale.
                 if generation == latest.load(Ordering::Acquire) {
@@ -236,12 +265,71 @@ fn render_source(
                 // Kept in the rendering too: the 3MF export writes them.
                 pauses: rendered.pauses.clone(),
                 source: source.to_string(),
+                parts: Vec::new(),
             };
             (Ok(scene), Some(rendered))
         }
         Err(line) => (Err(line), None),
     };
     (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters, annotation_error }, rendered)
+}
+
+/// Reads the circuit `source` at `path`, hands it to `read`, then renders
+/// its parts.
+fn render_circuit(
+    generation: u64,
+    source: &str,
+    path: &Path,
+    library_paths: &[PathBuf],
+    parts: &mut PartCache,
+    read: impl FnOnce(Arc<c2f_circuit::Circuit>),
+) -> RenderOutcome {
+    let start = Instant::now();
+    let mut console = Vec::new();
+    let result = match c2f_circuit::parse(source, path, library_paths) {
+        Ok(found) => {
+            let found = Arc::new(found);
+            read(found.clone());
+            let rendered = parts.update(&found, library_paths, render_part);
+            Ok(circuit::scene(&found, &rendered, source, &mut console))
+        }
+        Err(errors) => {
+            console.extend(errors.iter().map(|err| Line::new(Level::Error, err.render())));
+            Err(circuit::error_line(&errors, path, source))
+        }
+    };
+    RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters: None, annotation_error: None }
+}
+
+/// Renders a part of a circuit, its parameters set in `source`, as a
+/// design of its own.
+pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> PartRender {
+    let mut console = Vec::new();
+    let (mut parameters, mut annotation_error) = (None, None);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        pipeline(source, path, &[], library_paths, &mut console, &mut parameters, &mut annotation_error)
+    }))
+    .unwrap_or_else(|panic| {
+        console.push(Line::new(Level::Error, format!("internal error in {}: {}", path.display(), panic_message(&*panic))));
+        Err(None)
+    });
+    let console = circuit::label_lines(console, path);
+    match result {
+        Ok(rendered) => PartRender {
+            triangles: rendered.stats.triangles,
+            solid: rendered.solid,
+            highlights: rendered.highlights,
+            backgrounds: rendered.backgrounds,
+            console,
+        },
+        Err(_) => PartRender {
+            solid: RenderMesh::default(),
+            highlights: RenderMesh::default(),
+            backgrounds: RenderMesh::default(),
+            triangles: 0,
+            console,
+        },
+    }
 }
 
 fn pipeline(
@@ -363,7 +451,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 Reply::Rendered(o) => Some(o.generation),
-                Reply::Exported { .. } => None,
+                Reply::Exported { .. } | Reply::Circuit { .. } => None,
             })
             .collect();
         assert!(generations.windows(2).all(|w| w[0] < w[1]), "{generations:?}");
@@ -470,6 +558,35 @@ mod tests {
         };
         let Ok(scene) = outcome.result else { panic!("the render failed") };
         assert_eq!(scene.bounds().map(|(_, hi)| hi), Some([2.0, 2.0, 2.0]));
+    }
+
+    #[test]
+    fn a_circuit_comes_back_before_its_parts() {
+        let dir = std::env::temp_dir().join(format!("code2form-worker-circuit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("part.c2f"), "// @pin A [0, 0, 1] up\necho(\"part\");\ncube(1);\n").unwrap();
+        let source = "[parts.a]\npart = \"part.c2f\"\n\n[parts.b]\npart = \"part.c2f\"\nat = [5, 0, 0]\n";
+        let worker = Worker::spawn(egui::Context::default());
+        let generation = worker.render(source.into(), dir.join("test.c2fc"), Vec::new());
+        let replies = wait_for(&worker, generation);
+        let circuit = replies.iter().position(|r| matches!(r, Reply::Circuit { generation: g, .. } if *g == generation));
+        let rendered = replies.iter().position(|r| matches!(r, Reply::Rendered(o) if o.generation == generation));
+        assert!(circuit.unwrap() < rendered.unwrap());
+        let Some(Reply::Rendered(outcome)) = replies.into_iter().last() else { panic!("no render") };
+        // The part renders once, and says so once, with its file's name.
+        let echoes: Vec<&str> = outcome.console.iter().filter(|l| l.level == Level::Echo).map(|l| l.text.as_str()).collect();
+        assert_eq!(echoes, ["part.c2f: ECHO: \"part\""]);
+        let scene = outcome.result.unwrap_or_else(|_| panic!("the circuit failed"));
+        assert_eq!(scene.parts, [0..36, 36..72]);
+        assert_eq!(scene.bounds(), Some(([0.0; 3], [6.0, 1.0, 1.0])));
+        assert!(scene.formats.is_empty(), "a circuit is not exported");
+
+        // An error in the circuit marks its line.
+        let generation = worker.render("[parts.a]\npart = \"none.c2f\"\n".into(), dir.join("test.c2fc"), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
+        assert!(matches!(outcome.result, Err(Some(1))));
+        assert!(outcome.console.iter().any(|l| l.level == Level::Error && l.text.contains("none.c2f")));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

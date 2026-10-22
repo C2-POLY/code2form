@@ -25,6 +25,8 @@ pub struct Editor {
     pub cursor: Option<(usize, usize)>,
     /// The selection as last shown, to start a search from.
     selection: Option<CCursorRange>,
+    /// A byte offset to scroll into view once laid out.
+    reveal_at: Option<usize>,
     find: FindBar,
 }
 
@@ -107,6 +109,7 @@ impl Editor {
             error_line: None,
             cursor: None,
             selection: None,
+            reveal_at: None,
             find: FindBar::default(),
         }
     }
@@ -114,6 +117,11 @@ impl Editor {
     /// Opens the find bar or moves between matches, on the next frame.
     pub fn find(&mut self, request: FindRequest) {
         self.find.requests.push(request);
+    }
+
+    /// Highlights the text as a circuit file, or as code.
+    pub fn set_circuit(&mut self, circuit: bool) {
+        self.highlighter.hash_comments = circuit;
     }
 
     /// Gives the editor keyboard focus.
@@ -189,6 +197,10 @@ impl Editor {
                     ui.ctx().request_repaint();
                 }
 
+                if let Some(offset) = self.reveal_at.take() {
+                    let at = output.galley.pos_from_cursor(CCursor::new(char_index(text, offset.min(text.len()))));
+                    ui.scroll_to_rect(at.translate(output.galley_pos.to_vec2()), Some(Align::Center));
+                }
                 if std::mem::take(&mut self.find.scroll) {
                     if let Some(m) = self.find.current_match() {
                         let start = output.galley.pos_from_cursor(CCursor::new(char_index(text, m.start)));
@@ -427,6 +439,17 @@ impl Editor {
         state.set_undoer(undoer);
         state.cursor.set_char_range(Some(selection));
         state.store(ctx, self.id);
+    }
+
+    /// Puts the cursor at the start of the line holding byte `offset` of
+    /// `text`, and scrolls it into view.
+    pub fn go_to(&mut self, ctx: &egui::Context, text: &str, offset: usize) {
+        let offset = offset.min(text.len());
+        let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+        let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(char_index(text, line_start)))));
+        state.store(ctx, self.id);
+        self.reveal_at = Some(line_start);
     }
 
     /// Selects the current match in the editor and scrolls to it.

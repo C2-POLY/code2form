@@ -3,18 +3,23 @@
 
 mod app;
 mod camera;
+mod circuit;
 mod console;
 mod customizer;
 mod editor;
 mod find;
 mod highlight;
+mod inspect;
+mod mount;
 mod open_events;
 mod pause_edit;
+mod pick;
 mod recent;
 mod renderer;
 mod screenshot;
 mod theme;
 mod viewer;
+mod wiring;
 mod worker;
 
 use std::path::PathBuf;
@@ -23,7 +28,7 @@ use std::process::ExitCode;
 use eframe::egui;
 
 const USAGE: &str = "\
-usage: code2form [file.scad]
+usage: code2form [file.c2f | file.scad | circuit.c2fc]
 
 Opens the file (or an empty document) in an editor with a live 3D preview.
 

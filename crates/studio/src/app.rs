@@ -2,6 +2,7 @@
 //! and the document they work on.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
@@ -12,6 +13,7 @@ use eframe::glow;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::circuit;
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
@@ -21,11 +23,16 @@ use crate::recent::RecentFiles;
 use crate::screenshot::Screenshot;
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
+use crate::inspect;
+use crate::mount::{self, Mount};
+use crate::pick::{self, Hit};
+use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
+const CIRCUIT_FILES: (&str, &str) = ("Code2Form circuit", "c2fc");
 
 /// How long typing must pause before a re-render.
 const DEBOUNCE: Duration = Duration::from_millis(400);
@@ -71,6 +78,8 @@ struct ModelInfo {
     /// The formats it exports to.
     formats: &'static [Format],
     empty: bool,
+    /// The parts of a circuit; 0 for a design.
+    parts: usize,
 }
 
 pub struct StudioApp {
@@ -95,6 +104,27 @@ pub struct StudioApp {
     model: Option<ModelInfo>,
     /// Frame the next model that arrives (after opening a file).
     frame_next: bool,
+    /// The wires of the circuit on screen, when the file is one, as last
+    /// read.
+    wiring: Option<Wiring>,
+    /// What is under the pointer in the view, and what was clicked.
+    hover: Option<Hit>,
+    selection: Option<Hit>,
+    /// The box around each part of the circuit, as last rendered.
+    part_boxes: Vec<Option<(glam::Vec3, glam::Vec3)>>,
+    /// How the parts were last shown, not to recolor them every frame.
+    shown_parts: Vec<Emphasis>,
+    /// The assembly mode, and its progress.
+    mount: Mount,
+    /// When the app started, for the pins that pulse.
+    started: Instant,
+    /// Where the 3D view is, as last shown.
+    view_rect: egui::Rect,
+    /// The generation it was read for.
+    circuit_generation: u64,
+    /// The circuit's part files and their modification times, to render
+    /// again when one changes on disk.
+    part_files: Vec<(PathBuf, Option<SystemTime>)>,
 
     editor: Editor,
     viewer: Viewer,
@@ -132,6 +162,16 @@ impl StudioApp {
             failed: false,
             model: None,
             frame_next: true,
+            wiring: None,
+            hover: None,
+            selection: None,
+            part_boxes: Vec::new(),
+            shown_parts: Vec::new(),
+            mount: Mount::default(),
+            started: Instant::now(),
+            view_rect: egui::Rect::NOTHING,
+            circuit_generation: 0,
+            part_files: Vec::new(),
             editor: Editor::new(),
             viewer: Viewer::new(cc.gl.as_ref()),
             console: Console::default(),
@@ -178,6 +218,10 @@ impl StudioApp {
         self.path.as_deref().and_then(Path::parent).map(Path::to_path_buf).or_else(working_directory)
     }
 
+    fn is_circuit(&self) -> bool {
+        self.path.as_deref().is_some_and(circuit::is_circuit)
+    }
+
     fn busy(&self) -> bool {
         self.worker.latest() > self.finished
     }
@@ -186,6 +230,7 @@ impl StudioApp {
 
     fn render_now(&mut self) {
         self.render_deadline = None;
+        self.editor.set_circuit(self.is_circuit());
         self.sent_source = Some(self.text.clone());
         self.sent_values = self.customizer.values();
         self.worker.render(self.text.clone(), self.source_path(), self.sent_values.clone());
@@ -234,12 +279,34 @@ impl StudioApp {
                                 is_2d: scene.is_2d,
                                 formats: scene.formats,
                                 empty,
+                                parts: scene.parts.len(),
                             });
+                            self.part_boxes = part_boxes(&scene);
                             self.viewer.set_scene(scene, frame);
+                            // The new solid comes in its own colors.
+                            self.update_overlay();
                         }
                         Err(line) => {
                             self.failed = true;
                             self.editor.error_line = line.or(outcome.annotation_error);
+                        }
+                    }
+                }
+                Reply::Circuit { generation, circuit } => {
+                    if generation < self.circuit_generation || generation < self.worker.latest() {
+                        continue;
+                    }
+                    self.circuit_generation = generation;
+                    self.set_circuit(Some(circuit));
+                    if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()) {
+                        if let Some(step) = target.strip_prefix("assembly:").and_then(|n| n.parse::<usize>().ok()) {
+                            // Set before turning the mode on: a screenshot
+                            // leaves the saved progress as it is.
+                            self.mount.step = step.saturating_sub(1);
+                            self.set_mount(true);
+                        } else {
+                            self.selection = self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, &target));
+                            self.update_overlay();
                         }
                     }
                 }
@@ -250,6 +317,276 @@ impl StudioApp {
                     }
                 },
             }
+        }
+    }
+
+    /// Shows a circuit just read, or none, and watches its part files.
+    fn set_circuit(&mut self, found: Option<Arc<c2f_circuit::Circuit>>) {
+        let mut files: Vec<PathBuf> = found.iter().flat_map(|c| c.parts.iter().map(|p| p.path.clone())).collect();
+        files.sort();
+        files.dedup();
+        let known = std::mem::take(&mut self.part_files);
+        self.part_files = files
+            .into_iter()
+            .map(|file| {
+                // A file already watched keeps its time, so that a change
+                // made since it was read is not missed.
+                let mtime = known.iter().find(|(f, _)| *f == file).map_or_else(|| modified(&file), |(_, m)| *m);
+                (file, mtime)
+            })
+            .collect();
+        self.wiring = found.map(Wiring::new);
+        // A selection outlives an edit when what it names is still there.
+        let valid = |hit: Option<Hit>| match (hit, &self.wiring) {
+            (Some(Hit::Pin(end)), Some(w)) => {
+                w.circuit.parts.get(end.part).is_some_and(|p| end.pin < p.annotations.pins.len())
+            }
+            (Some(Hit::Wire(i)), Some(w)) => i < w.circuit.wires.len(),
+            (Some(Hit::Part(i)), Some(w)) => i < w.circuit.parts.len(),
+            _ => false,
+        };
+        if !valid(self.selection) {
+            self.selection = None;
+        }
+        self.hover = self.hover.filter(|&h| valid(Some(h)));
+        if self.wiring.is_none() {
+            self.part_boxes.clear();
+        }
+        self.update_overlay();
+    }
+
+    /// How the wires, pins and parts show: what a selection picks out
+    /// stands out, the rest is greyed out.
+    fn look(&self) -> Look {
+        if let Some(look) = self.mount_look() {
+            return look;
+        }
+        let (Some(wiring), Some(selection)) = (&self.wiring, self.selection) else { return Look::default() };
+        let circuit = &wiring.circuit;
+        let pick_out = |on: bool| if on { Emphasis::Strong } else { Emphasis::Dim };
+        let shown = |on: bool| if on { Emphasis::Normal } else { Emphasis::Dim };
+        let (wires, strong_pins, parts): (Vec<Emphasis>, _, Vec<Emphasis>) = match selection {
+            Hit::Pin(end) => {
+                let (pins, wires) = pick::net(circuit, end);
+                let parts = (0..circuit.parts.len()).map(|p| shown(pins.iter().any(|e| e.part == p))).collect();
+                ((0..circuit.wires.len()).map(|i| pick_out(wires.contains(&i))).collect(), pins, parts)
+            }
+            Hit::Wire(index) => {
+                let wire = &circuit.wires[index];
+                let parts = (0..circuit.parts.len()).map(|p| shown(p == wire.from.part || p == wire.to.part)).collect();
+                ((0..circuit.wires.len()).map(|i| pick_out(i == index)).collect(), [wire.from, wire.to].into(), parts)
+            }
+            Hit::Part(part) => {
+                let touches = |i: usize| circuit.wires[i].from.part == part || circuit.wires[i].to.part == part;
+                let pins = circuit.wires.iter().flat_map(|w| [w.from, w.to]).filter(|e| e.part == part).collect();
+                let parts = (0..circuit.parts.len()).map(|p| pick_out(p == part)).collect();
+                ((0..circuit.wires.len()).map(|i| shown(touches(i))).collect(), pins, parts)
+            }
+        };
+        Look { wires, strong_pins, dim_pins: true, pulse: None, parts }
+    }
+
+    /// Sends the wires and pins, as they now look, to the view.
+    fn update_overlay(&mut self) {
+        let look = self.look();
+        match &self.wiring {
+            Some(wiring) => {
+                let (wires, pins) = wiring.meshes(&look);
+                self.viewer.set_overlay(wires, pins, wiring.bounds());
+            }
+            None => self.viewer.set_overlay(Default::default(), Default::default(), None),
+        }
+        if look.parts != self.shown_parts {
+            self.viewer.set_part_emphasis(&look.parts);
+            self.shown_parts = look.parts;
+        }
+    }
+
+    // ---- Assembly ----
+
+    /// The wires of the circuit, by name, when there are any.
+    fn mount_names(&self) -> Option<Vec<String>> {
+        self.wiring.as_ref().map(|w| mount::wire_names(&w.circuit)).filter(|names| !names.is_empty())
+    }
+
+    /// The assembly mode's look: the wire on screen picked out, its pins
+    /// pulsing, the wires done as they are, the others greyed out.
+    fn mount_look(&self) -> Option<Look> {
+        if !self.mount.active {
+            return None;
+        }
+        let wiring = self.wiring.as_ref()?;
+        let names = self.mount_names()?;
+        let circuit = &wiring.circuit;
+        let step = self.mount.step.min(names.len() - 1);
+        let current = &circuit.wires[step];
+        let wires = (0..names.len())
+            .map(|i| match i {
+                _ if i == step => Emphasis::Strong,
+                _ if self.mount.is_done(&names, i) => Emphasis::Normal,
+                _ => Emphasis::Dim,
+            })
+            .collect();
+        let parts = (0..circuit.parts.len())
+            .map(|p| if p == current.from.part || p == current.to.part { Emphasis::Normal } else { Emphasis::Dim })
+            .collect();
+        // Two pulses a second.
+        let time = self.started.elapsed().as_secs_f32();
+        let pulse = 0.5 + 0.5 * (time * std::f32::consts::TAU * 2.0).sin();
+        Some(Look { wires, strong_pins: [current.from, current.to].into(), dim_pins: true, pulse: Some(pulse), parts })
+    }
+
+    /// Turns the assembly mode on or off.
+    fn set_mount(&mut self, active: bool) {
+        self.mount.active = active && self.mount_names().is_some();
+        if self.mount.active {
+            self.selection = None;
+            self.go_to_wire(self.mount.step);
+        }
+        self.update_overlay();
+    }
+
+    /// Shows wire `step` of the assembly, the camera turning to its pins.
+    fn go_to_wire(&mut self, step: usize) {
+        let Some(count) = self.mount_names().map(|n| n.len()) else { return };
+        self.mount.go(step, count);
+        self.report_mount_problem();
+        let Some(wiring) = &self.wiring else { return };
+        let wire = &wiring.circuit.wires[self.mount.step];
+        let place = |end| glam::Vec3::from(wiring.circuit.place(end).position.map(|c| c as f32));
+        let goal = mount::framing(place(wire.from), place(wire.to), &self.viewer.camera, self.viewer.aspect());
+        self.viewer.fly_to(goal);
+        self.update_overlay();
+    }
+
+    fn mount_next(&mut self) {
+        if let Some(names) = self.mount_names() {
+            self.mount.next(&names);
+            self.go_to_wire(self.mount.step);
+        }
+    }
+
+    fn mount_previous(&mut self) {
+        if let Some(names) = self.mount_names() {
+            self.mount.previous(names.len());
+            self.go_to_wire(self.mount.step);
+        }
+    }
+
+    fn report_mount_problem(&mut self) {
+        if let Some(problem) = self.mount.problem.take() {
+            self.console.log(Level::Warning, problem);
+        }
+    }
+
+    /// The assembly bar, over the top of the view: the instruction, the
+    /// wire's place in the order, and the buttons that step through.
+    fn mount_bar(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let (Some(wiring), Some(names)) = (&self.wiring, self.mount_names()) else { return };
+        let step = self.mount.step.min(names.len() - 1);
+        let instruction = mount::instruction(&wiring.circuit, step);
+        let label = wiring.circuit.wires[step].label.clone();
+        let mut done = self.mount.is_done(&names, step);
+        let done_count = self.mount.done_count(&names);
+        let (mut previous, mut next, mut restart, mut toggled) = (false, false, false, false);
+        egui::Area::new(Id::new("assembly-bar"))
+            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.top() + 12.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(Color32::from_black_alpha(200))
+                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_max_width(rect.width() - 48.0);
+                        ui.horizontal(|ui| {
+                            toggled = ui.checkbox(&mut done, "").on_hover_text("Done").changed();
+                            ui.label(RichText::new(&instruction).strong().size(14.0).color(wiring::TEXT));
+                            if let Some(label) = &label {
+                                ui.label(RichText::new(format!("· {label}")).size(13.0).color(wiring::TEXT_DIM));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let count = names.len();
+                            ui.label(RichText::new(format!("{} / {count}", step + 1)).strong().color(wiring::TEXT));
+                            ui.label(RichText::new(format!("· {done_count} done")).color(wiring::TEXT_DIM));
+                            ui.add_space(8.0);
+                            previous = ui
+                                .add_enabled(step > 0, Button::new("◀ Previous"))
+                                .on_hover_text("The previous wire (Left arrow)")
+                                .clicked();
+                            next = ui
+                                .button("Next ▶")
+                                .on_hover_text("Check this wire off and go to the next (Right arrow)")
+                                .clicked();
+                            restart = ui
+                                .button("Start over")
+                                .on_hover_text("Uncheck every wire and go back to the first")
+                                .clicked();
+                        });
+                    });
+            });
+        if toggled {
+            self.mount.set_done(&names, step, done);
+            self.report_mount_problem();
+            self.update_overlay();
+        }
+        let typing = ctx.memory(|m| m.focused().is_some());
+        let (left, right) = ctx.input(|i| (i.key_pressed(Key::ArrowLeft), i.key_pressed(Key::ArrowRight)));
+        if next || (right && !typing) {
+            self.mount_next();
+        } else if previous || (left && !typing) {
+            self.mount_previous();
+        } else if restart {
+            self.mount.restart();
+            self.report_mount_problem();
+            self.go_to_wire(0);
+        }
+    }
+
+    /// Selects something of the circuit, or nothing; a wire also puts the
+    /// editor on its line.
+    fn select(&mut self, ctx: &egui::Context, hit: Option<Hit>) {
+        if hit == self.selection {
+            return;
+        }
+        self.selection = hit;
+        if let (Some(Hit::Wire(index)), Some(wiring)) = (hit, &self.wiring) {
+            let offset = wiring.circuit.wires[index].span.start as usize;
+            self.editor.go_to(ctx, &self.text, offset);
+        }
+        self.update_overlay();
+    }
+
+    /// Hovering, clicks and Escape over the view of a circuit.
+    fn circuit_input(&mut self, ctx: &egui::Context, response: &egui::Response) {
+        let Some(wiring) = &self.wiring else { return };
+        if !response.dragged() {
+            self.hover = response.hover_pos().and_then(|pos| {
+                pick::pick(wiring, &self.part_boxes, &self.viewer.ray(response.rect, pos))
+            });
+        }
+        if response.double_clicked() {
+            if let Some(Hit::Part(index)) = self.hover {
+                let path = wiring.circuit.parts[index].path.clone();
+                self.guard(Pending::OpenPath(path));
+                return;
+            }
+        }
+        if response.clicked() {
+            if self.mount.active {
+                // Assembling, a click on a wire goes to its step.
+                if let Some(Hit::Wire(index)) = self.hover {
+                    self.go_to_wire(index);
+                }
+            } else {
+                self.select(ctx, self.hover);
+            }
+        }
+        let escape = ctx.input(|i| i.key_pressed(Key::Escape)) && ctx.memory(|m| m.focused().is_none());
+        if escape && self.selection.is_some() {
+            self.select(ctx, None);
         }
     }
 
@@ -264,7 +601,13 @@ impl StudioApp {
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Opened {}", path.display()));
                 self.remember(&path);
-                self.customizer.open(Some(&path));
+                // A circuit has no parameters, nor presets next to it.
+                self.customizer.open(Some(path.as_path()).filter(|p| !circuit::is_circuit(p)));
+                self.mount.open(Some(path.as_path()).filter(|p| circuit::is_circuit(p)));
+                self.report_mount_problem();
+                if !circuit::is_circuit(&path) {
+                    self.set_circuit(None);
+                }
                 self.path = Some(path);
                 self.frame_next = true;
                 self.editor.error_line = None;
@@ -282,6 +625,8 @@ impl StudioApp {
         self.frame_next = true;
         self.editor.error_line = None;
         self.customizer.open(None);
+        self.mount.open(None);
+        self.set_circuit(None);
         self.console.log(Level::Info, "New file");
         self.render_now();
     }
@@ -289,7 +634,7 @@ impl StudioApp {
     fn open_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open a design")
-            .add_filter("Code2Form or SCAD", &["c2f", "scad"])
+            .add_filter("Code2Form, SCAD or circuit", &["c2f", "scad", "c2fc"])
             .add_filter("All files", &["*"]);
         if let Some(dir) = self.directory() {
             dialog = dialog.set_directory(dir);
@@ -333,12 +678,18 @@ impl StudioApp {
     fn save_as(&mut self) -> bool {
         // Designs are .c2f files; a .scad file keeps its extension by default.
         let scad = self.path.as_deref().and_then(Path::extension).is_some_and(|e| e == "scad");
-        let (first, second) = if scad { (SCAD_FILES, DESIGN_FILES) } else { (DESIGN_FILES, SCAD_FILES) };
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Save as")
-            .add_filter(first.0, &[first.1])
-            .add_filter(second.0, &[second.1])
-            .set_file_name(if self.path.is_some() { self.file_name() } else { "untitled.c2f".to_string() });
+        let filters = if self.is_circuit() {
+            [CIRCUIT_FILES, DESIGN_FILES, SCAD_FILES]
+        } else if scad {
+            [SCAD_FILES, DESIGN_FILES, CIRCUIT_FILES]
+        } else {
+            [DESIGN_FILES, SCAD_FILES, CIRCUIT_FILES]
+        };
+        let mut dialog = rfd::FileDialog::new().set_title("Save as");
+        for (name, extension) in filters {
+            dialog = dialog.add_filter(name, &[extension]);
+        }
+        dialog = dialog.set_file_name(if self.path.is_some() { self.file_name() } else { "untitled.c2f".to_string() });
         if let Some(dir) = self.directory() {
             dialog = dialog.set_directory(dir);
         }
@@ -356,7 +707,17 @@ impl StudioApp {
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Saved {}", path.display()));
                 self.remember(&path);
-                self.customizer.moved(&path);
+                if circuit::is_circuit(&path) {
+                    self.customizer.open(None);
+                    if self.path.as_deref() != Some(path.as_path()) {
+                        self.mount.moved(&path);
+                        self.report_mount_problem();
+                    }
+                } else {
+                    self.mount.open(None);
+                    self.customizer.moved(&path);
+                    self.set_circuit(None);
+                }
                 self.path = Some(path);
                 self.render_now();
                 true
@@ -397,7 +758,8 @@ impl StudioApp {
         }
     }
 
-    /// Reloads the file when it changed on disk and has no unsaved edits.
+    /// Reloads the file when it changed on disk and has no unsaved edits,
+    /// and renders a circuit again when one of its part files changed.
     fn poll_disk(&mut self, ctx: &egui::Context) {
         let Some(path) = self.path.clone() else { return };
         ctx.request_repaint_after(POLL);
@@ -405,6 +767,20 @@ impl StudioApp {
             return;
         }
         self.last_poll = Instant::now();
+        let mut changed_parts = Vec::new();
+        for (file, mtime) in &mut self.part_files {
+            let now = modified(file);
+            if now != *mtime {
+                *mtime = now;
+                changed_parts.push(file.clone());
+            }
+        }
+        if !changed_parts.is_empty() {
+            for file in &changed_parts {
+                self.console.log(Level::Info, format!("Rendering again: {} changed on disk", file.display()));
+            }
+            self.render_now();
+        }
         let Some(mtime) = modified(&path) else { return };
         if self.disk_mtime == Some(mtime) {
             return;
@@ -566,6 +942,15 @@ impl StudioApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    if self.is_circuit() {
+                        let button = egui::Button::selectable(self.mount.active, "Assembly");
+                        let toggle = ui.add_enabled(self.mount_names().is_some(), button);
+                        let hint = "Wire the circuit one wire at a time, in the file's order";
+                        if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
+                            self.set_mount(!self.mount.active);
+                        }
+                        toolbar_separator(ui);
+                    }
                     let mut shown = self.customizer_shown();
                     let toggle = ui.toggle_value(&mut shown, "Customizer");
                     if toggle.on_hover_text("Show the parameters the file declares").changed() {
@@ -656,7 +1041,10 @@ impl StudioApp {
                 if let Some(model) = &self.model {
                     if !model.empty {
                         let s = model.stats;
-                        if model.is_2d {
+                        if model.parts > 0 {
+                            ui.label(small(format!("· {} part{}", model.parts, plural(model.parts))));
+                            ui.label(small(format!("· {} triangles", group_digits(s.triangles))));
+                        } else if model.is_2d {
                             ui.label(small(format!("· 2D · {} vertices", group_digits(s.vertices))));
                             ui.label(small(format!("· area {}", format_quantity(s.volume))));
                         } else {
@@ -804,10 +1192,41 @@ impl StudioApp {
                 failed: self.failed,
                 has_model,
                 is_2d: self.model.as_ref().is_some_and(|m| m.is_2d),
-                empty_hint: viewer::empty_hint(!self.text.trim().is_empty()),
+                empty_hint: if self.is_circuit() {
+                    "The circuit places no parts yet. Add a [parts.name] table with the part's file."
+                } else {
+                    viewer::empty_hint(!self.text.trim().is_empty())
+                },
             };
-            self.viewer.show(ui, &status);
+            // A double-click on a part opens it rather than framing the view.
+            self.viewer.frame_on_double_click = !matches!(self.hover, Some(Hit::Part(_)));
+            let response = self.viewer.show(ui, &status);
+            self.view_rect = response.rect;
+            self.circuit_input(ctx, &response);
+            if let Some(wiring) = &self.wiring {
+                let painter = ui.painter_at(response.rect);
+                let right = if self.viewer.layer_view { 70.0 } else { 12.0 };
+                // Below the assembly bar, when it is shown.
+                let top = if self.mount.active { 110.0 } else { 12.0 };
+                wiring::paint_legend(&painter, response.rect, right, top, &wiring.legend());
+                if let Some(selection) = self.selection.filter(|_| !self.mount.active) {
+                    let (title, lines) = inspect::card(&wiring.circuit, selection, &self.text);
+                    inspect::paint_card(&painter, response.rect, &title, &lines);
+                }
+                if let (Some(hover), Some(pos)) = (self.hover, response.hover_pos()) {
+                    if !response.dragged() {
+                        inspect::paint_bubble(&painter, response.rect, pos, &inspect::bubble(&wiring.circuit, hover));
+                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                }
+            }
         });
+        if self.mount.active {
+            self.mount_bar(ctx, self.view_rect);
+            // The pins of the wire on screen pulse.
+            self.update_overlay();
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
         if let Some(edit) = self.viewer.take_pause_edit() {
             self.apply_pause_edit(ctx, edit);
         }
@@ -1026,6 +1445,35 @@ fn display_folder(dir: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
     }
+}
+
+/// Something of a circuit named as `part.pin`, `part` or `wire:7` (from 1).
+fn find_hit(circuit: &c2f_circuit::Circuit, name: &str) -> Option<Hit> {
+    if let Some(number) = name.strip_prefix("wire:") {
+        let index = number.parse::<usize>().ok()?.checked_sub(1)?;
+        return (index < circuit.wires.len()).then_some(Hit::Wire(index));
+    }
+    let part_named = |n: &str| circuit.parts.iter().position(|p| p.name == n);
+    match name.split_once('.') {
+        Some((part, pin)) => {
+            let part = part_named(part)?;
+            Some(Hit::Pin(c2f_circuit::End { part, pin: circuit.parts[part].pin(pin)? }))
+        }
+        None => part_named(name).map(Hit::Part),
+    }
+}
+
+/// The box around each part of a circuit's scene.
+fn part_boxes(scene: &crate::worker::Scene) -> Vec<Option<(glam::Vec3, glam::Vec3)>> {
+    scene
+        .parts
+        .iter()
+        .map(|range| {
+            let points = &scene.solid.positions[range.clone()];
+            let first = glam::Vec3::from(*points.first()?);
+            Some(points.iter().fold((first, first), |(lo, hi), &p| (lo.min(p.into()), hi.max(p.into()))))
+        })
+        .collect()
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
