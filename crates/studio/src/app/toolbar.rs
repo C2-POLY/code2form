@@ -141,6 +141,8 @@ pub(super) fn finish_button(ui: &mut egui::Ui, label: &str, tip: &str) -> egui::
         .corner_radius(CornerRadius::same(8))
         .min_size(Vec2::new(0.0, 34.0));
     let response = ui.add(button);
+    // Its name without the room left for the mark.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let c = Pos2::new(response.rect.left() + 17.0, response.rect.center().y);
     let check = vec![c + Vec2::new(-5.0, 0.5), c + Vec2::new(-1.5, 4.0), c + Vec2::new(5.0, -4.0)];
     ui.painter().add(Shape::line(check, Stroke::new(2.0, text)));
@@ -194,6 +196,8 @@ pub(super) fn tool(
     };
     let sense = if enabled.is_ok() { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    // Named for screen readers, as a button is.
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled.is_ok(), on, name));
     let hovered = enabled.is_ok() && response.hovered();
     let fill = if on {
         palette.accent_muted
@@ -227,6 +231,7 @@ pub(super) fn tool(
 pub(super) fn icon_button(ui: &mut egui::Ui, icon: Icon, on: bool, tip: &str) -> egui::Response {
     let palette = theme::palette();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(30.0, 28.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tip));
     let fill = if on {
         palette.accent_muted
     } else if response.hovered() {
