@@ -1,9 +1,9 @@
 name,quantity,file,params,instances
-xiao_esp32s3,1,parts/xiao_esp32s3.c2f,,xiao
-max98357a,1,parts/max98357a.c2f,headers=true,amp
-capacitor_radial,1,parts/capacitor_radial.c2f,d=8; h=12,cap
-speaker,1,parts/speaker.c2f,,speaker
-inmp441,1,parts/inmp441.c2f,,mic
-drv8833,1,parts/drv8833.c2f,,driver
-dc_motor,1,parts/dc_motor.c2f,,motor
-touch_plate,1,parts/touch_plate.c2f,,touch
+xiao_esp32s3,1,electronics/xiao_esp32s3.c2f,,xiao
+max98357a,1,electronics/max98357a.c2f,headers=true,amp
+capacitor_radial,1,electronics/capacitor_radial.c2f,d=8; h=12,cap
+speaker,1,electronics/speaker.c2f,,speaker
+inmp441,1,electronics/inmp441.c2f,,mic
+drv8833,1,electronics/drv8833.c2f,,driver
+dc_motor,1,electronics/dc_motor.c2f,,motor
+touch_plate,1,electronics/touch_plate.c2f,,touch

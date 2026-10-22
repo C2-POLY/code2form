@@ -1,24 +1,24 @@
 step,from,from_label,to,to_label,color,label,length_mm
-1,xiao.5V,USB 5 V,amp.VIN,,red,5 V,44.3
-2,xiao.GND,,amp.GND,,black,,45.8
-3,cap.+,longer lead,amp.VIN,,red,decoupling,31.5
-4,cap.-,striped side,amp.GND,,black,,30.0
-5,amp.VIN,,driver.VCC,motor supply,red,5 V,53.5
-6,amp.GND,,driver.GND,,black,,57.7
-7,driver.VCC,motor supply,driver.EEP,sleep: high to run,red,keep the driver awake,22.9
-8,xiao.3V3,,mic.VDD,,orange,3.3 V,24.3
-9,xiao.GND,,mic.GND,,black,,21.2
+1,xiao.5V,USB 5 V; or 5 V in,amp.VIN,2.5 to 5.5 V,red,5 V,22.0
+2,xiao.GND,,amp.GND,,black,,25.4
+3,cap.+,longer lead,amp.VIN,2.5 to 5.5 V,red,decoupling,34.5
+4,cap.-,striped side,amp.GND,,black,,33.1
+5,amp.VIN,2.5 to 5.5 V,driver.VCC,"motor supply, 2.7 to 10.8 V",red,5 V,54.6
+6,amp.GND,,driver.GND,,black,,58.8
+7,driver.VCC,"motor supply, 2.7 to 10.8 V",driver.EEP,nSLEEP: high to run,red,keep the driver awake,25.0
+8,xiao.3V3,regulator output,mic.VDD,1.62 to 3.63 V,orange,3.3 V,55.5
+9,xiao.GND,,mic.GND,,black,,60.3
 10,mic.L/R,channel: GND for left,mic.GND,,black,left channel,8.8
-11,xiao.D3,"GPIO4, A3",amp.BCLK,bit clock,blue,speaker I2S,37.3
-12,xiao.D4,"GPIO5, SDA",amp.LRC,word select,green,speaker I2S,39.6
-13,xiao.D5,"GPIO6, SCL",amp.DIN,data,yellow,speaker I2S,32.5
-14,amp.+,speaker +,speaker.+,,red,,48.9
-15,amp.-,speaker -,speaker.-,,black,,46.8
-16,xiao.D8,"GPIO7, SCK",mic.SCK,bit clock,blue,mic I2S,23.6
-17,xiao.D9,"GPIO8, MISO",mic.WS,word select,green,mic I2S,25.2
-18,mic.SD,data,xiao.D10,"GPIO9, MOSI",yellow,mic I2S,28.3
-19,xiao.D1,"GPIO2, A1",driver.IN1,,purple,,22.8
-20,xiao.D2,"GPIO3, A2, strapping",driver.IN2,,purple,,26.2
-21,driver.OUT1,,motor.+,,red,,28.2
-22,driver.OUT2,,motor.-,,black,,22.3
-23,xiao.D0,"GPIO1, A0, touch",touch.PAD,solder point,white,touch,68.0
+11,xiao.D3,"GPIO4, A3, touch 4",amp.BCLK,I2S bit clock,blue,speaker I2S,57.3
+12,xiao.D4,"GPIO5, A4, SDA, touch 5",amp.LRC,LRCLK: I2S word select,green,speaker I2S,61.1
+13,xiao.D5,"GPIO6, A5, SCL, touch 6",amp.DIN,I2S data,yellow,speaker I2S,55.9
+14,amp.+,speaker +,speaker.+,red wire,red,,38.8
+15,amp.-,speaker -,speaker.-,black wire,black,,33.9
+16,xiao.D8,"GPIO7, A8, SCK, touch 7",mic.SCK,I2S bit clock,blue,mic I2S,44.7
+17,xiao.D9,"GPIO8, A9, MISO, touch 8",mic.WS,I2S word select,green,mic I2S,46.3
+18,mic.SD,I2S data,xiao.D10,"GPIO9, A10, MOSI, touch 9",yellow,mic I2S,51.4
+19,xiao.D1,"GPIO2, A1, touch 2",driver.IN1,"bridge A, input 1",purple,,40.9
+20,xiao.D2,"GPIO3, A2, strapping (JTAG source)",driver.IN2,"bridge A, input 2",purple,,36.5
+21,driver.OUT1,"bridge A, output 1",motor.+,terminal marked + or red,red,,30.1
+22,driver.OUT2,"bridge A, output 2",motor.-,,black,,22.5
+23,xiao.D0,"GPIO1, A0, touch 1",touch.PAD,solder point,white,touch,9.8

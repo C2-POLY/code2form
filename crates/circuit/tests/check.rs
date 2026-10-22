@@ -156,10 +156,11 @@ fn findings_point_at_their_wire() {
 #[test]
 fn grogu_has_one_warning_its_strapping_pin() {
     let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grogu/grogu.c2fc");
-    let circuit = c2f_circuit::load(&path, &[]).unwrap_or_else(|errors| {
+    let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library");
+    let circuit = c2f_circuit::load(&path, &[library]).unwrap_or_else(|errors| {
         panic!("{}", errors.iter().map(Error::render).collect::<String>())
     });
     let findings: Vec<String> =
         check::check(&circuit).iter().map(|f| format!("{}: {}", f.severity.name(), f.message)).collect();
-    assert_eq!(findings, ["warning: `xiao.D2` is reserved by its part (GPIO3, A2, strapping): better left unwired"]);
+    assert_eq!(findings, ["warning: `xiao.D2` is reserved by its part (GPIO3, A2, strapping (JTAG source)): better left unwired"]);
 }
