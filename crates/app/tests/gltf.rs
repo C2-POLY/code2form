@@ -71,3 +71,12 @@ fn a_model_that_reads_t_is_animated() {
     assert!(json(&output.stdout).get("animations").is_none());
     assert_eq!(c2f(&["--fps", "0"], "bad", TURRET).status.code(), Some(2));
 }
+
+#[test]
+fn an_error_writes_no_gltf() {
+    let output = c2f(&[], "error", "assert(false); cube(1);");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("ERROR: Assertion"), "{stderr}");
+}

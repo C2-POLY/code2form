@@ -86,9 +86,22 @@ impl GltfAnimation {
     }
 
     /// The steps between frames: at least one, so that `$t` = 0 and 1 are
-    /// both sampled.
+    /// both sampled, and at most [`MAX_FRAMES`].
     fn intervals(&self) -> usize {
-        ((self.duration * self.fps).round() as usize).max(1)
+        let steps = (self.duration * self.fps).round();
+        if steps.is_finite() { (steps as usize).clamp(1, MAX_FRAMES) } else { MAX_FRAMES }
+    }
+}
+
+/// Each frame evaluates the whole program: past this, an export would take
+/// too long to be what was meant.
+const MAX_FRAMES: usize = 10_000;
+
+impl GltfAnimation {
+    /// Whether [`GltfAnimation::intervals`] had to cut the frames asked for.
+    fn too_many_frames(&self) -> bool {
+        let steps = (self.duration * self.fps).round();
+        !steps.is_finite() || steps > MAX_FRAMES as f64
     }
 }
 
@@ -118,7 +131,8 @@ pub fn glb(nodes: &[Node], base_dir: &Path, options: &GltfOptions) -> Result<Glb
 
 /// Evaluates `program` and writes it as a `.glb`, as [`glb`] does, its
 /// data files read next to its main file. When it reads `$t` and
-/// `options.animation` is set, its parts move as `$t` goes from 0 to 1.
+/// `options.animation` is set, its parts move as `$t` goes from 0 to 1;
+/// without an animation, it is written at its own `$t` (`Program::t`).
 /// The error that stops the program is the error.
 pub fn program_glb(program: &mut Program, options: &GltfOptions) -> Result<Glb, String> {
     let base_dir = program.files[0].path.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -150,9 +164,13 @@ fn sample(program: &mut Program, options: &GltfOptions) -> Result<(Parts, Option
             None => Ok(output),
         }
     };
-    let output = evaluate(program, 0.0)?;
+    let start = if options.animation.is_some() { 0.0 } else { program.t };
+    let output = evaluate(program, start)?;
     let mut first = parts::split(&output.nodes);
     let Some(animation) = options.animation.as_ref().filter(|_| output.animated) else { return Ok((first, None)) };
+    if animation.too_many_frames() {
+        first.warnings.push(format!("The animation is cut to {MAX_FRAMES} frames: lower its duration or frames a second"));
+    }
     if first.parts.is_empty() {
         first.warnings.push(
             "The model reads $t but has no part(): put what moves in part(\"name\") for the glTF to animate it".into(),
@@ -240,6 +258,9 @@ fn build(split: Parts, base_dir: &Path, options: &GltfOptions, motion: Option<Mo
         let parent = part.parent.map_or(0, |p| p + 1);
         let node = &mut writer.nodes[i + 1];
         let (transform, sheared) = Transform::of(&part.matrix, options.scale);
+        if !transform.is_finite() {
+            return Err(format!("part(\"{}\") has no place: its transformation is not finite", part.name));
+        }
         if sheared {
             warnings.push(format!(
                 "part(\"{}\") is sheared or skewed, which a glTF node cannot hold: it is written with the nearest rotation",
@@ -254,7 +275,7 @@ fn build(split: Parts, base_dir: &Path, options: &GltfOptions, motion: Option<Mo
         }
     }
     let frames = match motion {
-        Some(motion) => writer.animation(&motion, parts.len(), &mut warnings),
+        Some(motion) => writer.animation(&motion, &parts, &mut warnings)?,
         None => 0,
     };
     let (bytes, triangles, vertices) = writer.finish(vec![0]);
@@ -308,13 +329,20 @@ impl Transform {
         }
         // The nearest rotation, by Gram-Schmidt.
         let x = unit(columns[0]).unwrap_or([1.0, 0.0, 0.0]);
-        let y = unit(sub(columns[1], x.map(|c| c * dot(x, columns[1])))).unwrap_or_else(|| any_normal(x));
+        // A flattened axis takes the nearest of the frame's own, so that a
+        // part scaled to nothing does not turn.
+        let off_x = |v: [f64; 3]| unit(sub(v, x.map(|c| c * dot(x, v))));
+        let y = off_x(columns[1]).or_else(|| off_x([0.0, 1.0, 0.0])).or_else(|| off_x([0.0, 0.0, 1.0])).expect("an axis off x");
         let z = cross(x, y);
         let sheared = scales.iter().all(|&s| s != 0.0)
             && [dot(columns[0], columns[1]), dot(columns[1], columns[2]), dot(columns[0], columns[2])]
                 .iter()
                 .any(|d| d.abs() > 1e-6);
         (Transform { translation, rotation: quaternion([x, y, z]), scale: scales }, sheared)
+    }
+
+    fn is_finite(&self) -> bool {
+        self.translation.iter().chain(&self.rotation).chain(&self.scale).all(|c| c.is_finite())
     }
 
     /// Sets the node's `translation`, `rotation` and `scale`, leaving out
@@ -330,12 +358,6 @@ impl Transform {
             node["scale"] = json!(self.scale);
         }
     }
-}
-
-/// A unit vector at right angles to `v`.
-fn any_normal(v: [f64; 3]) -> [f64; 3] {
-    let other = if v[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
-    unit(cross(v, other)).unwrap_or([0.0, 0.0, 1.0])
 }
 
 /// The unit quaternion `[x, y, z, w]` of the rotation whose columns are
@@ -496,14 +518,27 @@ impl Writer {
     /// Writes the parts' `motion` as an animation, a track for each of
     /// their translations, rotations and scales that changes; node `i + 1`
     /// is part `i`. Returns how many frames it has: none when nothing moves.
-    fn animation(&mut self, motion: &Motion, parts: usize, warnings: &mut Vec<String>) -> usize {
+    /// A part without a finite place at some frame is an error.
+    fn animation(&mut self, motion: &Motion, parts: &[parts::Part], warnings: &mut Vec<String>) -> Result<usize, String> {
         let times: Vec<f32> = motion.times.iter().map(|&t| t as f32).collect();
         let mut samplers = Vec::new();
         let mut channels = Vec::new();
         let mut input = None;
-        for i in 0..parts {
+        for (i, part) in parts.iter().enumerate() {
             let transforms: Vec<Transform> =
                 motion.poses.iter().map(|pose| Transform::of(&pose[i], self.scale).0).collect();
+            if let Some(k) = transforms.iter().position(|t| !t.is_finite()) {
+                let t = motion.times[k] / motion.times.last().copied().unwrap_or(1.0);
+                return Err(format!("at $t = {t}: part(\"{}\") has no place: its transformation is not finite", part.name));
+            }
+            // A mirror is a negative scale along X, its turn made up by a
+            // half turn: going through it, the part spins.
+            if transforms.iter().any(|t| t.scale[0] < 0.0) && transforms.iter().any(|t| t.scale[0] > 0.0) {
+                warnings.push(format!(
+                    "part(\"{}\") is mirrored at some frames and not at others: a glTF turns it over between them",
+                    part.name
+                ));
+            }
             let mut rotations: Vec<[f64; 4]> = transforms.iter().map(|t| t.rotation).collect();
             // q and -q are the same turn; the shorter way between frames is
             // the one meant.
@@ -532,10 +567,10 @@ impl Writer {
         }
         if channels.is_empty() {
             warnings.push("The model reads $t, but no part() moves with it: no animation written".into());
-            return 0;
+            return Ok(0);
         }
         self.animations.push(json!({ "name": motion.name, "samplers": samplers, "channels": channels }));
-        times.len()
+        Ok(times.len())
     }
 
     /// The `.glb` of a scene whose root nodes are `roots`, with its triangle

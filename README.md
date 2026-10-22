@@ -221,7 +221,9 @@ translate([20, 20, 5]) rotate([0, 0, 360 * $t]) part("turret") {
   (`--animation`, `animation`), and loops: its name then ends in `-loop`,
   which Godot reads to play it over and over (`--no-loop`, `"loop":
   false` play it once). `--still` (`"animate": false`) writes the model
-  at `$t = 0`.
+  still, at `$t = 0` or at the `$t` set with `-D` or `parameters`. An
+  animation has at most 10,000 frames, each an evaluation of the
+  program.
 - For the loop to be seamless, a part should be where it started at
   `$t = 1`, as `360 * $t` or `sin(360 * $t)` are.
 - Only movement is animated. A part whose shape changes with `$t`, or

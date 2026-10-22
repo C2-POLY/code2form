@@ -706,7 +706,7 @@ impl StudioApp {
                 self.doc.console.set_render_output(outcome.console);
                 let source = (self.doc.sent_source.clone().unwrap_or_default(), self.doc.sent_values.clone());
                 let scene = outcome.result.as_ref().ok();
-                self.doc.animation.rendered(outcome.generation, outcome.animated, &source, scene);
+                let on_screen = self.doc.animation.rendered(outcome.generation, outcome.animated, &source, scene);
                 let play = self.screenshot.as_ref().is_some_and(|s| s.select.as_deref() == Some("play"));
                 if play && shown && self.doc.animation.animated && self.doc.animation.cached() == 1 {
                     self.doc.animation.play();
@@ -733,7 +733,9 @@ impl StudioApp {
                             self.watch(outcome.watch.clone());
                         }
                         self.doc.part_boxes = part_boxes(&scene);
-                        self.doc.viewer.set_scene(scene, frame);
+                        if on_screen {
+                            self.doc.viewer.set_scene(scene, frame);
+                        }
                         // The new solid comes in its own colors.
                         self.update_overlay();
                         // A part still being dragged stays where the drag has it.
@@ -1725,6 +1727,7 @@ impl StudioApp {
             }
         }
         if !changed_parts.is_empty() {
+            self.doc.animation.forget();
             for file in &changed_parts {
                 self.doc.console.log(Level::Info, format!("Rendering again: {} changed on disk", file.display()));
             }

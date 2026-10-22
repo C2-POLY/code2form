@@ -76,25 +76,34 @@ impl Animation {
 
     /// Takes the render `generation` of `source`: keeps its scene when it
     /// is a frame of the animation. Frames of another source are dropped.
-    pub fn rendered(&mut self, generation: u64, animated: bool, source: &Source, scene: Option<&Scene>) {
-        let Some((sent, frame)) = self.pending else { return };
+    /// A failed render (no `scene`) leaves the animation as it is, as an
+    /// unfinished line would. Returns whether the render is of the frame
+    /// on screen: a frame asked for before a seek to a frame in memory is
+    /// kept, not shown.
+    pub fn rendered(&mut self, generation: u64, animated: bool, source: &Source, scene: Option<&Scene>) -> bool {
+        let Some((sent, frame)) = self.pending else { return true };
         if generation < sent {
-            return;
+            return true;
         }
         self.pending = None;
+        let Some(scene) = scene else { return true };
         self.animated = animated;
         if !animated {
             self.stop();
             self.frames.clear();
-            return;
+            return true;
         }
         if self.source.as_ref() != Some(source) {
             self.frames.clear();
             self.source = Some(source.clone());
         }
-        if let Some(scene) = scene {
-            self.frames.insert(frame, scene.clone());
-        }
+        self.frames.insert(frame, scene.clone());
+        frame == self.frame
+    }
+
+    /// Drops the frames in memory: a file they were rendered from changed.
+    pub fn forget(&mut self) {
+        self.frames.clear();
     }
 
     /// What to do now, at `now`, while showing a render of `source` and
@@ -248,6 +257,29 @@ mod tests {
         animation.sent(5);
         animation.rendered(4, true, &src, Some(&scene(9)));
         assert_eq!(animation.cached(), 1, "an older render is not frame 2");
+    }
+
+    #[test]
+    fn a_frame_asked_for_before_a_seek_is_kept_not_shown() {
+        let src = source("rotate(360 * $t) cube(1);");
+        let mut animation = playing(&src);
+        animation.stop();
+        assert_eq!(animation.seek(2, &src), Step::Render);
+        animation.sent(2);
+        // Back to frame 0, in memory, before frame 2 comes.
+        assert_eq!(animation.seek(0, &src), Step::Show(Box::new(scene(0))));
+        assert!(!animation.rendered(2, true, &src, Some(&scene(2))));
+        assert_eq!(animation.cached(), 2);
+    }
+
+    #[test]
+    fn a_failed_render_leaves_the_animation_as_it_is() {
+        let src = source("rotate(360 * $t) cube(1);");
+        let mut animation = playing(&src);
+        animation.sent(2);
+        assert!(animation.rendered(2, false, &src, None));
+        assert!(animation.animated && animation.playing);
+        assert_eq!(animation.cached(), 1);
     }
 
     #[test]

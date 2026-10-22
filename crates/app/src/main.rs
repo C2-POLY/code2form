@@ -330,8 +330,9 @@ fn csg(program: &mut c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom:
     for warning in &output.warnings {
         eprintln!("WARNING: {warning}");
     }
-    if let (Some(Export::Glb), None) = (export, &output.error) {
-        if print_gltf(program, gltf) != ExitCode::SUCCESS {
+    if let Some(Export::Glb) = export {
+        // A program stopped by an error has no glTF: the error says why.
+        if output.error.is_none() && print_gltf(program, gltf) != ExitCode::SUCCESS {
             return ExitCode::FAILURE;
         }
     } else if let Some(export) = export {

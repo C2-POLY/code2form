@@ -392,3 +392,45 @@ fn the_chest_example_opens_and_loops() {
     assert!((angle(&rotations[30]) + 100.0).abs() < 1e-3, "{}", angle(&rotations[30]));
     assert!(track(&model, 2, "rotation").is_some(), "the gem turns");
 }
+
+#[test]
+fn a_part_scaled_to_nothing_does_not_turn() {
+    let glb = animated("scale([1, $t, 1]) part(\"pop\") cube(1);", &GltfOptions::default()).unwrap();
+    let model = Gltf::read(&glb.bytes);
+    assert!(track(&model, 1, "rotation").is_none(), "{}", model.json["animations"]);
+    assert!(track(&model, 1, "scale").is_some());
+    assert_eq!(model.json["nodes"][1].get("rotation"), None);
+}
+
+#[test]
+fn a_part_mirrored_through_zero_warns() {
+    let glb = animated("scale([1, 1, cos(360 * $t)]) part(\"flip\") cube(1);", &GltfOptions::default()).unwrap();
+    assert!(glb.warnings.iter().any(|w| w.contains("part(\"flip\") is mirrored")), "{:?}", glb.warnings);
+}
+
+#[test]
+fn a_part_with_no_finite_place_is_an_error() {
+    let error = animated("scale(1 / $t) part(\"far\") cube(1);", &GltfOptions::default()).unwrap_err();
+    assert!(error.contains("part(\"far\") has no place"), "{error}");
+}
+
+#[test]
+fn a_still_export_is_at_the_programs_time() {
+    let mut program = c2f_eval::Program::load(TURRET, Path::new("t.scad"), &[]).unwrap();
+    program.t = 0.25;
+    let still = GltfOptions { animation: None, ..GltfOptions::default() };
+    let model = Gltf::read(&c2f_geom::program_glb(&mut program, &still).unwrap().bytes);
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    let rotation = &model.json["nodes"][1]["rotation"];
+    assert!((rotation[1].as_f64().unwrap() - half).abs() < 1e-9, "{rotation}");
+    assert_eq!(program.t, 0.25);
+}
+
+#[test]
+fn frames_are_capped() {
+    let animation = c2f_geom::GltfAnimation { fps: 1e9, ..Default::default() };
+    let options = GltfOptions { animation: Some(animation), ..GltfOptions::default() };
+    // A model without parts: the cap is said, and no frame is evaluated.
+    let glb = animated("x = $t; cube(1);", &options).unwrap();
+    assert!(glb.warnings.iter().any(|w| w.contains("cut to 10000 frames")), "{:?}", glb.warnings);
+}
