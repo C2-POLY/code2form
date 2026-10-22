@@ -77,6 +77,8 @@ pub struct Viewer {
     /// the slider on the right of the view.
     pub layer_view: bool,
     pub layer_height: f32,
+    /// The color of the parts without `color()`.
+    pub model_color: [f32; 3],
     /// The layer the cut shows the top of, from 1; `None` for the last.
     layer: Option<u32>,
     /// The solid's bottom and top.
@@ -117,6 +119,7 @@ impl Viewer {
             show_pauses: true,
             layer_view: false,
             layer_height: 0.2,
+            model_color: [c2f_geom::DEFAULT_COLOR[0], c2f_geom::DEFAULT_COLOR[1], c2f_geom::DEFAULT_COLOR[2]],
             layer: None,
             heights: None,
             turntable: false,
@@ -291,6 +294,7 @@ impl Viewer {
                     show_axes: self.show_axes,
                     show_pauses: self.show_pauses,
                     cut: self.cut(),
+                    model_color: self.model_color,
                 };
                 let renderer = renderer.clone();
                 let callback = egui_glow::CallbackFn::new(move |_info, painter| {

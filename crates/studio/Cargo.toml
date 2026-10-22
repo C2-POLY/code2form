@@ -18,14 +18,17 @@ eframe = { version = "0.32", default-features = false, features = ["accesskit", 
 glam = "0.30"
 bytemuck = "1"
 rfd = "0.15"
+# Already used by eframe: the screens, to open the window on one, and
+# screenshot runs opened in the background on macOS.
+winit = "0.30"
+# Already used by eframe: its errors, printed.
+log = "0.4"
 
 [dev-dependencies]
 # Writes the icon's pictures for the bundle (examples/app-icon.rs).
 png = "0.18"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Already used by eframe; needed to open screenshot runs in the background.
-winit = "0.30"
 # Already used by eframe's dependencies; files opened from the Finder.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
