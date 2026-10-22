@@ -21,8 +21,7 @@
 use std::ops::Range;
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, Event, Frame, Id, Key, Margin, Modifiers, PointerButton, Pos2, Rect, RichText,
-    Stroke,
+    self, Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, RichText, Stroke,
 };
 use glam::Vec3;
 
@@ -283,13 +282,12 @@ enum Action {
 
 impl StudioApp {
     /// The shapes toolbar over the 3D view, and its keys.
-    pub(super) fn shapes_view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, response: &egui::Response) {
+    /// The shapes, the hole toggle and what acts on the selection, in the
+    /// modelling toolbar above the view.
+    pub(super) fn shapes_toolbar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let mut state = Shapes::load(ctx);
-        let rect = response.rect;
-        let keys = read_keys(ctx);
         let selected = self.doc.viewer.selection().len();
-
-        match toolbar(ctx, rect, state.tool, selected) {
+        match toolbar(ui, state.tool, selected) {
             Some(Action::Shape(kind)) => state.tool.pick(kind),
             Some(Action::Hole) => state.tool.toggle_hole(),
             Some(Action::Combine(op)) => self.combine(ctx, op),
@@ -300,6 +298,16 @@ impl StudioApp {
             Some(Action::Delete) => self.delete_selection(ctx),
             None => {}
         }
+        state.store(ctx);
+    }
+
+    /// Placing an armed shape with a click in the view, and the keys that
+    /// act on the selection.
+    pub(super) fn shapes_view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, response: &egui::Response) {
+        let mut state = Shapes::load(ctx);
+        let rect = response.rect;
+        let keys = read_keys(ctx);
+        let selected = self.doc.viewer.selection().len();
         if keys.escape {
             state.tool.disarm();
         }
@@ -465,82 +473,62 @@ impl StudioApp {
 /// the shapes and Hole, with the actions on the selection above them when
 /// there is one, and a hint while a shape is armed. Returns what was
 /// clicked.
-fn toolbar(ctx: &egui::Context, rect: Rect, tool: Tool, selected: usize) -> Option<Action> {
+fn toolbar(ui: &mut egui::Ui, tool: Tool, selected: usize) -> Option<Action> {
     let mut action = None;
+    let ctx = ui.ctx().clone();
     let command = |key: Key| ctx.format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, key));
-    egui::Area::new(Id::new("shapes-toolbar-area"))
-        .order(egui::Order::Middle)
-        .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(egui::pos2(rect.center().x, rect.bottom() - 34.0))
-        .constrain_to(rect)
-        .show(ctx, |ui| {
-            Frame::new()
-                .fill(Color32::from_black_alpha(200))
-                .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(Margin::symmetric(8, 6))
-                .show(ui, |ui| {
-                    ui.set_max_width((rect.width() - 48.0).max(120.0));
-                    if let Some(kind) = tool.armed {
-                        let name = SHAPES.iter().find(|s| s.0 == kind).map_or("Shape", |s| s.1);
-                        let hint = if tool.hole {
-                            format!("{name} hole: click on a face of an object · Shift-click: another · Esc: cancel")
-                        } else {
-                            format!("{name}: click on the plate or on a face · Shift-click: another · Esc: cancel")
-                        };
-                        ui.label(RichText::new(hint).size(12.0).color(theme::TEXT_DIM));
-                    }
-                    if selected > 0 {
-                        ui.horizontal_wrapped(|ui| {
-                            for (op, label, tip) in BOOLEANS {
-                                let button = ui.add_enabled(selected >= 2, egui::Button::new(label));
-                                if button
-                                    .on_hover_text(tip)
-                                    .on_disabled_hover_text("Shift-click to select two objects or more")
-                                    .clicked()
-                                {
-                                    action = Some(Action::Combine(op));
-                                }
-                            }
-                            ui.separator();
-                            let duplicate = ui
-                                .button("Duplicate")
-                                .on_hover_text(format!("Duplicate the selection ({})", command(Key::D)));
-                            if duplicate.clicked() {
-                                action = Some(Action::Duplicate);
-                            }
-                            let copy = ui.button("Copy").on_hover_text(format!(
-                                "Copy the selection with its transforms ({}, then {} to paste)",
-                                command(Key::C),
-                                command(Key::V)
-                            ));
-                            if copy.clicked() {
-                                action = Some(Action::Copy);
-                            }
-                            let delete = ui.button("Delete").on_hover_text("Delete the selection (Delete)");
-                            if delete.clicked() {
-                                action = Some(Action::Delete);
-                            }
-                        });
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        for (kind, label, tip) in SHAPES {
-                            let armed = tool.armed == Some(kind);
-                            if ui.selectable_label(armed, label).on_hover_text(tip).clicked() {
-                                action = Some(Action::Shape(kind));
-                            }
-                        }
-                        ui.separator();
-                        let hole = ui.selectable_label(
-                            tool.hole,
-                            RichText::new("Hole").color(if tool.hole { theme::WARNING } else { theme::TEXT }),
-                        );
-                        if hole.on_hover_text("Cut the next shape out of the object it is put on").clicked() {
-                            action = Some(Action::Hole);
-                        }
-                    });
-                });
-        });
+    // One row, laid out the same whatever is selected: what does not apply
+    // is greyed out rather than hidden.
+    for (kind, label, tip) in SHAPES {
+        let armed = tool.armed == Some(kind);
+        if ui.selectable_label(armed, label).on_hover_text(tip).clicked() {
+            action = Some(Action::Shape(kind));
+        }
+    }
+    let hole = ui.selectable_label(
+        tool.hole,
+        RichText::new("Hole").color(if tool.hole { theme::WARNING } else { theme::TEXT }),
+    );
+    if hole.on_hover_text("Cut the next shape out of the object it is put on").clicked() {
+        action = Some(Action::Hole);
+    }
+    ui.separator();
+    for (op, label, tip) in BOOLEANS {
+        let button = ui.add_enabled(selected >= 2, egui::Button::new(label));
+        if button.on_hover_text(tip).on_disabled_hover_text("Shift-click to select two objects or more").clicked() {
+            action = Some(Action::Combine(op));
+        }
+    }
+    ui.separator();
+    let some = selected > 0;
+    let duplicate = ui
+        .add_enabled(some, egui::Button::new("Duplicate"))
+        .on_hover_text(format!("Duplicate the selection ({})", command(Key::D)));
+    if duplicate.clicked() {
+        action = Some(Action::Duplicate);
+    }
+    let copy = ui.add_enabled(some, egui::Button::new("Copy")).on_hover_text(format!(
+        "Copy the selection with its transforms ({}, then {} to paste)",
+        command(Key::C),
+        command(Key::V)
+    ));
+    if copy.clicked() {
+        action = Some(Action::Copy);
+    }
+    let delete = ui.add_enabled(some, egui::Button::new("Delete")).on_hover_text("Delete the selection (Delete)");
+    if delete.clicked() {
+        action = Some(Action::Delete);
+    }
+    if let Some(kind) = tool.armed {
+        let name = SHAPES.iter().find(|s| s.0 == kind).map_or("Shape", |s| s.1);
+        let hint = if tool.hole {
+            format!("{name} hole: click on a face of an object · Shift-click: another · Esc: cancel")
+        } else {
+            format!("{name}: click on the plate or on a face · Shift-click: another · Esc: cancel")
+        };
+        ui.separator();
+        ui.label(RichText::new(hint).size(12.0).color(theme::TEXT_DIM));
+    }
     action
 }
 

@@ -28,7 +28,7 @@ use c2f_sketch::{
     solve_with,
 };
 use eframe::egui::{
-    self, Align2, Button, Color32, CornerRadius, FontId, Frame, Id, Key, Margin, PointerButton, Pos2, Rect, RichText,
+    self, Align2, Button, Color32, CornerRadius, FontId, Key, PointerButton, Pos2, Rect, RichText,
     Stroke, StrokeKind, TextEdit, Vec2,
 };
 use glam::Vec3;
@@ -455,13 +455,11 @@ impl StudioApp {
     /// pointer and the keys there; whether it took the view, so that the
     /// other modelling features leave it alone.
     pub(super) fn sketch_view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, response: &egui::Response) -> bool {
-        let rect = response.rect;
         if self.doc.sketch.picking_face {
             self.pick_face(ctx, ui, response);
             return true;
         }
         let Some(mut mode) = self.doc.sketch.mode.take() else {
-            self.sketch_entry(ctx, rect);
             return false;
         };
         let action = match mode.stage {
@@ -477,52 +475,40 @@ impl StudioApp {
     }
 
     /// The Sketch menu, at the bottom left of the view next to the axes.
-    fn sketch_entry(&mut self, ctx: &egui::Context, rect: Rect) {
+    /// The Sketch menu, and "Edit sketch" when the selection is a sketch,
+    /// in the modelling toolbar above the view.
+    pub(super) fn sketch_entry(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let edit = self.selected_sketch();
         let has_draft = self.doc.sketch.draft.is_some();
         let mut chosen: Option<Plane> = None;
         let (mut face, mut open, mut resume) = (false, false, false);
-        egui::Area::new(Id::new("sketch-entry").with(self.doc.id))
-            .fixed_pos(egui::pos2(rect.left() + 96.0, rect.bottom() - 40.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(Color32::from_black_alpha(170))
-                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(28)))
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(Margin::symmetric(6, 3))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.menu_button("Sketch", |ui| {
-                                for (plane, label) in [
-                                    (Plane::Xy, "On the XY plane"),
-                                    (Plane::Xz, "On the XZ plane"),
-                                    (Plane::Yz, "On the YZ plane"),
-                                ] {
-                                    if ui.button(label).clicked() {
-                                        chosen = Some(plane);
-                                    }
-                                }
-                                face = ui
-                                    .button("On a face…")
-                                    .on_hover_text("Then click a flat face of the model")
-                                    .clicked();
-                                if has_draft {
-                                    ui.separator();
-                                    resume = ui.button("Resume unfinished sketch").clicked();
-                                }
-                            })
-                            .response
-                            .on_hover_text("Draw a 2D profile on a plane, constrain it, then extrude or revolve it");
-                            if let Some(module) = &edit {
-                                open = ui
-                                    .button("Edit sketch")
-                                    .on_hover_text(format!("Reopen {module} with its constraints"))
-                                    .clicked();
-                            }
-                        });
-                    });
-            });
+        ui.menu_button("Sketch", |ui| {
+            for (plane, label) in [
+                (Plane::Xy, "On the XY plane"),
+                (Plane::Xz, "On the XZ plane"),
+                (Plane::Yz, "On the YZ plane"),
+            ] {
+                if ui.button(label).clicked() {
+                    chosen = Some(plane);
+                }
+            }
+            face = ui
+                .button("On a face…")
+                .on_hover_text("Then click a flat face of the model")
+                .clicked();
+            if has_draft {
+                ui.separator();
+                resume = ui.button("Resume unfinished sketch").clicked();
+            }
+        })
+        .response
+        .on_hover_text("Draw a 2D profile on a plane, constrain it, then extrude or revolve it");
+        if let Some(module) = &edit {
+            open = ui
+                .button("Edit sketch")
+                .on_hover_text(format!("Reopen {module} with its constraints"))
+                .clicked();
+        }
         if let Some(plane) = chosen {
             let cut_from = self.cut_target();
             self.new_sketch(plane, cut_from);

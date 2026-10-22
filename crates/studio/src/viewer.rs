@@ -107,6 +107,8 @@ pub struct Viewer {
     /// A double-click frames the view; the app turns it off while the
     /// pointer is over something a double-click opens.
     pub frame_on_double_click: bool,
+    /// The card that names the selection; off while a panel shows it.
+    pub selection_card: bool,
     /// A drag turns or pans the camera; the app turns it off while a drag
     /// rewires a circuit.
     pub orbit_enabled: bool,
@@ -198,6 +200,7 @@ impl Viewer {
             enclosure: 0..0,
             show_enclosure: true,
             frame_on_double_click: true,
+            selection_card: true,
             orbit_enabled: true,
             select_enabled: true,
             pauses: Vec::new(),
@@ -797,7 +800,7 @@ impl Viewer {
     /// What is selected, in a card under the badges, and what is under the
     /// pointer, in a bubble next to it.
     fn paint_selection(&self, painter: &egui::Painter, rect: Rect, response: &egui::Response) {
-        if let Some(&key) = self.selection.last() {
+        if let Some(&key) = self.selection.last().filter(|_| self.selection_card) {
             let (head, line) = self.describe(key);
             let title = match self.selection.len() {
                 1 => head,
@@ -1155,7 +1158,7 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     painter.text(
         rect.right_bottom() - Vec2::new(margin, margin),
         Align2::RIGHT_BOTTOM,
-        "Click: select   Drag: orbit   Right/Shift-drag: pan   Scroll: zoom   Double-click: fit",
+        "Click: select   Shift/Alt-click: add/hidden   Drag: orbit   Right/Shift-drag: pan   Scroll: zoom   Double-click: fit",
         FontId::proportional(11.0),
         Color32::from_white_alpha(70),
     );

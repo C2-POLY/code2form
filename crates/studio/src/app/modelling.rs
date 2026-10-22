@@ -16,6 +16,7 @@ use eframe::egui;
 use super::StudioApp;
 use crate::code_edit::Edit;
 use crate::console::Level;
+use crate::theme;
 
 impl StudioApp {
     /// The panels of manual modelling, before the 3D view takes the rest
@@ -26,10 +27,28 @@ impl StudioApp {
         }
         self.sketch_panel(ctx);
         self.tree_panel(ctx);
-        // The sketch's own panel takes its place while sketching.
+        // The sketch's own panel and tools take their place while sketching.
+        // The properties panel names the selection: the view's card would
+        // say it twice.
+        self.doc.viewer.selection_card = self.doc.sketch.active();
         if !self.doc.sketch.active() {
             self.properties_panel(ctx);
+            self.modelling_toolbar(ctx);
         }
+    }
+
+    /// A row of tools across the top of the 3D view, as Fusion's toolbar:
+    /// sketches, shapes and holes, and what acts on the selection. Added
+    /// after the side panels, it spans the view only.
+    fn modelling_toolbar(&mut self, ctx: &egui::Context) {
+        let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(8, 4));
+        egui::TopBottomPanel::top("modelling-toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                self.sketch_entry(ctx, ui);
+                ui.separator();
+                self.shapes_toolbar(ctx, ui);
+            });
+        });
     }
 
     /// What manual modelling draws over the 3D view and does with the

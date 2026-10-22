@@ -2034,7 +2034,7 @@ impl StudioApp {
         egui::SidePanel::left("editor")
             .frame(Frame::new().fill(theme::EDITOR))
             .resizable(true)
-            .default_width((width * 0.42).max(320.0))
+            .default_width((width * 0.36).max(320.0))
             .width_range(260.0..=(width - 300.0).max(300.0))
             .show(ctx, |ui| {
                 if self.doc.editor.show(ui, &mut self.doc.text) && self.settings.render_while_typing {
