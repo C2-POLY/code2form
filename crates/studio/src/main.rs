@@ -9,6 +9,7 @@ mod editor;
 mod find;
 mod highlight;
 mod open_events;
+mod recent;
 mod renderer;
 mod screenshot;
 mod theme;
@@ -26,7 +27,11 @@ usage: code2form [file.scad]
 Opens the file (or an empty document) in an editor with a live 3D preview.
 
 Set CODE2FORM_SCREENSHOT=out.png to save a picture of the window once
-the first render is shown; the window then opens without taking focus.";
+the first render is shown; the window then opens without taking focus.
+
+The Open Recent list is kept in the user's settings folder, or in the
+file CODE2FORM_RECENT_FILES names; screenshot runs without that variable
+neither read nor change it.";
 
 fn main() -> ExitCode {
     // Old macOS versions add a process serial number to apps the Finder starts.

@@ -16,6 +16,7 @@ use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
 use crate::open_events;
+use crate::recent::RecentFiles;
 use crate::screenshot::Screenshot;
 use crate::theme;
 use crate::viewer::{self, Viewer};
@@ -102,6 +103,7 @@ pub struct StudioApp {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    recent: RecentFiles,
     confirm: Option<Pending>,
     allow_close: bool,
     title: String,
@@ -135,6 +137,7 @@ impl StudioApp {
             console_open: true,
             customizer: Customizer::default(),
             customizer_open: None,
+            recent: RecentFiles::load(crate::recent::store()),
             confirm: None,
             allow_close: false,
             title: String::new(),
@@ -259,6 +262,7 @@ impl StudioApp {
                 self.saved_text = text;
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Opened {}", path.display()));
+                self.remember(&path);
                 self.customizer.open(Some(&path));
                 self.path = Some(path);
                 self.frame_next = true;
@@ -291,6 +295,29 @@ impl StudioApp {
         }
         if let Some(path) = dialog.pick_file() {
             self.load(path);
+        }
+    }
+
+    /// Opens a file from Open Recent, or drops it from the list when it is
+    /// gone.
+    fn open_recent(&mut self, path: PathBuf) {
+        if path.exists() {
+            self.guard(Pending::OpenPath(path));
+            return;
+        }
+        self.console.log(Level::Warning, format!("{} no longer exists; removed from Open Recent", path.display()));
+        self.recent.remove(&path);
+        self.save_recent();
+    }
+
+    fn remember(&mut self, path: &Path) {
+        self.recent.push(path);
+        self.save_recent();
+    }
+
+    fn save_recent(&mut self) {
+        if let Err(err) = self.recent.save() {
+            self.console.log(Level::Warning, format!("Cannot save the recent files list: {err}"));
         }
     }
 
@@ -327,6 +354,7 @@ impl StudioApp {
                 self.saved_text = self.text.clone();
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Saved {}", path.display()));
+                self.remember(&path);
                 self.customizer.moved(&path);
                 self.path = Some(path);
                 self.render_now();
@@ -489,6 +517,7 @@ impl StudioApp {
                 if tool_button(ui, "Open…", "Open a file", Some(OPEN)).clicked() {
                     self.guard(Pending::Open);
                 }
+                self.recent_menu(ui);
                 if tool_button(ui, "Save", "Save the file", Some(SAVE)).clicked() {
                     self.save();
                 }
@@ -563,6 +592,37 @@ impl StudioApp {
                 });
             });
         });
+    }
+
+    fn recent_menu(&mut self, ui: &mut egui::Ui) {
+        let mut chosen = None;
+        let mut clear = false;
+        let menu = ui.add_enabled_ui(!self.recent.is_empty(), |ui| {
+            ui.menu_button("Open Recent", |ui| {
+                for path in self.recent.paths() {
+                    let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+                    let folder = path.parent().map(display_folder).unwrap_or_default();
+                    let button = Button::new(name).shortcut_text(folder);
+                    if ui.add(button).on_hover_text(path.display().to_string()).clicked() {
+                        chosen = Some(path.clone());
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Clear Menu").clicked() {
+                    clear = true;
+                    ui.close();
+                }
+            })
+        });
+        menu.response.on_hover_text("Reopen one of the last files").on_disabled_hover_text("No recent files");
+        if let Some(path) = chosen {
+            self.open_recent(path);
+        }
+        if clear {
+            self.recent.clear();
+            self.save_recent();
+        }
     }
 
     fn status_bar(&mut self, ctx: &egui::Context) {
@@ -916,6 +976,16 @@ fn working_directory() -> Option<PathBuf> {
     match std::env::current_dir() {
         Ok(dir) if dir != Path::new("/") => Some(dir),
         _ => std::env::var_os("HOME").map(PathBuf::from),
+    }
+}
+
+/// A folder for the Open Recent menu, with the home folder shown as `~`.
+fn display_folder(dir: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home.as_deref().and_then(|home| dir.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => dir.display().to_string(),
     }
 }
 
