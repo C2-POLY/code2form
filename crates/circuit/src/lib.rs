@@ -84,6 +84,9 @@ pub struct Wire {
     pub to: End,
     pub color: Option<String>,
     pub label: Option<String>,
+    /// The checks whose warnings about its two pins are accepted, from
+    /// [`check::ALLOWABLE`].
+    pub allow: Vec<String>,
     /// Its `from` in the circuit file.
     pub span: Span,
 }
@@ -266,6 +269,8 @@ struct WireEntry {
     to: Spanned<String>,
     color: Option<String>,
     label: Option<String>,
+    #[serde(default)]
+    allow: Vec<Spanned<String>>,
 }
 
 /// A part file as read once, however many instances use it.
@@ -435,7 +440,12 @@ impl Reader<'_> {
             self.error(format!("a wire cannot go from `{}` to itself", circuit.end_name(from)), span(&entry.to));
             return None;
         }
-        Some(Wire { from, to, color: entry.color, label: entry.label, span: span(&entry.from) })
+        for rule in entry.allow.iter().filter(|rule| !check::ALLOWABLE.contains(&rule.get_ref().as_str())) {
+            let expected = check::ALLOWABLE.join(", ");
+            self.error(format!("`{}` is not a warning that can be allowed: expected one of {expected}", rule.get_ref()), span(rule));
+        }
+        let allow = entry.allow.into_iter().map(Spanned::into_inner).collect();
+        Some(Wire { from, to, color: entry.color, label: entry.label, allow, span: span(&entry.from) })
     }
 
     fn end(&mut self, circuit: &Circuit, end: &Spanned<String>) -> Option<End> {

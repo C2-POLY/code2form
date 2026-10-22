@@ -154,7 +154,7 @@ fn findings_point_at_their_wire() {
 }
 
 #[test]
-fn grogu_has_one_warning_its_strapping_pin() {
+fn grogu_accepts_its_only_warning_its_strapping_pin() {
     let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grogu/grogu.c2fc");
     let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library");
     let circuit = c2f_circuit::load(&path, &[library]).unwrap_or_else(|errors| {
@@ -162,5 +162,52 @@ fn grogu_has_one_warning_its_strapping_pin() {
     });
     let findings: Vec<String> =
         check::check(&circuit).iter().map(|f| format!("{}: {}", f.severity.name(), f.message)).collect();
+    assert_eq!(findings, Vec::<String>::new());
+    // Without its `allow`, the D2 wire is warned about.
+    let wire = circuit.wires.iter().position(|w| circuit.end_name(w.from) == "xiao.D2").unwrap();
+    let mut circuit = circuit;
+    circuit.wires[wire].allow.clear();
+    let findings: Vec<String> =
+        check::check(&circuit).iter().map(|f| format!("{}: {}", f.severity.name(), f.message)).collect();
     assert_eq!(findings, ["warning: `xiao.D2` is reserved by its part (GPIO3, A2, strapping (JTAG source)): better left unwired"]);
+}
+
+/// The circuit `GOOD` plus one more wire written as `extra`.
+fn written(name: &str, extra: &str) -> Result<Circuit, Vec<Error>> {
+    let dir = std::env::temp_dir().join(format!("c2f-check-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("board.c2f"), BOARD).unwrap();
+    std::fs::write(dir.join("sensor.c2f"), SENSOR).unwrap();
+    let mut src = String::from("[parts.b]\npart = \"board.c2f\"\n\n[parts.s]\npart = \"sensor.c2f\"\n");
+    for (from, to) in GOOD {
+        src += &format!("\n[[wires]]\nfrom = \"{from}\"\nto = \"{to}\"\n");
+    }
+    src += extra;
+    let circuit = c2f_circuit::parse(&src, &dir.join("test.c2fc"), &[]);
+    let _ = std::fs::remove_dir_all(&dir);
+    circuit
+}
+
+#[test]
+fn a_wire_may_accept_a_warning_about_its_pins() {
+    let strap = "\n[[wires]]\nfrom = \"b.STRAP\"\nto = \"s.IN\"\n";
+    let warned = check::check(&written("strap", strap).unwrap());
+    assert_eq!(warned.iter().map(|f| f.rule).collect::<Vec<_>>(), ["reserved"]);
+    let accepted = written("strap-ok", &format!("{strap}allow = [\"reserved\"]\n")).unwrap();
+    assert_eq!(check::check(&accepted), []);
+    assert_eq!(accepted.wires[3].allow, ["reserved"]);
+    // Allowing another check leaves this one.
+    let other = written("strap-other", &format!("{strap}allow = [\"two_outputs\"]\n")).unwrap();
+    assert_eq!(check::check(&other).len(), 1);
+}
+
+#[test]
+fn errors_cannot_be_allowed() {
+    let over = "\n[[wires]]\nfrom = \"b.V5\"\nto = \"b.IO\"\nallow = [\"voltage\"]\n";
+    let Err(errors) = written("allow-error", over) else { panic!("an error was allowed") };
+    let messages: Vec<&str> = errors.iter().map(|e| e.diagnostic.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["`voltage` is not a warning that can be allowed: expected one of reserved, two_outputs, common_ground"]
+    );
 }

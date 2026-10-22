@@ -213,6 +213,7 @@ label = "I2C"
 | `from`, `to` | two pins, as `part.pin`, required |
 | `color` | the wire's color: a CSS name (`red`, `orange`, `purple`...) or `#rrggbb` |
 | `label` | what the wire carries, shown in the legend and the wiring list |
+| `allow` | warnings accepted for the pins at its two ends: `["reserved"]`, `["two_outputs"]`, `["common_ground"]` (see [Check the wiring](#3-check-the-wiring)) |
 
 A part's file is found next to the circuit first, then in the library
 folders (those in `OPENSCADPATH`, then the library the app ships). That
@@ -317,24 +318,37 @@ Warnings are reported but pass:
 
 | Rule | Reports |
 |---|---|
-| No common ground | "no common ground: `b` is not connected to `a`": the wired parts' grounds are not all one net |
-| Wired `reserved` pin | "`xiao.D2` is reserved by its part (its label): better left unwired" |
-| Two outputs on one net | "`a` and `b` are two outputs on one net: they drive it against each other" |
+| `allow` name | Rule | Reports |
+|---|---|---|
+| `common_ground` | No common ground | "no common ground: `b` is not connected to `a`": the wired parts' grounds are not all one net |
+| `reserved` | Wired `reserved` pin | "`xiao.D2` is reserved by its part (its label): better left unwired" |
+| `two_outputs` | Two outputs on one net | "`a` and `b` are two outputs on one net: they drive it against each other" |
+
+When you know a warning is fine, accept it on a wire: `allow =
+["reserved"]` silences that warning for the pins at the wire's two
+ends, and only there. Say why in a comment above it. Errors cannot be
+allowed: an unknown name, or the name of an error, is an error.
 
 A part with no pin wired is left out of the checks: a part you have not
 wired yet is not an error.
 
-Grogu passes with one warning: its motor uses D2, a strapping pin of
-the ESP32-S3, because D6 and D7 are the serial port.
+Grogu's motor uses D2, a strapping pin of the ESP32-S3, because D6 and
+D7 are the serial port. GPIO3 only matters at boot once its JTAG eFuse
+is burned, so the wire accepts the warning:
+
+```toml
+# D2 is GPIO3, a strapping pin: it only matters at boot once the JTAG
+# eFuse is burned, and the driver's input pulls it low, which is safe.
+[[wires]]
+from = "xiao.D2"
+to = "driver.IN2"
+color = "purple"
+allow = ["reserved"]
+```
 
 ```console
 $ c2f circuit check examples/grogu/grogu.c2fc
-warning: `xiao.D2` is reserved by its part (GPIO3, A2, strapping (JTAG source)): better left unwired
-   --> examples/grogu/grogu.c2fc:175:8
-    |
-175 | from = "xiao.D2"
-    |        ^^^^^^^^^
-examples/grogu/grogu.c2fc: 8 parts, 23 wires: no errors, 1 warning
+examples/grogu/grogu.c2fc: 8 parts, 23 wires: no errors
 ```
 
 The app runs the same checks each time the circuit changes, and prints

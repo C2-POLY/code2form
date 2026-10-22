@@ -253,7 +253,7 @@ fn the_schema_lists_the_fields_the_reader_takes() {
     };
     assert_eq!(keys(&schema), ["enclosure", "parts", "version", "wires"]);
     assert_eq!(keys(&schema["$defs"]["part"]), ["at", "color", "params", "part", "rotate"]);
-    assert_eq!(keys(&schema["$defs"]["wire"]), ["color", "from", "label", "to"]);
+    assert_eq!(keys(&schema["$defs"]["wire"]), ["allow", "color", "from", "label", "to"]);
 }
 
 #[test]

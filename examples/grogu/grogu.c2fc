@@ -171,10 +171,13 @@ from = "xiao.D1"
 to = "driver.IN1"
 color = "purple"
 
+# D2 is GPIO3, a strapping pin: it only matters at boot once the JTAG
+# eFuse is burned, and the driver's input pulls it low, which is safe.
 [[wires]]
 from = "xiao.D2"
 to = "driver.IN2"
 color = "purple"
+allow = ["reserved"]
 
 [[wires]]
 from = "driver.OUT1"

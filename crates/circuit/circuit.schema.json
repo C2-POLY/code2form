@@ -93,6 +93,11 @@
         "label": {
           "description": "What the wire carries, as shown next to it.",
           "type": "string"
+        },
+        "allow": {
+          "description": "Warnings about the pins at its two ends that are accepted, with the reason in a comment.",
+          "type": "array",
+          "items": { "enum": ["reserved", "two_outputs", "common_ground"] }
         }
       }
     }

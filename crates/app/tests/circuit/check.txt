@@ -1,6 +1,1 @@
-warning: `xiao.D2` is reserved by its part (GPIO3, A2, strapping (JTAG source)): better left unwired
-   --> grogu.c2fc:175:8
-    |
-175 | from = "xiao.D2"
-    |        ^^^^^^^^^
-grogu.c2fc: 8 parts, 23 wires: no errors, 1 warning
+grogu.c2fc: 8 parts, 23 wires: no errors

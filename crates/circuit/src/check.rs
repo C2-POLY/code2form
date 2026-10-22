@@ -30,9 +30,15 @@ impl Severity {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Finding {
     pub severity: Severity,
+    /// The check that found it, as a wire's `allow` names it.
+    pub rule: &'static str,
     pub message: String,
     pub span: Span,
 }
+
+/// The warnings a wire may accept with `allow = [...]`, for the pins at
+/// its two ends. Errors cannot be allowed.
+pub const ALLOWABLE: [&str; 3] = ["reserved", "two_outputs", "common_ground"];
 
 impl Finding {
     /// As an error of the circuit file `src` at `path` is rendered,
@@ -55,13 +61,23 @@ const TOLERANCE: f64 = 1e-6;
 /// different voltages, or a supply and a ground, on one net; a part's
 /// supply or ground left unwired while its other pins are wired; a wired
 /// `nc` pin. Warnings: grounds that are not all one net; a wired
-/// `reserved` pin; two outputs on one net.
+/// `reserved` pin; two outputs on one net. A warning about a pin is left
+/// out when a wire at that pin allows its check.
 pub fn check(circuit: &Circuit) -> Vec<Finding> {
     let nets = Nets::new(circuit);
     let mut findings = Vec::new();
     let name = |end: End| format!("`{}`", circuit.end_name(end));
     let volts = |v: f64| format!("{v} V");
-    let mut add = |severity, message: String, span| findings.push(Finding { severity, message, span });
+    let allowed = |rule: &str, end: End| {
+        circuit.wires.iter().any(|w| (w.from == end || w.to == end) && w.allow.iter().any(|a| a == rule))
+    };
+    // `end`: the pin a finding is about, which a wire's `allow` may cover.
+    let mut add = |severity, rule: &'static str, end: Option<End>, message: String, span| {
+        if severity == Severity::Warning && end.is_some_and(|end| allowed(rule, end)) {
+            return;
+        }
+        findings.push(Finding { severity, rule, message, span })
+    };
 
     for net in nets.all() {
         let kind = |end: End| circuit.pin(end).kind;
@@ -80,7 +96,7 @@ pub fn check(circuit: &Circuit) -> Vec<Finding> {
                 if let Some(most) = pin.voltage.filter(|&most| most < supply - TOLERANCE) {
                     let message =
                         format!("{} supplies {} to {}, which takes at most {}", name(source), volts(supply), name(end), volts(most));
-                    add(Severity::Error, message, nets.span(end));
+                    add(Severity::Error, "voltage", Some(end), message, nets.span(end));
                 }
             }
         }
@@ -94,21 +110,21 @@ pub fn check(circuit: &Circuit) -> Vec<Finding> {
                         name(other),
                         volts(v)
                     );
-                    add(Severity::Error, message, nets.span(other));
+                    add(Severity::Error, "supplies", Some(other), message, nets.span(other));
                 }
             }
         }
         if let Some(&ground) = net.iter().find(|&&end| kind(end) == PinKind::Ground) {
             for &end in net.iter().filter(|&&end| kind(end) == PinKind::PowerOut) {
                 let message = format!("{} is a supply wired to the ground {}: a short circuit", name(end), name(ground));
-                add(Severity::Error, message, nets.span(end));
+                add(Severity::Error, "short", Some(end), message, nets.span(end));
             }
         }
         let outputs: Vec<End> = net.iter().copied().filter(|&end| kind(end) == PinKind::Output).collect();
         for &other in outputs.iter().skip(1) {
             let message =
                 format!("{} and {} are two outputs on one net: they drive it against each other", name(outputs[0]), name(other));
-            add(Severity::Warning, message, nets.span(other));
+            add(Severity::Warning, "two_outputs", Some(other), message, nets.span(other));
         }
     }
 
@@ -127,19 +143,20 @@ pub fn check(circuit: &Circuit) -> Vec<Finding> {
         for end in open {
             let what = if circuit.pin(end).kind == PinKind::Ground { "its ground" } else { "a supply it needs" };
             let message = format!("{} is not wired, though other pins of `{}` are: {what} is left open", name(end), part.name);
-            add(Severity::Error, message, part.span);
+            add(Severity::Error, "open", Some(end), message, part.span);
         }
     }
 
     for end in nets.wired_ends() {
         let pin = circuit.pin(end);
         if pin.kind == PinKind::Nc {
-            add(Severity::Error, format!("{} is not connected (nc): nothing may be wired to it", name(end)), nets.span(end));
+            let message = format!("{} is not connected (nc): nothing may be wired to it", name(end));
+            add(Severity::Error, "nc", Some(end), message, nets.span(end));
         }
         if pin.reserved {
             let why = pin.label.as_ref().map_or(String::new(), |label| format!(" ({label})"));
             let message = format!("{} is reserved by its part{why}: better left unwired", name(end));
-            add(Severity::Warning, message, nets.span(end));
+            add(Severity::Warning, "reserved", Some(end), message, nets.span(end));
         }
     }
 
@@ -156,7 +173,7 @@ pub fn check(circuit: &Circuit) -> Vec<Finding> {
     if let Some(&(_, common)) = grounds.first() {
         for &(_, end) in &grounds[1..] {
             let message = format!("no common ground: {} is not connected to {}", name(end), name(common));
-            add(Severity::Warning, message, nets.span(end));
+            add(Severity::Warning, "common_ground", Some(end), message, nets.span(end));
         }
     }
 
