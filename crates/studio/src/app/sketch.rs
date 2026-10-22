@@ -1693,7 +1693,9 @@ pub(super) fn hint_bar(painter: &egui::Painter, rect: Rect, text: &str) {
     let palette = theme::palette();
     let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), palette.text);
     let size = galley.size() + Vec2::new(20.0, 8.0);
-    let card = Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 22.0), size);
+    // Above the view bar.
+    let bottom = rect.bottom() - super::view_bar::HEIGHT - 22.0;
+    let card = Rect::from_center_size(Pos2::new(rect.center().x, bottom), size);
     painter.rect(card, CornerRadius::same(6), palette.window, Stroke::new(1.0, palette.border), StrokeKind::Inside);
     painter.galley(card.min + Vec2::new(10.0, 4.0), galley, theme::palette().text);
 }

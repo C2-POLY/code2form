@@ -110,8 +110,6 @@ pub struct Palette {
     pub badge: Color32,
     /// The pauses' labels, the cyan of their planes.
     pub pause: Color32,
-    /// The mouse help in the view's corner.
-    pub view_hint: Color32,
 
     /// The 3D view's gradient, top and bottom, and its grid's major and
     /// minor lines.
@@ -192,7 +190,6 @@ pub static DARK: Palette = Palette {
     card: Color32::from_rgba_premultiplied(19, 22, 27, 225),
     badge: Color32::from_rgba_premultiplied(15, 17, 21, 215),
     pause: rgb(115, 230, 255),
-    view_hint: Color32::from_rgba_premultiplied(70, 70, 70, 70),
 
     view_top: [0.215, 0.240, 0.290],
     view_bottom: [0.078, 0.086, 0.106],
@@ -253,7 +250,6 @@ pub static LIGHT: Palette = Palette {
     card: Color32::from_rgba_premultiplied(230, 231, 232, 235),
     badge: Color32::from_rgba_premultiplied(221, 221, 222, 225),
     pause: rgb(0x00, 0x70, 0x8c),
-    view_hint: Color32::from_black_alpha(140),
 
     view_top: [0.933, 0.945, 0.961],
     view_bottom: [0.827, 0.847, 0.878],
@@ -576,7 +572,6 @@ mod tests {
         assert_eq!(DARK.view_top, [0.215, 0.240, 0.290]);
         assert_eq!(DARK.card, Color32::from_rgba_unmultiplied(22, 25, 31, 225));
         assert_eq!(DARK.badge, Color32::from_rgba_unmultiplied(18, 20, 25, 215));
-        assert_eq!(DARK.view_hint, Color32::from_white_alpha(70));
         assert_eq!(LIGHT.card, Color32::from_rgba_unmultiplied(250, 251, 252, 235));
         assert_eq!(LIGHT.badge, Color32::from_rgba_unmultiplied(250, 251, 252, 225));
         assert_eq!(visuals(&DARK).widgets.hovered.fg_stroke.color, Color32::WHITE);

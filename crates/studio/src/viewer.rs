@@ -1188,14 +1188,6 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
         badge(painter, pos, "2D", theme::palette().text_dim, false);
     }
 
-    // Bottom-right: mouse help.
-    painter.text(
-        rect.right_bottom() - Vec2::new(margin, margin),
-        Align2::RIGHT_BOTTOM,
-        "Click: select   Shift/Alt-click: add/hidden   Drag: orbit   Right/Shift-drag: pan   Scroll: zoom   Double-click: fit",
-        FontId::proportional(11.0),
-        theme::palette().view_hint,
-    );
 }
 
 /// A rounded label; returns its width.

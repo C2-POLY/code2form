@@ -38,6 +38,14 @@ pub(super) enum Icon {
     Unite,
     Subtract,
     Intersect,
+    // The view bar's and the top bar's.
+    Fit,
+    Grid,
+    Axes,
+    Layers,
+    Pauses,
+    Help,
+    Gear,
 }
 
 /// How the row lays its tools out this frame.
@@ -134,6 +142,23 @@ pub(super) fn tool(
         Ok(()) => response.on_hover_cursor(egui::CursorIcon::PointingHand),
         Err(why) => response.on_hover_text(why),
     }
+}
+
+/// A small button with an icon only, as the view bar's: filled while `on`.
+pub(super) fn icon_button(ui: &mut egui::Ui, icon: Icon, on: bool, tip: &str) -> egui::Response {
+    let palette = theme::palette();
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(30.0, 28.0), Sense::click());
+    let fill = if on {
+        palette.accent_muted
+    } else if response.hovered() {
+        palette.hover
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    let color = if on { palette.text_strong } else { palette.text };
+    paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(16.0)), icon, color);
+    response.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// An icon's own color: blue for sketches, orange for holes, the text's
@@ -234,6 +259,45 @@ pub(super) fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Colo
             } else {
                 painter.circle_stroke(right, radius, stroke);
             }
+        }
+        Icon::Fit => {
+            for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let corner = at(0.85 * x, 0.85 * y);
+                painter.add(line(vec![corner + Vec2::new(0.0, -0.5 * y * r), corner, corner + Vec2::new(-0.5 * x * r, 0.0)]));
+            }
+        }
+        Icon::Grid => {
+            painter.rect_stroke(Rect::from_center_size(c, Vec2::splat(r * 1.7)), 1.0, stroke, egui::StrokeKind::Middle);
+            for t in [-0.28, 0.28] {
+                painter.line_segment([at(t, -0.85), at(t, 0.85)], stroke);
+                painter.line_segment([at(-0.85, t), at(0.85, t)], stroke);
+            }
+        }
+        Icon::Axes => {
+            painter.add(line(vec![at(-0.75, -0.85), at(-0.75, 0.75), at(0.85, 0.75)]));
+            painter.line_segment([at(-0.75, 0.75), at(0.3, -0.3)], stroke);
+        }
+        Icon::Layers => {
+            painter.add(Shape::closed_line(vec![at(0.0, -0.8), at(0.85, -0.35), at(0.0, 0.1), at(-0.85, -0.35)], stroke));
+            painter.add(line(vec![at(-0.85, 0.15), at(0.0, 0.6), at(0.85, 0.15)]));
+        }
+        Icon::Pauses => {
+            for x in [-0.3, 0.3] {
+                painter.line_segment([at(x, -0.65), at(x, 0.65)], Stroke::new(2.4, color));
+            }
+        }
+        Icon::Help => {
+            painter.circle_stroke(c, r * 0.85, stroke);
+            painter.text(c, Align2::CENTER_CENTER, "?", FontId::proportional(r * 1.15), color);
+        }
+        Icon::Gear => {
+            painter.circle_stroke(c, r * 0.38, stroke);
+            for i in 0..8 {
+                let a = TAU * i as f32 / 8.0;
+                let d = Vec2::new(a.cos(), a.sin());
+                painter.line_segment([c + d * r * 0.55, c + d * r * 0.9], Stroke::new(2.0, color));
+            }
+            painter.circle_stroke(c, r * 0.62, stroke);
         }
     }
 }
