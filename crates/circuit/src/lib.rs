@@ -27,6 +27,7 @@
 //! place it, and its `params` are set as `c2f -D name=value` sets them.
 //! Wires are laid in the order the file lists them.
 
+pub mod check;
 pub mod route;
 
 use std::collections::{BTreeMap, HashMap};

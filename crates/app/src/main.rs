@@ -25,7 +25,11 @@ commands:
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout
 
 circuit commands, on a `.c2fc` circuit:
-  check   read the circuit, evaluate its parts and report its errors
+  check   read the circuit, evaluate its parts and check its wiring:
+          errors (a supply above what a pin takes, supplies tied
+          together or to ground, a supply or ground left open, a
+          wired nc pin) fail it; warnings (no common ground, a wired
+          reserved pin, two outputs on a net) do not
   wires   print the wiring list in the order to lay the wires: step,
           from pin to pin (with their labels), color, length and label
   bom     print the bill of materials: the parts by file and params,

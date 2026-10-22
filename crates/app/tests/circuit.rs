@@ -134,3 +134,28 @@ fn errors_fail_with_their_line() {
     assert_eq!(c2f(&folder.0, &["solder", "test.c2fc"]).status.code(), Some(2));
     assert_eq!(c2f(&folder.0, &["check", "--csv", "test.c2fc"]).status.code(), Some(2));
 }
+
+#[test]
+fn wiring_errors_fail_and_warnings_do_not() {
+    let board = "// @pin V5 [0, 0, 0] power_out 5V\n// @pin GND [1, 0, 0] ground\n// @pin IO [2, 0, 0] io 3.3V reserved\ncube(1);\n";
+    let wire = |from: &str, to: &str| format!("\n[[wires]]\nfrom = \"{from}\"\nto = \"{to}\"\n");
+    let parts = "[parts.a]\npart = \"board.c2f\"\n";
+    let folder = Folder::new(
+        "wiring",
+        &[
+            ("board.c2f", board),
+            ("bad.c2fc", &(parts.to_string() + &wire("a.V5", "a.IO"))),
+            ("warned.c2fc", &(parts.to_string() + &wire("a.GND", "a.IO"))),
+        ],
+    );
+    let output = c2f(&folder.0, &["check", "bad.c2fc"]);
+    assert!(!output.status.success());
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("error: `a.V5` supplies 5 V to `a.IO`, which takes at most 3.3 V\n --> bad.c2fc:5:8"), "{stderr}");
+    assert!(stderr.contains("warning: `a.IO` is reserved by its part: better left unwired\n --> bad.c2fc:5:8"), "{stderr}");
+    assert!(stderr.ends_with("bad.c2fc: 1 part, 1 wire: 2 errors, 1 warning\n"), "{stderr}");
+
+    let output = c2f(&folder.0, &["check", "warned.c2fc"]);
+    assert!(output.status.success());
+    assert_eq!(text(&output.stdout), "warned.c2fc: 1 part, 1 wire: no errors, 1 warning\n");
+}

@@ -1,11 +1,12 @@
 //! `c2f circuit`: reads a `.c2fc` circuit and prints what building it
-//! takes: its problems, its wiring list in the order the wires are laid,
+//! takes: its problems (its parts' errors and its wiring's), its wiring list in the order the wires are laid,
 //! its bill of materials, or its parts assembled as one STL or 3MF.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use c2f_circuit::check::{self, Finding, Severity};
 use c2f_circuit::{Circuit, Error, Instance, route};
 use c2f_eval::{Node, NodeKind};
 use c2f_lang::Diagnostic;
@@ -92,8 +93,9 @@ pub fn load(path: &Path) -> Result<(Circuit, String), Vec<Error>> {
     Ok((circuit, src))
 }
 
-/// Evaluates every part, then prints the errors with their line, and a
-/// summary when there are none.
+/// Evaluates every part and checks the wiring ([`check::check`]), then
+/// prints the errors and warnings with their line, and a summary. Only
+/// errors fail.
 fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
     let assembly = assemble(circuit, src, path);
     for warning in &assembly.warnings {
@@ -102,14 +104,36 @@ fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
     for error in &assembly.errors {
         eprint!("{}", error.render());
     }
-    let errors = assembly.errors.len();
-    let summary = format!("{}: {}, {}", path.display(), plural(circuit.parts.len(), "part"), plural(circuit.wires.len(), "wire"));
+    let findings = check::check(circuit);
+    for finding in &findings {
+        eprint!("{}", render_finding(finding, src, path));
+    }
+    let count = |severity| findings.iter().filter(|f| f.severity == severity).count();
+    let (errors, warnings) = (assembly.errors.len() + count(Severity::Error), count(Severity::Warning));
+    let mut summary = format!("{}: {}, {}: ", path.display(), plural(circuit.parts.len(), "part"), plural(circuit.wires.len(), "wire"));
+    summary += &match errors {
+        0 => "no errors".to_string(),
+        n => plural(n, "error"),
+    };
+    if warnings > 0 {
+        summary += &format!(", {}", plural(warnings, "warning"));
+    }
     if errors > 0 {
-        eprintln!("{summary}: {}", plural(errors, "error"));
+        eprintln!("{summary}");
         return ExitCode::FAILURE;
     }
-    println!("{summary}: no errors");
+    println!("{summary}");
     ExitCode::SUCCESS
+}
+
+/// A finding as an error of the circuit file is rendered, `warning:` for
+/// a warning.
+pub fn render_finding(finding: &Finding, src: &str, path: &Path) -> String {
+    let rendered = Diagnostic::new(finding.message.clone(), finding.span).render(src, &path.display().to_string());
+    match finding.severity {
+        Severity::Error => rendered,
+        Severity::Warning => rendered.replacen("error:", "warning:", 1),
+    }
 }
 
 pub fn plural(n: usize, word: &str) -> String {

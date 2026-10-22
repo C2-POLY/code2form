@@ -56,11 +56,20 @@ they are. Written in Rust, it renders as you type.
   `translate()` and `rotate()` would, its `params` set as `-D` sets
   them; wires are laid in the order the file lists them. The format's
   JSON Schema is `crates/circuit/circuit.schema.json`.
+- **Circuit checks** before soldering, from what the parts declare of
+  their pins (`c2f circuit check`; `c2f_circuit::check::check` for the
+  app). A net is the pins wires connect, a part's ground pins counting as
+  one. Errors: a supply (`power_out`) above the voltage a pin on its net
+  takes (5 V on a 3.3 V pin), two supplies of different voltages on one
+  net, a supply on a ground net, a part's `power_in` or ground pins left
+  unwired while its other pins are wired, a wired `nc` pin. Warnings:
+  grounds that are not all one net, a wired `reserved` pin, two `output`
+  pins on one net. Errors fail the check, warnings do not.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`; `c2f pins` prints a part's annotations. `c2f circuit`
-  reads a circuit: `check` evaluates its parts and reports its errors with
-  their line, `wires` prints the wiring list in the order to lay the
+  reads a circuit: `check` evaluates its parts and checks its wiring,
+  with the line of each finding (below), `wires` prints the wiring list in the order to lay the
   wires (step, each pin with its label, color, length, label), `bom` the
   bill of materials (each part file and set of params, its quantity and
   instances), both as text or `--csv`, and `stl` and `3mf` the parts
