@@ -115,22 +115,22 @@ pub fn vector(v: &[f64]) -> String {
 
 // ---- messages ----
 
-const SYNTAX: &str = "Le code contient une erreur : corrigez-la avant de modifier le modèle.";
-const STALE: &str = "La sélection ne correspond plus au code : sélectionnez l'objet à nouveau.";
-const NOT_A_CALL: &str = "Cet élément n'est pas un appel de module.";
+const SYNTAX: &str = "The code has an error: fix it before changing the model.";
+const STALE: &str = "The selection no longer matches the code: select the object again.";
+const NOT_A_CALL: &str = "This is not a module call.";
 const UNBRACED: &str =
-    "Cet objet est la seule instruction d'un if ou d'une boucle : ajoutez des accolades autour pour le modifier.";
+    "This object is the only statement of an if or a loop: put braces around it to change it.";
 
 /// The message for a value the source computes, which an edit would lose:
-/// « La valeur est calculée (width / 2) : remplacez-la par un nombre pour
-/// la modifier. »
+/// "The value is computed (width / 2): replace it with a number to change
+/// it."
 fn computed(src: &str, expr: &Expr) -> String {
     let text: Vec<&str> = src[expr.span.range()].split_whitespace().collect();
     let mut text = text.join(" ");
     if text.chars().count() > 40 {
         text = text.chars().take(39).collect::<String>() + "…";
     }
-    format!("La valeur est calculée ({text}) : remplacez-la par un nombre pour la modifier.")
+    format!("The value is computed ({text}): replace it with a number to change it.")
 }
 
 // ---- the parsed source ----
@@ -619,7 +619,7 @@ fn apply(src: &str, splices: &[Splice]) -> Result<(String, Vec<usize>), String> 
     for i in order {
         let s = &splices[i];
         if s.range.start < at {
-            return Err("Ces objets se chevauchent dans le code.".into());
+            return Err("These objects overlap in the code.".into());
         }
         out.push_str(&src[at..s.range.start]);
         starts[i] = out.len();
@@ -652,7 +652,7 @@ fn single(
 /// indentation unit `unit` (the snippet's own unit is converted), and its
 /// first statement is at the returned range.
 fn snippet(code: &str, unit: &str) -> Result<(String, Range<usize>), String> {
-    let invalid = || "Le code à insérer est invalide.".to_string();
+    let invalid = || "The code to insert is not valid.".to_string();
     let start = code.len() - code.trim_start().len();
     let first = line_start(code, start);
     let indent = &code[first..start];

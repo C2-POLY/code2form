@@ -184,19 +184,19 @@ pub fn duplicate(src: &str, range: Range<usize>) -> Result<Edit, String> {
 pub fn wrap_boolean(src: &str, ranges: &[Range<usize>], op: Boolean) -> Result<Edit, String> {
     let doc = Doc::parse(src)?;
     if ranges.is_empty() {
-        return Err("Sélectionnez au moins un objet.".into());
+        return Err("Select at least one object.".into());
     }
     let paths = ranges.iter().map(|r| doc.locate_instance(r)).collect::<Result<Vec<_>, _>>()?;
     let tops: Vec<_> = paths.iter().map(|p| *detached(&doc, p).last().expect("located")).collect();
     let first = tops[0];
     if tops.iter().any(|t| !std::ptr::eq(t.list.as_ptr(), first.list.as_ptr())) {
-        return Err("Ces objets sont dans des blocs différents : rassemblez-les dans le code d'abord.".into());
+        return Err("These objects are in different blocks: bring them together in the code first.".into());
     }
     let mut indices: Vec<usize> = tops.iter().map(|t| t.index).collect();
     indices.sort_unstable();
     indices.dedup();
     if indices.len() != tops.len() {
-        return Err("Le même objet est sélectionné deux fois.".into());
+        return Err("The same object is selected twice.".into());
     }
     let start = first.stmt.span.start as usize;
     let indent = indent_of(src, start);
@@ -258,7 +258,7 @@ pub(super) fn append_child(doc: &Doc, block: &Range<usize>, text: &str) -> Resul
     let unit = indent_unit(src);
     let outer = indent_of(src, stmt.span.start as usize);
     let inner = format!("{outer}{unit}");
-    let refused = || "On ne peut pas ajouter d'objet dans cet élément.".to_string();
+    let refused = || "No object can be added inside this.".to_string();
     let braced = |open: usize, children: &[Stmt]| -> (Splice, usize, String) {
         let close = stmt.span.end as usize - 1;
         let indent = match children.first() {
@@ -398,7 +398,7 @@ mod tests {
 
         let src = "union() {\n    cube(1);\n}\nsphere(1);\n";
         let err = wrap_boolean(src, &[at(src, "cube(1);", 0), at(src, "sphere(1);", 0)], Boolean::Union).unwrap_err();
-        assert!(err.contains("blocs différents"));
+        assert!(err.contains("different blocks"));
         assert!(wrap_boolean(src, &[at(src, "sphere(1);", 0), at(src, "sphere(1);", 0)], Boolean::Union).is_err());
     }
 

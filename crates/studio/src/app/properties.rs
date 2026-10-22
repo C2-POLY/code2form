@@ -577,7 +577,7 @@ fn edit_for(src: &str, range: Range<usize>, field: &Field, change: Change) -> Re
                 Value::Vector(v) => v.clone(),
                 _ => vec![0.0; field.splat.max(1)],
             };
-            *v.get_mut(i).ok_or("Ce vecteur n'a pas cette composante.")? = x;
+            *v.get_mut(i).ok_or("This vector has no such component.")? = x;
             code_edit::set_arg(src, range, field.key.arg(), &Value::Vector(v))
         }
         (_, Change::Component(i, x)) => code_edit::set_arg_component(src, range, field.key.arg(), i, x),
@@ -588,10 +588,10 @@ fn edit_for(src: &str, range: Range<usize>, field: &Field, change: Change) -> Re
 /// call at `range` selected.
 fn replace_with_number(src: &str, range: Range<usize>, computed: &Computed) -> Result<Edit, String> {
     let value = computed.value.as_ref().filter(|v| matches!(v, Value::Number(_) | Value::Vector(_)));
-    let value = value.ok_or("La valeur de cette expression n'est pas connue ici.")?;
+    let value = value.ok_or("The value of this expression is not known here.")?;
     let at = computed.range.clone();
     if src.get(at.clone()) != Some(computed.code.as_str()) || at.start < range.start || at.end > range.end {
-        return Err("La sélection ne correspond plus au code : sélectionnez l'objet à nouveau.".into());
+        return Err("The selection no longer matches the code: select the object again.".into());
     }
     let code = value.code();
     let text = format!("{}{code}{}", &src[..at.start], &src[at.end..]);

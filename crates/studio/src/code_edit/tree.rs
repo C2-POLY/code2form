@@ -204,7 +204,7 @@ pub fn rename(src: &str, range: Range<usize>, name: &str) -> Result<Edit, String
     let owner = path[k];
     if owner.list[owner.index + 1..].iter().any(|s| lines.line(s.span.start as usize) == line) {
         return Err(
-            "Plusieurs objets commencent sur cette ligne : placez celui-ci sur sa propre ligne pour le nommer.".into(),
+            "Several objects start on this line: put this one on a line of its own to name it.".into(),
         );
     }
     let name: String = name.replace(['\n', '\r'], " ").trim().to_string();
@@ -273,7 +273,7 @@ pub fn move_into(src: &str, range: Range<usize>, target: Target) -> Result<Edit,
     let ext = with_comment(src, &m);
     let from = indent_of(src, m.start);
     let inside = |t: &Range<usize>| m.start <= t.start && t.end <= m.end;
-    let itself = || "Un objet ne peut pas aller dans lui-même.".to_string();
+    let itself = || "An object cannot go inside itself.".to_string();
     let selected = range.start - m.start..range.end - m.start;
 
     let (insertion, offset, to) = match &target {

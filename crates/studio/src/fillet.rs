@@ -66,14 +66,14 @@ impl Rims {
 /// `cube(size, center)` with its `edges` rounded to `radius`:
 /// `rounded_cube([30, 20, 10], fillet = 2, edges = "vertical")`.
 pub fn rounded_cube(size: [f64; 3], center: bool, radius: f64, edges: CubeEdges) -> Result<String, String> {
-    check_cube(size, radius, edges, "Le rayon du congé")?;
+    check_cube(size, radius, edges, "The fillet radius")?;
     Ok(cube_call("rounded_cube", size, center, "fillet", radius, edges))
 }
 
 /// `cube(size, center)` with its `edges` cut at 45 degrees, `distance`
 /// back from each edge: `chamfered_cube([30, 20, 10], chamfer = 1)`.
 pub fn chamfered_cube(size: [f64; 3], center: bool, distance: f64, edges: CubeEdges) -> Result<String, String> {
-    check_cube(size, distance, edges, "Le chanfrein")?;
+    check_cube(size, distance, edges, "The chamfer")?;
     Ok(cube_call("chamfered_cube", size, center, "chamfer", distance, edges))
 }
 
@@ -142,21 +142,21 @@ fn cylinder_call(module: &str, h: f64, r1: f64, r2: f64, center: bool, key: &str
 
 fn check_cube(size: [f64; 3], d: f64, edges: CubeEdges, what: &str) -> Result<(), String> {
     if size.iter().any(|s| !s.is_finite() || *s <= 0.0) {
-        return Err("Le cube doit avoir trois dimensions positives.".into());
+        return Err("The cube needs three positive sizes.".into());
     }
     if !d.is_finite() || d <= 0.0 {
-        return Err(format!("{what} doit être positif."));
+        return Err(format!("{what} must be positive."));
     }
     let [x, y, z] = size;
     let (limit, words) = match edges {
-        CubeEdges::All => (x.min(y).min(z) / 2.0, "la moitié de la plus petite dimension"),
-        CubeEdges::Vertical => (x.min(y) / 2.0, "la moitié de la largeur ou de la profondeur"),
+        CubeEdges::All => (x.min(y).min(z) / 2.0, "half the smallest size"),
+        CubeEdges::Vertical => (x.min(y) / 2.0, "half the width or the depth"),
         // A rounded top may take the whole height.
-        CubeEdges::Top | CubeEdges::Bottom if z < x.min(y) / 2.0 => (z, "la hauteur"),
-        CubeEdges::Top | CubeEdges::Bottom => (x.min(y) / 2.0, "la moitié de la largeur ou de la profondeur"),
+        CubeEdges::Top | CubeEdges::Bottom if z < x.min(y) / 2.0 => (z, "the height"),
+        CubeEdges::Top | CubeEdges::Bottom => (x.min(y) / 2.0, "half the width or the depth"),
     };
     if d > limit * (1.0 + 1e-9) {
-        return Err(format!("{what} ne peut dépasser {words} ({}).", number(limit)));
+        return Err(format!("{what} cannot be more than {words} ({}).", number(limit)));
     }
     Ok(())
 }
@@ -169,19 +169,19 @@ fn setback(d: f64, angle: f64, round: bool) -> f64 {
 }
 
 fn check_cylinder(h: f64, r1: f64, r2: f64, d: f64, rims: Rims, round: bool) -> Result<(), String> {
-    let what = if round { "Le rayon du congé" } else { "Le chanfrein" };
+    let what = if round { "The fillet radius" } else { "The chamfer" };
     if !h.is_finite() || h <= 0.0 {
-        return Err("Le cylindre doit avoir une hauteur positive.".into());
+        return Err("The cylinder needs a positive height.".into());
     }
     if !r1.is_finite() || !r2.is_finite() || r1 < 0.0 || r2 < 0.0 || r1 + r2 <= 0.0 {
-        return Err("Le cylindre doit avoir un rayon positif.".into());
+        return Err("The cylinder needs a positive radius.".into());
     }
     if !d.is_finite() || d <= 0.0 {
-        return Err(format!("{what} doit être positif."));
+        return Err(format!("{what} must be positive."));
     }
     let (bottom, top) = (rims != Rims::Top, rims != Rims::Bottom);
     if (bottom && r1 == 0.0) || (top && r2 == 0.0) {
-        return Err("La pointe d'un cône n'a pas de bord à arrondir.".into());
+        return Err("The tip of a cone has no edge to round.".into());
     }
     // The angle of the profile's corner at the bottom rim, between the cap
     // and the side; the top one is its supplement.
@@ -192,10 +192,10 @@ fn check_cylinder(h: f64, r1: f64, r2: f64, d: f64, rims: Rims, round: bool) -> 
     let at_top = if top { setback(d, top_angle, round) } else { 0.0 };
     let tolerance = 1.0 + 1e-9;
     if at_bottom > r1 * tolerance || at_top > r2 * tolerance {
-        return Err(format!("{what} est trop grand pour le rayon du cylindre."));
+        return Err(format!("{what} is too large for the cylinder's radius."));
     }
     if at_bottom + at_top > side * tolerance {
-        return Err(format!("{what} est trop grand pour la hauteur du cylindre."));
+        return Err(format!("{what} is too large for the cylinder's height."));
     }
     Ok(())
 }
@@ -398,7 +398,7 @@ mod tests {
         assert!(rounded_cube([30.0, 20.0, 10.0], false, 5.0, CubeEdges::All).is_ok());
         assert_eq!(
             rounded_cube([30.0, 20.0, 10.0], false, 5.5, CubeEdges::All).unwrap_err(),
-            "Le rayon du congé ne peut dépasser la moitié de la plus petite dimension (5)."
+            "The fillet radius cannot be more than half the smallest size (5)."
         );
         assert!(rounded_cube([30.0, 20.0, 10.0], false, 10.0, CubeEdges::Vertical).is_ok());
         assert!(rounded_cube([30.0, 20.0, 4.0], false, 4.0, CubeEdges::Top).is_ok());
@@ -409,7 +409,7 @@ mod tests {
         assert!(rounded_cylinder(20.0, 10.0, 10.0, false, 10.5, Rims::Top).is_err());
         assert!(rounded_cylinder(4.0, 10.0, 10.0, false, 2.5, Rims::Both).is_err());
         assert!(rounded_cylinder(4.0, 10.0, 10.0, false, 2.5, Rims::Top).is_ok());
-        assert_eq!(chamfered_cylinder(20.0, 10.0, 0.0, false, 1.0, Rims::Both).unwrap_err(), "La pointe d'un cône n'a pas de bord à arrondir.");
+        assert_eq!(chamfered_cylinder(20.0, 10.0, 0.0, false, 1.0, Rims::Both).unwrap_err(), "The tip of a cone has no edge to round.");
         assert!(chamfered_cylinder(20.0, 10.0, 0.0, false, 1.0, Rims::Bottom).is_ok());
     }
 

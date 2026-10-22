@@ -158,13 +158,13 @@ pub fn set_arg_component(src: &str, range: Range<usize>, key: ArgKey, index: usi
         ExprKind::Vector(elements) => match elements.get(index) {
             Some(Element::Expr(e)) if scalar(e).is_some() => Splice::new(e.span.range(), number(x)),
             Some(Element::Expr(e)) => return Err(computed(src, e)),
-            _ => return Err("Ce vecteur n'a pas cette composante.".into()),
+            _ => return Err("This vector has no such component.".into()),
         },
         _ => match scalar(&arg.value) {
             Some(n) => {
                 let size = if r.name.name == "square" { 2 } else { 3 };
                 if index >= size {
-                    return Err("Ce vecteur n'a pas cette composante.".into());
+                    return Err("This vector has no such component.".into());
                 }
                 let mut v = vec![n; size];
                 v[index] = x;
@@ -184,7 +184,7 @@ pub fn add_arg(src: &str, range: Range<usize>, name: &str, value: &Value) -> Res
     let doc = Doc::parse(src)?;
     let r = Resolved::new(&doc, &range)?;
     if r.find(ArgKey::Name(name)).is_some() {
-        return Err(format!("Le paramètre {name} a déjà une valeur."));
+        return Err(format!("The parameter {name} already has a value."));
     }
     let (open, close) = doc.parens(r.name).ok_or(super::STALE)?;
     let new = format!("{name} = {}", value.code());
@@ -205,8 +205,8 @@ pub fn add_arg(src: &str, range: Range<usize>, name: &str, value: &Value) -> Res
 
 fn missing(key: ArgKey) -> String {
     match key {
-        ArgKey::Name(name) => format!("Le paramètre {name} n'a pas de valeur."),
-        ArgKey::Position(i) => format!("L'appel n'a pas d'argument en position {}.", i + 1),
+        ArgKey::Name(name) => format!("The parameter {name} has no value."),
+        ArgKey::Position(i) => format!("The call has no argument in position {}.", i + 1),
     }
 }
 
@@ -349,7 +349,7 @@ mod tests {
     fn computed_values_are_refused() {
         let src = "width = 10;\ncube(width / 2);\ntranslate([width, 0, 0]) cube(2);\n";
         let err = set_arg(src, at(src, "cube(width / 2);", 0), ArgKey::Name("size"), &Value::Number(3.0)).unwrap_err();
-        assert_eq!(err, "La valeur est calculée (width / 2) : remplacez-la par un nombre pour la modifier.");
+        assert_eq!(err, "The value is computed (width / 2): replace it with a number to change it.");
         let range = at(src, "translate([width, 0, 0]) cube(2);", 0);
         assert!(set_arg_component(src, range.clone(), ArgKey::Name("v"), 0, 1.0).is_err());
         // Its literal components can still change.

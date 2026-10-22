@@ -954,7 +954,7 @@ mod tests {
         assert!(pose.translate.is_err());
         let err =
             write_change(src, range, Change::Move(DVec3::X), DVec3::ZERO, DVec3::ZERO, DMat3::IDENTITY).unwrap_err();
-        assert!(err.starts_with("La valeur est calculée"), "{err}");
+        assert!(err.starts_with("The value is computed"), "{err}");
     }
 
     #[test]

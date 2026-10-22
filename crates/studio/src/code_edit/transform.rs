@@ -120,11 +120,11 @@ fn current(doc: &Doc, wrapper: &Stmt, kind: Transform) -> Result<Current, String
     let (name, args, _) = call(wrapper).expect("a wrapper is a call");
     let param = if kind == Transform::Rotate { "a" } else { "v" };
     if kind == Transform::Rotate && bound_arg(doc, name, args, "v").is_some() {
-        return Err("Cette rotation tourne autour d'un axe (v) : modifiez-la dans le code.".into());
+        return Err("This rotation turns around an axis (v): change it in the code.".into());
     }
     let Some(arg) = bound_arg(doc, name, args, param) else {
         if !args.is_empty() {
-            return Err("Cette transformation n'a pas de valeur à modifier.".into());
+            return Err("This transformation has no value to change.".into());
         }
         let (_, close) = doc.parens(name).ok_or(super::STALE)?;
         return Ok(Current { value: [kind.identity(); 3], at: close..close, scalar: false });
@@ -310,7 +310,7 @@ mod tests {
     fn computed_transforms_are_refused() {
         let src = "width = 10;\ntranslate([width / 2, 0, 0]) cube(1);";
         let err = set_transform(src, at(src, "cube(1);", 0), Transform::Translate, [0.0; 3]).unwrap_err();
-        assert_eq!(err, "La valeur est calculée ([width / 2, 0, 0]) : remplacez-la par un nombre pour la modifier.");
+        assert_eq!(err, "The value is computed ([width / 2, 0, 0]): replace it with a number to change it.");
         assert!(translate_by(src, at(src, "cube(1);", 0), [1.0, 0.0, 0.0]).is_err());
         assert!(transform_of(src, at(src, "cube(1);", 0), Transform::Translate).is_err());
         let src = "rotate(a = 30, v = [1, 1, 0]) cube(1);";
