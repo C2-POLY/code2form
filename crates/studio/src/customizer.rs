@@ -132,10 +132,14 @@ impl Customizer {
     }
 
     /// Draws the panel; returns whether a value changed.
-    pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
+    /// The parameters, under a "Parameters" heading unless `heading` is
+    /// false (a tab names them already). Returns whether a value changed.
+    pub fn show(&mut self, ui: &mut egui::Ui, heading: bool) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Customizer").strong().size(14.0).color(theme::palette().text));
+            if heading {
+                ui.label(RichText::new("Parameters").strong().size(14.0).color(theme::palette().text));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let reset = ui
                     .add_enabled(!self.values.is_empty(), Button::new(RichText::new("Reset all").size(12.0)))
@@ -175,7 +179,19 @@ impl Customizer {
                 );
                 return;
             }
-            for group in self.groups() {
+            let groups = self.groups();
+            // A file without groups: its parameters straight under the
+            // panel's own "Parameters", not again under a heading of that name.
+            if groups.len() == 1 && groups[0] == DEFAULT_GROUP {
+                let parameters: Vec<Parameter> =
+                    self.parameters.iter().filter(|p| p.group == DEFAULT_GROUP).cloned().collect();
+                for parameter in &parameters {
+                    changed |= self.parameter(ui, parameter);
+                    ui.add_space(8.0);
+                }
+                return;
+            }
+            for group in groups {
                 let title = RichText::new(&group).strong().size(13.0).color(theme::palette().text);
                 egui::CollapsingHeader::new(title).id_salt(("customizer-group", &group)).default_open(true).show(
                     ui,

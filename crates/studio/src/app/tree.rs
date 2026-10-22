@@ -18,8 +18,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, FontId, Frame, Key, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke,
-    TextEdit, Vec2,
+    self, Color32, CornerRadius, FontId, Frame, Key, Margin, Pos2, Rect, RichText, Sense, Stroke, TextEdit, Vec2,
 };
 
 use super::StudioApp;
@@ -373,47 +372,45 @@ impl TreeState {
 }
 
 impl StudioApp {
-    /// A panel with the program as a tree of objects and operations,
-    /// between the editor and the view.
+    /// The browser: the program as a tree of objects and operations, on
+    /// the left of the Model workspace.
     pub(super) fn tree_panel(&mut self, ctx: &egui::Context) {
-        if !self.settings.show_tree {
-            return;
-        }
+        let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 6, right: 6, top: 8, bottom: 6 });
+        egui::SidePanel::left("tree")
+            .frame(frame)
+            .resizable(true)
+            .default_width(240.0)
+            .width_range(180.0..=420.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Browser").strong().size(12.5).color(theme::palette().text));
+                });
+                ui.add_space(4.0);
+                self.tree_view(ctx, ui);
+            });
+    }
+
+    /// The tree, in the browser or in the Code workspace's Tree tab, and
+    /// what its rows and F2 ask for.
+    pub(super) fn tree_view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         self.tree.refresh(self.doc.id, &self.doc.text);
         // Only while the view shows this code, which its selection's bytes
         // point into.
         let selected = self.selected_ranges().unwrap_or_default();
-        let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 6, right: 6, top: 8, bottom: 6 });
+        if let Some(why) = &self.tree.error {
+            let note = format!("The code does not read: the tree is as it last was.\n{why}");
+            ui.label(RichText::new(note).size(11.5).color(theme::palette().warning));
+        }
+        if self.tree.nodes.is_empty() && !self.tree.stale() {
+            ui.add_space(4.0);
+            ui.label(RichText::new("No objects yet").size(12.0).color(theme::palette().text_dim));
+        }
         let mut action = None;
-        egui::SidePanel::left("tree")
-            .frame(frame)
-            .resizable(true)
-            .default_width(220.0)
-            .width_range(160.0..=420.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Tree").strong().size(12.5).color(theme::palette().text));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let close = ui.add(egui::Button::new(RichText::new("×").size(14.0)).frame(false));
-                        if close.on_hover_text("Hide the tree").clicked() {
-                            self.settings.show_tree = false;
-                        }
-                    });
-                });
-                if let Some(why) = &self.tree.error {
-                    let note = format!("The code does not read: the tree is as it last was.\n{why}");
-                    ui.label(RichText::new(note).size(11.5).color(theme::palette().warning));
-                }
-                ui.add_space(4.0);
-                if self.tree.nodes.is_empty() && !self.tree.stale() {
-                    ui.label(RichText::new("No objects yet").size(12.0).color(theme::palette().text_faint));
-                }
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    action = self.tree.show(ui, &selected);
-                });
-            });
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            action = self.tree.show(ui, &selected);
+        });
         // F2 renames the object selected, or the row last clicked.
         let free = ctx.memory(|m| m.focused().is_none());
         if free && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2)) {
@@ -455,31 +452,6 @@ impl StudioApp {
                 }
                 self.apply_code_edit(ctx, result, "");
             }
-        }
-    }
-
-    /// The toolbar's toggles of the tree and of the code-free mode, laid
-    /// out right to left.
-    pub(super) fn tree_toggles(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let label = if self.settings.show_code { "Code" } else { "No code" };
-        let keys = ctx.format_shortcut(&self.settings.shortcuts.get(crate::shortcuts::Action::ToggleCode));
-        let hint = format!("Show or hide the code: without it, model with the view, the tree and the panels ({keys})");
-        if ui.add(egui::Button::selectable(self.settings.show_code, label)).on_hover_text(hint).clicked() {
-            self.toggle_code(ctx);
-        }
-        if !self.doc.is_circuit() {
-            let toggle = ui.toggle_value(&mut self.settings.show_tree, "Tree");
-            toggle.on_hover_text("Show the program as a tree of objects and operations");
-        }
-        super::toolbar_separator(ui);
-    }
-
-    /// Hides the code editor, or shows it again.
-    pub(super) fn toggle_code(&mut self, ctx: &egui::Context) {
-        self.settings.show_code = !self.settings.show_code;
-        if !self.settings.show_code {
-            // The keys typed next are not for a hidden editor.
-            ctx.memory_mut(|m| m.stop_text_input());
         }
     }
 }
@@ -663,6 +635,7 @@ fn paint_eye(painter: &egui::Painter, c: Pos2, open: bool, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::Workspace;
 
     const MODEL: &str = "\
 difference() { // Shell
@@ -959,7 +932,7 @@ sphere(2); // Ball
     }
 
     #[test]
-    fn the_code_free_mode_hides_only_the_editor() {
+    fn each_workspace_has_its_panels() {
         let ctx = egui::Context::default();
         let mut app = studio(&ctx, MODEL);
         let shown =
@@ -972,15 +945,13 @@ sphere(2); // Ball
             let _ = ctx.run(input, |ctx| {
                 app.shortcuts(ctx);
                 app.editor_panel(ctx);
-                app.tree_panel(ctx);
+                app.modelling_panels(ctx);
             });
         };
-        assert!(app.settings.show_code && app.settings.show_tree);
-        app.toggle_code(&ctx);
-        assert!(!app.settings.show_code);
+        app.set_workspace(&ctx, Workspace::Model);
         run(&mut app);
         assert!(!shown(&ctx, "editor"));
-        assert!(shown(&ctx, "tree"));
+        assert!(shown(&ctx, "tree") && shown(&ctx, "inspector"));
         // Cmd+E brings the code back.
         let key = egui::Event::Key {
             key: Key::E,
@@ -991,7 +962,7 @@ sphere(2); // Ball
         };
         let input = egui::RawInput { events: vec![key], ..Default::default() };
         let _ = ctx.run(input, |ctx| app.shortcuts(ctx));
-        assert!(app.settings.show_code);
+        assert_eq!(app.settings.workspace, Workspace::Code);
         run(&mut app);
         assert!(shown(&ctx, "editor"));
     }

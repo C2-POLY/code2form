@@ -25,12 +25,14 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use c2f_eval::customizer::Literal;
 use c2f_lang::ast::{BinaryOp, Element, Expr, ExprKind, File, Stmt, StmtKind, UnaryOp};
 use eframe::egui::{self, Button, Color32, ComboBox, DragValue, Id, Label, RichText, Sense, TextEdit};
 
 use super::StudioApp;
+use super::workspace::{InspectorTab, tab_strip};
 use crate::code_edit::{self, ArgKey, ArgValue, Call, Edit, Transform, Value};
 use crate::fillet::{self, CubeEdges, Rims};
 use crate::{customizer, theme};
@@ -1247,32 +1249,95 @@ fn edges_section(
 
 // ---- the panel in the app ----
 
-/// What the panel shows.
+/// What the Properties tab shows.
 enum Content {
+    /// Nothing selected.
+    Nothing,
+    /// The selection comes back with the render under way.
+    Updating,
     Call(Arc<Model>, Range<usize>),
     /// A single statement it cannot edit, with its description and why.
     Note(String, String),
     Many(usize),
 }
 
+/// The Properties tab: the actions its fields ask for.
+fn show_content(ui: &mut egui::Ui, content: &Content) -> Vec<Action> {
+    let palette = theme::palette();
+    match content {
+        Content::Nothing => {
+            ui.add_space(4.0);
+            let hint = "Select an object in the view or in the browser to change it here.";
+            ui.add(Label::new(RichText::new(hint).color(palette.text_dim)).wrap());
+        }
+        Content::Updating => {
+            ui.label(RichText::new("Updating…").color(palette.text_dim));
+        }
+        Content::Call(model, _) => return show_model(ui, model),
+        Content::Note(head, why) => {
+            ui.label(RichText::new(head).monospace().color(palette.code_text));
+            ui.add_space(4.0);
+            ui.add(Label::new(RichText::new(why).color(palette.text_dim)).wrap());
+        }
+        Content::Many(n) => {
+            ui.label(RichText::new(format!("{n} objects selected")).color(palette.text));
+            ui.add_space(4.0);
+            ui.label(RichText::new("Select a single object to edit its properties.").color(palette.text_dim));
+        }
+    }
+    Vec::new()
+}
+
 /// The model cached for the source and the values it was built from.
 type Cached = (u64, Arc<Result<Model, String>>);
 
 impl StudioApp {
-    /// A panel on the right with the selected call's arguments, shown while
-    /// something of a design is selected.
-    pub(super) fn properties_panel(&mut self, ctx: &egui::Context) {
+    /// The inspector, on the right of the Model workspace: the selected
+    /// call's arguments in one tab, the file's parameters in the other.
+    pub(super) fn inspector_panel(&mut self, ctx: &egui::Context) {
+        self.follow_selection();
+        let content = match self.panels.inspector {
+            InspectorTab::Properties => self.properties_content(ctx),
+            InspectorTab::Parameters => Content::Nothing,
+        };
+        let width = ctx.screen_rect().width();
+        let mut actions = Vec::new();
+        egui::SidePanel::right("inspector")
+            .frame(customizer::frame())
+            .resizable(true)
+            .default_width(290.0)
+            .width_range(240.0..=(width * 0.4).max(260.0))
+            .show(ctx, |ui| {
+                let tabs = [(InspectorTab::Properties, "Properties"), (InspectorTab::Parameters, "Parameters")];
+                tab_strip(ui, &mut self.panels.inspector, &tabs);
+                match self.panels.inspector {
+                    InspectorTab::Properties => {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            actions = show_content(ui, &content);
+                        });
+                    }
+                    InspectorTab::Parameters => {
+                        if self.doc.customizer.show(ui, false) && self.settings.render_while_typing {
+                            self.doc.render_deadline = Some(Instant::now() + super::PARAMETER_DEBOUNCE);
+                        }
+                    }
+                }
+            });
+        if let Content::Call(model, range) = content {
+            self.properties_actions(ctx, &model, range, actions);
+        }
+    }
+
+    /// What the Properties tab shows of the selection.
+    fn properties_content(&mut self, ctx: &egui::Context) -> Content {
         let shown_id = Id::new("properties-shown");
         let selection = self.doc.viewer.selection().to_vec();
         let content = match selection.as_slice() {
             // After an edit the selection comes back with the render: keep
-            // the panel meanwhile, so that the view does not jump.
-            [] if self.doc.busy() && ctx.data(|d| d.get_temp::<bool>(shown_id)).unwrap_or(false) => None,
-            [] => {
-                ctx.data_mut(|d| d.insert_temp(shown_id, false));
-                return;
-            }
-            [key] => Some(match (key.range(), self.selected_ranges()) {
+            // the tab meanwhile, so that it does not flicker.
+            [] if self.doc.busy() && ctx.data(|d| d.get_temp::<bool>(shown_id)).unwrap_or(false) => Content::Updating,
+            [] => Content::Nothing,
+            [key] => match (key.range(), self.selected_ranges()) {
                 (None, _) => Content::Note(
                     self.doc.viewer.describe(*key).0,
                     "Read-only: written in a library or an included file.".into(),
@@ -1285,40 +1350,12 @@ impl StudioApp {
                     Ok(model) => Content::Call(Arc::new(model.clone()), range),
                     Err(why) => Content::Note(self.doc.viewer.describe(*key).0, why.clone()),
                 },
-            }),
-            keys => Some(Content::Many(keys.len())),
+            },
+            keys => Content::Many(keys.len()),
         };
-        ctx.data_mut(|d| d.insert_temp(shown_id, true));
-        let width = ctx.screen_rect().width();
-        let mut actions = Vec::new();
-        egui::SidePanel::right("properties")
-            .frame(customizer::frame())
-            .resizable(true)
-            .default_width(280.0)
-            .width_range(230.0..=(width * 0.4).max(250.0))
-            .show(ctx, |ui| {
-                ui.label(RichText::new("Properties").strong().size(14.0).color(theme::palette().text));
-                ui.add_space(6.0);
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match &content {
-                    None => {
-                        ui.label(RichText::new("Updating…").color(theme::palette().text_faint));
-                    }
-                    Some(Content::Call(model, _)) => actions = show_model(ui, model),
-                    Some(Content::Note(head, why)) => {
-                        ui.label(RichText::new(head).monospace().color(theme::palette().code_text));
-                        ui.add_space(4.0);
-                        ui.add(Label::new(RichText::new(why).color(theme::palette().text_dim)).wrap());
-                    }
-                    Some(Content::Many(n)) => {
-                        ui.label(RichText::new(format!("{n} objects selected")).color(theme::palette().text));
-                        ui.add_space(4.0);
-                        ui.label(RichText::new("Select a single object to edit its properties.").color(theme::palette().text_dim));
-                    }
-                });
-            });
-        if let Some(Content::Call(model, range)) = content {
-            self.properties_actions(ctx, &model, range, actions);
-        }
+        let shown = !matches!(content, Content::Nothing);
+        ctx.data_mut(|d| d.insert_temp(shown_id, shown));
+        content
     }
 
     /// Does what the panel asked in one frame, until an action changes the
@@ -1377,6 +1414,7 @@ impl StudioApp {
                 self.doc.editor.focus(ctx);
             }
             Action::OpenParameter(name) => {
+                self.panels.inspector = InspectorTab::Parameters;
                 self.doc.customizer_open = Some(true);
                 self.doc.customizer.reveal(&name);
             }

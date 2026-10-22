@@ -12,7 +12,7 @@
 //! holding the first match of that text, and
 //! `CODE2FORM_SCREENSHOT_HANDLE=turn-z:30` holds its handles mid-drag
 //! (`move-x:12`, `scale-y:1.5`, `scale:2`). `CODE2FORM_APPEARANCE` picks
-//! the theme.
+//! the theme, and `CODE2FORM_WORKSPACE` the workspace (`model`, `code`).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

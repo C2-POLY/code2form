@@ -26,8 +26,8 @@ pub enum Action {
     ZoomOut,
     ZoomReset,
     Settings,
-    /// Hides or shows the code editor: the code-free mode.
-    ToggleCode,
+    /// From the Model workspace to the Code one, and back.
+    SwitchWorkspace,
 }
 
 const fn keys(modifiers: Modifiers, key: Key) -> KeyboardShortcut {
@@ -56,7 +56,7 @@ impl Action {
         Action::ZoomOut,
         Action::ZoomReset,
         Action::Settings,
-        Action::ToggleCode,
+        Action::SwitchWorkspace,
     ];
 
     /// As `settings.txt` writes it, after `shortcut-`.
@@ -79,7 +79,7 @@ impl Action {
             Action::ZoomOut => "zoom-out",
             Action::ZoomReset => "zoom-reset",
             Action::Settings => "settings",
-            Action::ToggleCode => "toggle-code",
+            Action::SwitchWorkspace => "workspace",
         }
     }
 
@@ -102,7 +102,7 @@ impl Action {
             Action::ZoomOut => "Smaller Interface",
             Action::ZoomReset => "Interface at 100%",
             Action::Settings => "Settings…",
-            Action::ToggleCode => "Show or Hide Code",
+            Action::SwitchWorkspace => "Switch Model / Code",
         }
     }
 
@@ -126,7 +126,7 @@ impl Action {
             Action::ZoomOut => keys(Modifiers::COMMAND, Key::Minus),
             Action::ZoomReset => keys(Modifiers::COMMAND, Key::Num0),
             Action::Settings => keys(Modifiers::COMMAND, Key::Comma),
-            Action::ToggleCode => keys(Modifiers::COMMAND, Key::E),
+            Action::SwitchWorkspace => keys(Modifiers::COMMAND, Key::E),
         }
     }
 }

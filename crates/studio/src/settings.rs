@@ -47,11 +47,8 @@ pub struct Settings {
     pub show_grid: bool,
     pub show_axes: bool,
     pub layer_height: f32,
-    /// The code editor shows; off, the code-free mode leaves the view,
-    /// the tree and the panels around it.
-    pub show_code: bool,
-    /// The tree of the program shows, between the editor and the view.
-    pub show_tree: bool,
+    /// What the window is laid out for: the mouse or the code.
+    pub workspace: Workspace,
     /// STL exports are binary rather than ASCII.
     pub binary_stl: bool,
     /// The folder Export… opens in; `None` for the design's own folder.
@@ -69,6 +66,47 @@ pub struct Settings {
     pub appearance: Appearance,
     /// Each action's keys.
     pub shortcuts: Shortcuts,
+}
+
+/// What the window is laid out for. Model: the tree, the modelling tools
+/// and the inspector around the view, to make an object with the mouse.
+/// Code: the editor and the file's parameters around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Workspace {
+    Model,
+    #[default]
+    Code,
+}
+
+impl Workspace {
+    pub const ALL: [Workspace; 2] = [Workspace::Model, Workspace::Code];
+
+    /// As `settings.txt` writes it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Workspace::Model => "model",
+            Workspace::Code => "code",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|w| w.id() == id)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Workspace::Model => "Model",
+            Workspace::Code => "Code",
+        }
+    }
+
+    /// The other one.
+    pub fn other(self) -> Self {
+        match self {
+            Workspace::Model => Workspace::Code,
+            Workspace::Code => Workspace::Model,
+        }
+    }
 }
 
 /// Where the window is, in the screen's points: the top left corner of its
@@ -105,8 +143,7 @@ impl Default for Settings {
             show_grid: true,
             show_axes: true,
             layer_height: LAYER_HEIGHT,
-            show_code: true,
-            show_tree: true,
+            workspace: Workspace::default(),
             binary_stl: false,
             export_folder: None,
             model_color: MODEL_COLOR,
@@ -159,8 +196,7 @@ impl Settings {
                 "code-size" => set(&mut settings.code_size, finite(value).map(|v| clamp(v, &CODE_SIZES))),
                 "grid" => set(&mut settings.show_grid, value.parse().ok()),
                 "axes" => set(&mut settings.show_axes, value.parse().ok()),
-                "code" => set(&mut settings.show_code, value.parse().ok()),
-                "tree" => set(&mut settings.show_tree, value.parse().ok()),
+                "workspace" => set(&mut settings.workspace, Workspace::from_id(value)),
                 "layer-height" => set(&mut settings.layer_height, finite(value).map(|v| clamp(v, &LAYER_HEIGHTS))),
                 "stl" => {
                     set(&mut settings.binary_stl, ["ascii", "binary"].iter().position(|&f| f == value).map(|i| i == 1))
@@ -197,8 +233,7 @@ impl Settings {
         text.push_str(&format!("grid = {}\n", self.show_grid));
         text.push_str(&format!("axes = {}\n", self.show_axes));
         text.push_str(&format!("layer-height = {}\n", self.layer_height));
-        text.push_str(&format!("code = {}\n", self.show_code));
-        text.push_str(&format!("tree = {}\n", self.show_tree));
+        text.push_str(&format!("workspace = {}\n", self.workspace.id()));
         text.push_str(&format!("stl = {}\n", if self.binary_stl { "binary" } else { "ascii" }));
         let export_folder = self.export_folder.as_deref().and_then(Path::to_str);
         if let Some(folder) = export_folder.filter(|f| !f.contains(['\n', '\r'])) {
@@ -306,8 +341,7 @@ mod tests {
             show_grid: false,
             show_axes: true,
             layer_height: 0.12,
-            show_code: false,
-            show_tree: false,
+            workspace: Workspace::Model,
             binary_stl: true,
             export_folder: Some(absolute("exports")),
             model_color: [0x12, 0xab, 0xef],

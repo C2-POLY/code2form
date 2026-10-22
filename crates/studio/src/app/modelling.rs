@@ -3,11 +3,11 @@
 //! the code ([`crate::code_edit`]) that the editor applies as one undo step,
 //! then the design renders again with the edited object still selected.
 //!
-//! Each feature lives in a file of its own: the properties panel
+//! Each feature lives in a file of its own: the workspaces and their
+//! panels (`workspace.rs`), the inspector and its properties
 //! (`properties.rs`), the move, turn and scale handles (`handles.rs`), the
-//! shapes toolbar and the booleans (`shapes.rs`), the tree of the
-//! program with the code-free mode (`tree.rs`), and the sketch mode
-//! (`sketch.rs`).
+//! shapes toolbar and the booleans (`shapes.rs`), the tree of the program
+//! (`tree.rs`), and the sketch mode (`sketch.rs`).
 
 use std::ops::Range;
 
@@ -20,19 +20,24 @@ use crate::theme;
 
 impl StudioApp {
     /// The panels of manual modelling, before the 3D view takes the rest
-    /// of the window.
+    /// of the window: in the Model workspace, the browser, the inspector
+    /// and the modelling tools.
     pub(super) fn modelling_panels(&mut self, ctx: &egui::Context) {
         if self.doc.is_circuit() {
             return;
         }
         self.sketch_panel(ctx);
+        let models = self.models();
+        // The view's card names the selection where no inspector does:
+        // in the Code workspace, and while sketching.
+        self.doc.viewer.selection_card = self.doc.sketch.active() || !models;
+        if !models {
+            return;
+        }
         self.tree_panel(ctx);
         // The sketch's own panel and tools take their place while sketching.
-        // The properties panel names the selection: the view's card would
-        // say it twice.
-        self.doc.viewer.selection_card = self.doc.sketch.active();
         if !self.doc.sketch.active() {
-            self.properties_panel(ctx);
+            self.inspector_panel(ctx);
             self.modelling_toolbar(ctx);
         }
     }

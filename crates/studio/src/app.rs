@@ -46,6 +46,7 @@ mod properties;
 mod shapes;
 mod sketch;
 mod tree;
+mod workspace;
 
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
@@ -396,6 +397,8 @@ pub struct StudioApp {
     screenshot: Option<Screenshot>,
     /// The tree of the active tab's program, as last read.
     tree: tree::TreeState,
+    /// The tabs picked in the side panels.
+    panels: workspace::Panels,
 }
 
 impl StudioApp {
@@ -463,6 +466,7 @@ impl StudioApp {
             title: String::new(),
             screenshot: Screenshot::from_env(),
             tree: tree::TreeState::default(),
+            panels: workspace::Panels::default(),
         };
         app.apply_settings(ctx);
         // A screenshot of a settings page, as `settings:shortcuts`.
@@ -1781,7 +1785,11 @@ impl StudioApp {
                 Action::ZoomOut => zoom_steps -= 1,
                 Action::ZoomReset => zoom_reset = true,
                 Action::Settings => self.settings_open = true,
-                Action::ToggleCode => self.toggle_code(ctx),
+                Action::SwitchWorkspace => {
+                    if !self.doc.is_circuit() {
+                        self.set_workspace(ctx, self.settings.workspace.other());
+                    }
+                }
             }
         }
         let size = if zoom_reset {
@@ -1867,6 +1875,10 @@ impl StudioApp {
                 ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
                 ui.label(RichText::new("Code2Form").strong().color(theme::palette().text).size(14.5));
                 ui.add_space(10.0);
+                if !self.doc.is_circuit() {
+                    self.workspace_switch(ctx, ui);
+                    ui.add_space(4.0);
+                }
                 toolbar_separator(ui);
 
                 if tool_button(ui, "New", "New file, in a new tab", Some(keys.get(Action::New))).clicked() {
@@ -1938,19 +1950,21 @@ impl StudioApp {
                         }
                         toolbar_separator(ui);
                     }
-                    self.tree_toggles(ctx, ui);
                     // A circuit has no parameters: room for its own toggles.
+                    // The Model workspace shows the parameters in its
+                    // inspector.
                     if self.doc.is_circuit() {
                         let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
                         toggle.on_hover_text("The parts of the library and your own, to add to the circuit");
-                    } else {
+                        toolbar_separator(ui);
+                    } else if self.shows_code() {
                         let mut shown = self.doc.customizer_shown();
-                        let toggle = ui.toggle_value(&mut shown, "Customizer");
+                        let toggle = ui.toggle_value(&mut shown, "Parameters");
                         if toggle.on_hover_text("Show the parameters the file declares").changed() {
                             self.doc.customizer_open = Some(shown);
                         }
+                        toolbar_separator(ui);
                     }
-                    toolbar_separator(ui);
                     ui.toggle_value(&mut self.doc.viewer.show_grid, "Grid").on_hover_text("Show the XY grid");
                     ui.toggle_value(&mut self.doc.viewer.show_axes, "Axes").on_hover_text("Show the axes");
                     ui.toggle_value(&mut self.doc.viewer.layer_view, "Layers")
@@ -2142,11 +2156,13 @@ impl StudioApp {
         }
     }
 
+    /// The code, on the left of the Code workspace; a design's tree is a
+    /// tab away.
     fn editor_panel(&mut self, ctx: &egui::Context) {
-        // The code-free mode.
-        if !self.settings.show_code {
+        if !self.shows_code() {
             return;
         }
+        let design = !self.doc.is_circuit();
         let width = ctx.screen_rect().width();
         egui::SidePanel::left("editor")
             .frame(Frame::new().fill(theme::palette().editor))
@@ -2154,7 +2170,20 @@ impl StudioApp {
             .default_width((width * 0.36).max(320.0))
             .width_range(260.0..=(width - 300.0).max(300.0))
             .show(ctx, |ui| {
-                if self.doc.editor.show(ui, &mut self.doc.text) && self.settings.render_while_typing {
+                if design {
+                    let tabs = Frame::new()
+                        .fill(theme::palette().panel)
+                        .inner_margin(Margin { left: 12, right: 12, top: 8, bottom: 0 });
+                    tabs.show(ui, |ui| {
+                        let choices = [(workspace::CodeTab::Code, "Code"), (workspace::CodeTab::Tree, "Tree")];
+                        workspace::tab_strip(ui, &mut self.panels.code_tab, &choices);
+                    });
+                }
+                if design && self.panels.code_tab == workspace::CodeTab::Tree {
+                    Frame::new().inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 }).show(ui, |ui| {
+                        self.tree_view(ctx, ui);
+                    });
+                } else if self.doc.editor.show(ui, &mut self.doc.text) && self.settings.render_while_typing {
                     let delay = Duration::from_millis(self.settings.render_delay.into());
                     self.doc.render_deadline = Some(Instant::now() + delay);
                 }
@@ -2209,8 +2238,10 @@ impl StudioApp {
         }
     }
 
+    /// The file's parameters, on the right of the Code workspace (the
+    /// Model one has them in its inspector).
     fn customizer_panel(&mut self, ctx: &egui::Context) {
-        if !self.doc.customizer_shown() {
+        if !self.shows_code() || !self.doc.customizer_shown() {
             return;
         }
         let width = ctx.screen_rect().width();
@@ -2220,7 +2251,7 @@ impl StudioApp {
             .default_width(300.0)
             .width_range(220.0..=(width * 0.4).max(240.0))
             .show(ctx, |ui| {
-                if self.doc.customizer.show(ui) && self.settings.render_while_typing {
+                if self.doc.customizer.show(ui, true) && self.settings.render_while_typing {
                     self.doc.render_deadline = Some(Instant::now() + PARAMETER_DEBOUNCE);
                 }
             });
