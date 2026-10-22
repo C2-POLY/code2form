@@ -24,6 +24,7 @@ use crate::screenshot::Screenshot;
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
 use crate::inspect;
+use crate::mount::{self, Mount};
 use crate::pick::{self, Hit};
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
@@ -111,6 +112,14 @@ pub struct StudioApp {
     selection: Option<Hit>,
     /// The box around each part of the circuit, as last rendered.
     part_boxes: Vec<Option<(glam::Vec3, glam::Vec3)>>,
+    /// How the parts were last shown, not to recolor them every frame.
+    shown_parts: Vec<Emphasis>,
+    /// The assembly mode, and its progress.
+    mount: Mount,
+    /// When the app started, for the pins that pulse.
+    started: Instant,
+    /// Where the 3D view is, as last shown.
+    view_rect: egui::Rect,
     /// The generation it was read for.
     circuit_generation: u64,
     /// The circuit's part files and their modification times, to render
@@ -157,6 +166,10 @@ impl StudioApp {
             hover: None,
             selection: None,
             part_boxes: Vec::new(),
+            shown_parts: Vec::new(),
+            mount: Mount::default(),
+            started: Instant::now(),
+            view_rect: egui::Rect::NOTHING,
             circuit_generation: 0,
             part_files: Vec::new(),
             editor: Editor::new(),
@@ -286,8 +299,15 @@ impl StudioApp {
                     self.circuit_generation = generation;
                     self.set_circuit(Some(circuit));
                     if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()) {
-                        self.selection = self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, &target));
-                        self.update_overlay();
+                        if let Some(step) = target.strip_prefix("assembly:").and_then(|n| n.parse::<usize>().ok()) {
+                            // Set before turning the mode on: a screenshot
+                            // leaves the saved progress as it is.
+                            self.mount.step = step.saturating_sub(1);
+                            self.set_mount(true);
+                        } else {
+                            self.selection = self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, &target));
+                            self.update_overlay();
+                        }
                     }
                 }
                 Reply::Exported { target, result } => match result {
@@ -338,6 +358,9 @@ impl StudioApp {
     /// How the wires, pins and parts show: what a selection picks out
     /// stands out, the rest is greyed out.
     fn look(&self) -> Look {
+        if let Some(look) = self.mount_look() {
+            return look;
+        }
         let (Some(wiring), Some(selection)) = (&self.wiring, self.selection) else { return Look::default() };
         let circuit = &wiring.circuit;
         let pick_out = |on: bool| if on { Emphasis::Strong } else { Emphasis::Dim };
@@ -373,7 +396,153 @@ impl StudioApp {
             }
             None => self.viewer.set_overlay(Default::default(), Default::default(), None),
         }
-        self.viewer.set_part_emphasis(&look.parts);
+        if look.parts != self.shown_parts {
+            self.viewer.set_part_emphasis(&look.parts);
+            self.shown_parts = look.parts;
+        }
+    }
+
+    // ---- Assembly ----
+
+    /// The wires of the circuit, by name, when there are any.
+    fn mount_names(&self) -> Option<Vec<String>> {
+        self.wiring.as_ref().map(|w| mount::wire_names(&w.circuit)).filter(|names| !names.is_empty())
+    }
+
+    /// The assembly mode's look: the wire on screen picked out, its pins
+    /// pulsing, the wires done as they are, the others greyed out.
+    fn mount_look(&self) -> Option<Look> {
+        if !self.mount.active {
+            return None;
+        }
+        let wiring = self.wiring.as_ref()?;
+        let names = self.mount_names()?;
+        let circuit = &wiring.circuit;
+        let step = self.mount.step.min(names.len() - 1);
+        let current = &circuit.wires[step];
+        let wires = (0..names.len())
+            .map(|i| match i {
+                _ if i == step => Emphasis::Strong,
+                _ if self.mount.is_done(&names, i) => Emphasis::Normal,
+                _ => Emphasis::Dim,
+            })
+            .collect();
+        let parts = (0..circuit.parts.len())
+            .map(|p| if p == current.from.part || p == current.to.part { Emphasis::Normal } else { Emphasis::Dim })
+            .collect();
+        // Two pulses a second.
+        let time = self.started.elapsed().as_secs_f32();
+        let pulse = 0.5 + 0.5 * (time * std::f32::consts::TAU * 2.0).sin();
+        Some(Look { wires, strong_pins: [current.from, current.to].into(), dim_pins: true, pulse: Some(pulse), parts })
+    }
+
+    /// Turns the assembly mode on or off.
+    fn set_mount(&mut self, active: bool) {
+        self.mount.active = active && self.mount_names().is_some();
+        if self.mount.active {
+            self.selection = None;
+            self.go_to_wire(self.mount.step);
+        }
+        self.update_overlay();
+    }
+
+    /// Shows wire `step` of the assembly, the camera turning to its pins.
+    fn go_to_wire(&mut self, step: usize) {
+        let Some(count) = self.mount_names().map(|n| n.len()) else { return };
+        self.mount.go(step, count);
+        self.report_mount_problem();
+        let Some(wiring) = &self.wiring else { return };
+        let wire = &wiring.circuit.wires[self.mount.step];
+        let place = |end| glam::Vec3::from(wiring.circuit.place(end).position.map(|c| c as f32));
+        let goal = mount::framing(place(wire.from), place(wire.to), &self.viewer.camera, self.viewer.aspect());
+        self.viewer.fly_to(goal);
+        self.update_overlay();
+    }
+
+    fn mount_next(&mut self) {
+        if let Some(names) = self.mount_names() {
+            self.mount.next(&names);
+            self.go_to_wire(self.mount.step);
+        }
+    }
+
+    fn mount_previous(&mut self) {
+        if let Some(names) = self.mount_names() {
+            self.mount.previous(names.len());
+            self.go_to_wire(self.mount.step);
+        }
+    }
+
+    fn report_mount_problem(&mut self) {
+        if let Some(problem) = self.mount.problem.take() {
+            self.console.log(Level::Warning, problem);
+        }
+    }
+
+    /// The assembly bar, over the top of the view: the instruction, the
+    /// wire's place in the order, and the buttons that step through.
+    fn mount_bar(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let (Some(wiring), Some(names)) = (&self.wiring, self.mount_names()) else { return };
+        let step = self.mount.step.min(names.len() - 1);
+        let instruction = mount::instruction(&wiring.circuit, step);
+        let label = wiring.circuit.wires[step].label.clone();
+        let mut done = self.mount.is_done(&names, step);
+        let done_count = self.mount.done_count(&names);
+        let (mut previous, mut next, mut restart, mut toggled) = (false, false, false, false);
+        egui::Area::new(Id::new("assembly-bar"))
+            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.top() + 12.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(Color32::from_black_alpha(200))
+                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_max_width(rect.width() - 48.0);
+                        ui.horizontal(|ui| {
+                            toggled = ui.checkbox(&mut done, "").on_hover_text("Done").changed();
+                            ui.label(RichText::new(&instruction).strong().size(14.0).color(wiring::TEXT));
+                            if let Some(label) = &label {
+                                ui.label(RichText::new(format!("· {label}")).size(13.0).color(wiring::TEXT_DIM));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let count = names.len();
+                            ui.label(RichText::new(format!("{} / {count}", step + 1)).strong().color(wiring::TEXT));
+                            ui.label(RichText::new(format!("· {done_count} done")).color(wiring::TEXT_DIM));
+                            ui.add_space(8.0);
+                            previous = ui
+                                .add_enabled(step > 0, Button::new("◀ Previous"))
+                                .on_hover_text("The previous wire (Left arrow)")
+                                .clicked();
+                            next = ui
+                                .button("Next ▶")
+                                .on_hover_text("Check this wire off and go to the next (Right arrow)")
+                                .clicked();
+                            restart = ui
+                                .button("Start over")
+                                .on_hover_text("Uncheck every wire and go back to the first")
+                                .clicked();
+                        });
+                    });
+            });
+        if toggled {
+            self.mount.set_done(&names, step, done);
+            self.report_mount_problem();
+            self.update_overlay();
+        }
+        let typing = ctx.memory(|m| m.focused().is_some());
+        let (left, right) = ctx.input(|i| (i.key_pressed(Key::ArrowLeft), i.key_pressed(Key::ArrowRight)));
+        if next || (right && !typing) {
+            self.mount_next();
+        } else if previous || (left && !typing) {
+            self.mount_previous();
+        } else if restart {
+            self.mount.restart();
+            self.report_mount_problem();
+            self.go_to_wire(0);
+        }
     }
 
     /// Selects something of the circuit, or nothing; a wire also puts the
@@ -406,7 +575,14 @@ impl StudioApp {
             }
         }
         if response.clicked() {
-            self.select(ctx, self.hover);
+            if self.mount.active {
+                // Assembling, a click on a wire goes to its step.
+                if let Some(Hit::Wire(index)) = self.hover {
+                    self.go_to_wire(index);
+                }
+            } else {
+                self.select(ctx, self.hover);
+            }
         }
         let escape = ctx.input(|i| i.key_pressed(Key::Escape)) && ctx.memory(|m| m.focused().is_none());
         if escape && self.selection.is_some() {
@@ -427,6 +603,8 @@ impl StudioApp {
                 self.remember(&path);
                 // A circuit has no parameters, nor presets next to it.
                 self.customizer.open(Some(path.as_path()).filter(|p| !circuit::is_circuit(p)));
+                self.mount.open(Some(path.as_path()).filter(|p| circuit::is_circuit(p)));
+                self.report_mount_problem();
                 if !circuit::is_circuit(&path) {
                     self.set_circuit(None);
                 }
@@ -447,6 +625,7 @@ impl StudioApp {
         self.frame_next = true;
         self.editor.error_line = None;
         self.customizer.open(None);
+        self.mount.open(None);
         self.set_circuit(None);
         self.console.log(Level::Info, "New file");
         self.render_now();
@@ -530,7 +709,12 @@ impl StudioApp {
                 self.remember(&path);
                 if circuit::is_circuit(&path) {
                     self.customizer.open(None);
+                    if self.path.as_deref() != Some(path.as_path()) {
+                        self.mount.moved(&path);
+                        self.report_mount_problem();
+                    }
                 } else {
+                    self.mount.open(None);
                     self.customizer.moved(&path);
                     self.set_circuit(None);
                 }
@@ -758,6 +942,15 @@ impl StudioApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    if self.is_circuit() {
+                        let button = egui::Button::selectable(self.mount.active, "Assembly");
+                        let toggle = ui.add_enabled(self.mount_names().is_some(), button);
+                        let hint = "Wire the circuit one wire at a time, in the file's order";
+                        if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
+                            self.set_mount(!self.mount.active);
+                        }
+                        toolbar_separator(ui);
+                    }
                     let mut shown = self.customizer_shown();
                     let toggle = ui.toggle_value(&mut shown, "Customizer");
                     if toggle.on_hover_text("Show the parameters the file declares").changed() {
@@ -1008,12 +1201,15 @@ impl StudioApp {
             // A double-click on a part opens it rather than framing the view.
             self.viewer.frame_on_double_click = !matches!(self.hover, Some(Hit::Part(_)));
             let response = self.viewer.show(ui, &status);
+            self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
             if let Some(wiring) = &self.wiring {
                 let painter = ui.painter_at(response.rect);
                 let right = if self.viewer.layer_view { 70.0 } else { 12.0 };
-                wiring::paint_legend(&painter, response.rect, right, &wiring.legend());
-                if let Some(selection) = self.selection {
+                // Below the assembly bar, when it is shown.
+                let top = if self.mount.active { 110.0 } else { 12.0 };
+                wiring::paint_legend(&painter, response.rect, right, top, &wiring.legend());
+                if let Some(selection) = self.selection.filter(|_| !self.mount.active) {
                     let (title, lines) = inspect::card(&wiring.circuit, selection, &self.text);
                     inspect::paint_card(&painter, response.rect, &title, &lines);
                 }
@@ -1025,6 +1221,12 @@ impl StudioApp {
                 }
             }
         });
+        if self.mount.active {
+            self.mount_bar(ctx, self.view_rect);
+            // The pins of the wire on screen pulse.
+            self.update_overlay();
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
         if let Some(edit) = self.viewer.take_pause_edit() {
             self.apply_pause_edit(ctx, edit);
         }

@@ -87,6 +87,8 @@ pub struct Viewer {
     /// The camera turns around the model by itself until a drag in the
     /// view or the toggle stops it.
     pub turntable: bool,
+    /// Where the camera is flying to, smoothly, until a drag stops it.
+    goal: Option<Camera>,
     bounds: Option<(Vec3, Vec3)>,
     /// The box around a circuit's wires and pins, framed with the model.
     overlay_bounds: Option<(Vec3, Vec3)>,
@@ -132,6 +134,7 @@ impl Viewer {
             layer: None,
             heights: None,
             turntable: false,
+            goal: None,
             bounds: None,
             overlay_bounds: None,
             part_ranges: Vec::new(),
@@ -223,7 +226,8 @@ impl Viewer {
             1.0 - (pos.y - rect.top()) / rect.height() * 2.0,
         );
         let origin = self.camera.eye();
-        let direction = (self.camera.point_at(ndc, rect.width() / rect.height().max(1.0)) - origin).normalize_or(Vec3::Z);
+        let aspect = rect.width() / rect.height().max(1.0);
+        let direction = (self.camera.point_at(ndc, aspect) - origin).normalize_or(Vec3::Z);
         // Five points either way, at a distance of one.
         let slack = 5.0 * 2.0 * (self.camera.fov_y * 0.5).tan() / rect.height().max(1.0);
         Ray { origin, direction, slack }
@@ -292,6 +296,17 @@ impl Viewer {
         !self.pauses.is_empty()
     }
 
+    /// Turns the camera smoothly to `goal`.
+    pub fn fly_to(&mut self, goal: Camera) {
+        self.turntable = false;
+        self.goal = Some(goal);
+    }
+
+    /// Width over height of the view, as last shown.
+    pub fn aspect(&self) -> f32 {
+        self.aspect
+    }
+
     pub fn view_all(&mut self) {
         let (lo, hi) = self.frame_box();
         self.camera.frame(lo, hi, self.aspect);
@@ -352,6 +367,13 @@ impl Viewer {
             self.camera.spin(dt);
             ui.ctx().request_repaint();
         }
+        if let Some(goal) = self.goal {
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            if self.camera.approach(&goal, dt) {
+                self.goal = None;
+            }
+            ui.ctx().request_repaint();
+        }
 
         let view = self.camera.view();
         let projection = self.camera.projection(self.aspect, self.scene_radius());
@@ -401,6 +423,7 @@ impl Viewer {
         if response.drag_started() {
             // Hand the camera back to the mouse.
             self.turntable = false;
+            self.goal = None;
         }
         let delta = response.drag_delta();
         if response.dragged() && delta != Vec2::ZERO {

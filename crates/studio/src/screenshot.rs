@@ -2,7 +2,8 @@
 //! first render is on screen, for checking the UI from scripts.
 //!
 //! `CODE2FORM_SCREENSHOT_SELECT` selects something of a circuit first: a
-//! pin as `part.pin`, a part by its name, or a wire as `wire:7` (from 1).
+//! pin as `part.pin`, a part by its name, or a wire as `wire:7` (from 1);
+//! `assembly:7` shows the assembly mode at its seventh wire.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

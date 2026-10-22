@@ -181,10 +181,10 @@ pub fn color32(c: [f32; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
-/// The legend, in the top-right corner of the view, `right` points from
-/// its edge: a swatch per color, its name and its wires' labels, on a dark
+/// The legend, in the top-right corner of the view, `right` and `top`
+/// points from its edges: a swatch per color, its name and its wires' labels, on a dark
 /// card that reads the same whatever is behind it.
-pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, entries: &[LegendEntry]) {
+pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, top: f32, entries: &[LegendEntry]) {
     if entries.is_empty() {
         return;
     }
@@ -203,7 +203,7 @@ pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, entries: &[
     let row_height = 18.0;
     let width = (22.0 + name_width + 12.0 + labels_width).max(title.size().x) + 20.0;
     let height = 30.0 + rows.len() as f32 * row_height + 6.0;
-    let card = Rect::from_min_size(Pos2::new(rect.right() - right - width, rect.top() + 12.0), Vec2::new(width, height));
+    let card = Rect::from_min_size(Pos2::new(rect.right() - right - width, rect.top() + top), Vec2::new(width, height));
     let border = Stroke::new(1.0, Color32::from_white_alpha(20));
     painter.rect(card, CornerRadius::same(8), Color32::from_black_alpha(170), border, StrokeKind::Inside);
     painter.galley(card.min + Vec2::new(10.0, 8.0), title, TEXT);

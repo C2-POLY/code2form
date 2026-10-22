@@ -10,6 +10,7 @@ mod editor;
 mod find;
 mod highlight;
 mod inspect;
+mod mount;
 mod open_events;
 mod pause_edit;
 mod pick;

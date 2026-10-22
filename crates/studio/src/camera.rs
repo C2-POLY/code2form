@@ -127,6 +127,27 @@ impl Camera {
         self.frame(lo, hi, aspect);
     }
 
+    /// Moves part of the way to `goal` for `dt` seconds, smoothly, the yaw
+    /// the short way round; returns whether it is there.
+    pub fn approach(&mut self, goal: &Camera, dt: f32) -> bool {
+        // A quarter of a second brings it most of the way.
+        let k = 1.0 - (-dt * 9.0).exp();
+        let (pi, tau) = (std::f32::consts::PI, std::f32::consts::TAU);
+        let turn = (goal.yaw - self.yaw + pi).rem_euclid(tau) - pi;
+        self.yaw = (self.yaw + turn * k).rem_euclid(tau);
+        self.pitch += (goal.pitch - self.pitch) * k;
+        self.target += (goal.target - self.target) * k;
+        self.distance += (goal.distance - self.distance) * k;
+        let there = turn.abs() < 1e-3
+            && (goal.pitch - self.pitch).abs() < 1e-3
+            && self.target.distance(goal.target) < 1e-3 * goal.distance
+            && (goal.distance - self.distance).abs() < 1e-3 * goal.distance;
+        if there {
+            *self = Camera { yaw: goal.yaw.rem_euclid(std::f32::consts::TAU), ..*goal };
+        }
+        there
+    }
+
     /// Looks along a fixed direction (yaw, pitch in degrees).
     pub fn look_from(&mut self, yaw_degrees: f32, pitch_degrees: f32) {
         self.yaw = yaw_degrees.to_radians();
@@ -152,6 +173,21 @@ mod tests {
             stepped.spin(1.0 / 60.0);
         }
         assert!((stepped.yaw - camera.yaw).abs() < 1e-4);
+    }
+
+    #[test]
+    fn approach_eases_in_and_turns_the_short_way() {
+        let mut camera = Camera { yaw: 0.1, ..Camera::default() };
+        let goal = Camera { yaw: std::f32::consts::TAU - 0.1, pitch: 0.9, target: Vec3::new(5.0, 0.0, 0.0), ..camera };
+        assert!(!camera.approach(&goal, 1.0 / 60.0));
+        // Through 0, not the long way round through pi.
+        assert!(camera.yaw < 0.1 || camera.yaw > 6.0, "{}", camera.yaw);
+        let mut frames = 1;
+        while !camera.approach(&goal, 1.0 / 60.0) {
+            frames += 1;
+            assert!(frames < 120, "never arrives");
+        }
+        assert_eq!((camera.pitch, camera.target), (goal.pitch, goal.target));
     }
 
     #[test]

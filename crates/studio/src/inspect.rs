@@ -19,6 +19,8 @@ pub fn pin_name(circuit: &Circuit, end: End) -> String {
 }
 
 /// `xiao D3 (GPIO4, A3)`: a wire's end, as an instruction gives it.
+///
+/// Arrows between ends are `➡`: egui's default fonts have no `→`.
 pub fn end_text(circuit: &Circuit, end: End) -> String {
     let pin = circuit.pin(end);
     let mut text = format!("{} {}", circuit.parts[end.part].name, pin.name);
@@ -53,7 +55,7 @@ pub fn bubble(circuit: &Circuit, hit: Hit) -> String {
         Hit::Pin(end) => pin_name(circuit, end),
         Hit::Wire(index) => {
             let wire = &circuit.wires[index];
-            format!("{}: {} → {}", wire_title(circuit, index), circuit.end_name(wire.from), circuit.end_name(wire.to))
+            format!("{}: {} ➡ {}", wire_title(circuit, index), circuit.end_name(wire.from), circuit.end_name(wire.to))
         }
         Hit::Part(index) => {
             let part = &circuit.parts[index];
@@ -92,7 +94,7 @@ pub fn card(circuit: &Circuit, hit: Hit, source: &str) -> (String, Vec<String>) 
                 .iter()
                 .filter(|&&b| b == b'\n')
                 .count();
-            let ends = format!("{} → {}", end_text(circuit, wire.from), end_text(circuit, wire.to));
+            let ends = format!("{} ➡ {}", end_text(circuit, wire.from), end_text(circuit, wire.to));
             (wire_title(circuit, index), vec![ends, format!("Line {} of the circuit", line + 1)])
         }
         Hit::Part(index) => {
@@ -153,8 +155,8 @@ mod tests {
         let a = End { part: 0, pin: 0 };
         assert_eq!(bubble(&circuit, Hit::Pin(a)), "a · A · first");
         assert_eq!(bubble(&circuit, Hit::Pin(End { part: 0, pin: 1 })), "a · B");
-        assert_eq!(bubble(&circuit, Hit::Wire(0)), "Red wire · 5 V: a.A → b.A");
-        assert_eq!(bubble(&circuit, Hit::Wire(2)), "Wire: a.B → b.B");
+        assert_eq!(bubble(&circuit, Hit::Wire(0)), "Red wire · 5 V: a.A ➡ b.A");
+        assert_eq!(bubble(&circuit, Hit::Wire(2)), "Wire: a.B ➡ b.B");
         assert_eq!(bubble(&circuit, Hit::Part(1)), "b · board.c2f");
 
         let (title, lines) = card(&circuit, Hit::Pin(a), "");
@@ -167,7 +169,7 @@ mod tests {
         circuit.wires[0].span = c2f_lang::Span::new(5, 9);
         let (title, lines) = card(&circuit, Hit::Wire(0), source);
         assert_eq!(title, "Red wire · 5 V");
-        assert_eq!(lines, ["a A (first) → b A (first)", "Line 4 of the circuit"]);
+        assert_eq!(lines, ["a A (first) ➡ b A (first)", "Line 4 of the circuit"]);
         let (_, lines) = card(&circuit, Hit::Part(0), "");
         assert_eq!(lines, ["No parameters", "Double-click to open board.c2f"]);
     }
