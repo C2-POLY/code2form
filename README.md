@@ -76,7 +76,9 @@ they are. Written in Rust, it renders as you type.
   assembled where the circuit places them (not the wires).
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
-  picture of it and exports it, without a window.
+  picture of it and exports it, without a window; and describes a
+  circuit from the library's parts, has it checked and looks at it with
+  its wires.
 
 ## AI agents (MCP)
 
@@ -99,6 +101,29 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 | `parameters` | The customizer parameters: name, group, description, default and widget |
 | `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report |
 | `export` | Writes a solid as STL or 3MF, or a 2D model as SVG or DXF, to `output`, in the `format` its extension gives |
+
+For electronics, the agent finds parts and describes a circuit (`.c2fc`).
+The circuit tools take the circuit's text as `code` (its part files
+resolving from `working_dir`, then the library folders) or a file as
+`path`.
+
+| Tool | What it returns |
+|---|---|
+| `library_parts` | The parts in the `electronics/` folders of the library paths: the name a circuit gives as `part`, the file, and the file's first comment line |
+| `part_pins` | A part's pins (name, label, type, voltage, reserved, position, direction), mount holes and ports, and its badly written annotations, from `code` or `path` (as is, from `working_dir`, or from the library) |
+| `check_circuit` | Whether the circuit is fit to solder (`ok`): its errors and warnings with their file, line and column, from reading it, evaluating its parts and checking its wiring |
+| `circuit_image` | A PNG picture of the circuit, its parts placed and its wires as tubes in their colors, from `view`, `width` by `height` pixels; `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others |
+| `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
+| `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
+
+For example, ask Claude Code: "With the Code2Form tools, build a
+`robot.c2fc` circuit for a XIAO ESP32-S3 that drives a DC motor through
+a DRV8833 and reads a button: look up the parts' pins, check the circuit
+until it has no errors, and show me the wiring." The agent lists the
+parts, reads their pins, writes the circuit, validates it with
+`check_circuit`, looks at it with `circuit_image` and gives the wiring
+list. Then open `robot.c2fc` in the app to see it in 3D, and
+`c2f circuit wires robot.c2fc` prints the list to solder from.
 
 The picture comes from a small software renderer in `c2f-geom`, needing
 no screen or GPU: the app's colors, lighting and framing, with outlines

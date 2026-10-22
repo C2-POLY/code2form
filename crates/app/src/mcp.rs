@@ -11,6 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::Export;
 
+mod circuit;
+
 /// The protocol versions this server speaks, the latest first.
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -23,7 +25,11 @@ bounding box; `image` returns a picture of the model from a view; \
 with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D). \
 `pause(z, message);` pauses a 3D print once it is done up to height `z`, \
 to drop magnets or nuts into closed cavities: the 3MF carries the pauses \
-for PrusaSlicer.";
+for PrusaSlicer. For electronics, `library_parts` lists the parts and \
+`part_pins` their pins; a circuit (`.c2fc`, TOML) places parts and wires \
+their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
+`circuit_image` pictures it with its wires, `circuit_wires` and \
+`circuit_bom` list its wires in order and its parts.";
 
 /// The picture's size when the agent gives none, and the largest it can ask.
 const IMAGE_SIZE: (u64, u64) = (800, 600);
@@ -104,7 +110,7 @@ fn initialize(params: &Value) -> Value {
 
 fn tools() -> Value {
     let views: Vec<&str> = c2f_geom::VIEWS.iter().map(|(name, _, _)| *name).chain(["isometric"]).collect();
-    json!([
+    let mut tools = json!([
         {
             "name": "render",
             "title": "Render a model",
@@ -143,7 +149,11 @@ fn tools() -> Value {
                 "format": { "type": "string", "enum": ["stl", "3mf", "svg", "dxf"], "description": "Default: the output's extension." },
             }), &["output"]),
         },
-    ])
+    ]);
+    if let Some(tools) = tools.as_array_mut() {
+        tools.extend(circuit::tools());
+    }
+    tools
 }
 
 /// The input schema of a tool that names a model, with `properties` and
@@ -171,7 +181,11 @@ fn model_schema(properties: Value, required: &[&str]) -> Value {
             "description": "With `code`: the folder its includes, `use`s and imported files resolve from (default: the server's current directory).",
         },
     });
-    json!({ "type": "object", "properties": merge(model, properties), "required": required })
+    schema_of(merge(model, properties), required)
+}
+
+fn schema_of(properties: Value, required: &[&str]) -> Value {
+    json!({ "type": "object", "properties": properties, "required": required })
 }
 
 fn merge(mut a: Value, b: Value) -> Value {
@@ -181,16 +195,19 @@ fn merge(mut a: Value, b: Value) -> Value {
     a
 }
 
+/// A tool: its content, or the error the agent reads.
+type Tool = fn(&Value) -> Result<Vec<Value>, String>;
+
 /// Runs a tool. Its failures are results marked as errors, which the agent
 /// reads; only a call that names no known tool is a protocol error.
 fn call(params: &Value) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).ok_or((-32602, "tools/call needs the tool's `name`".into()))?;
-    let tool: fn(&Value) -> Result<Vec<Value>, String> = match name {
+    let tool: Tool = match name {
         "render" => render_tool,
         "parameters" => parameters_tool,
         "image" => image_tool,
         "export" => export_tool,
-        _ => return Err((-32602, format!("unknown tool: {name}"))),
+        _ => circuit::tool(name).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
     if !args.is_object() {
@@ -238,6 +255,16 @@ fn parameters_tool(args: &Value) -> Result<Vec<Value>, String> {
 }
 
 fn image_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let (yaw, pitch, width, height) = view_and_size(args)?;
+    let (rendered, report) = render(args)?;
+    let png = rendered
+        .png(yaw, pitch, width, height)
+        .ok_or_else(|| format!("the model is empty: nothing to draw\n{}", pretty(&report)))?;
+    Ok(vec![json!({ "type": "image", "data": base64(&png), "mimeType": "image/png" }), text(pretty(&report))])
+}
+
+/// The camera's angles and the picture's size the arguments ask for.
+fn view_and_size(args: &Value) -> Result<(f32, f32, usize, usize), String> {
     let view = args.get("view").and_then(Value::as_str).unwrap_or("diagonal");
     let view = if view == "isometric" { "diagonal" } else { view };
     let &(_, yaw, pitch) = c2f_geom::VIEWS
@@ -251,12 +278,7 @@ fn image_tool(args: &Value) -> Result<Vec<Value>, String> {
             _ => Err(format!("`{key}` must be a whole number of pixels from 1 to {MAX_IMAGE_SIZE}")),
         },
     };
-    let (width, height) = (size("width", IMAGE_SIZE.0)?, size("height", IMAGE_SIZE.1)?);
-    let (rendered, report) = render(args)?;
-    let png = rendered
-        .png(yaw, pitch, width, height)
-        .ok_or_else(|| format!("the model is empty: nothing to draw\n{}", pretty(&report)))?;
-    Ok(vec![json!({ "type": "image", "data": base64(&png), "mimeType": "image/png" }), text(pretty(&report))])
+    Ok((yaw, pitch, size("width", IMAGE_SIZE.0)?, size("height", IMAGE_SIZE.1)?))
 }
 
 fn export_tool(args: &Value) -> Result<Vec<Value>, String> {
