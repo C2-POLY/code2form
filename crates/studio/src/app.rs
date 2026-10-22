@@ -1602,7 +1602,7 @@ impl StudioApp {
         if ctx.memory(|m| m.focused().is_none()) {
             // Shift+Cmd+Z first: Cmd+Z also matches it.
             let [redo, undo] = ctx.input_mut(|i| [REDO, UNDO].map(|s| i.consume_shortcut(&s)));
-            if (undo || redo) && self.editor.undo_step(ctx, &mut self.text, undo) {
+            if (undo || redo) && self.doc.editor.undo_step(ctx, &mut self.doc.text, undo) {
                 self.render_now();
             }
         }
