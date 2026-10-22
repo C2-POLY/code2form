@@ -2109,7 +2109,9 @@ impl StudioApp {
     fn view_panel(&mut self, ctx: &egui::Context) {
         let mut remove_part = None;
         egui::CentralPanel::default().frame(Frame::new().fill(theme::BG)).show(ctx, |ui| {
-            let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
+            // A sketch being drawn is something to show: no empty-state card
+            // over it.
+            let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty) || self.doc.sketch.active();
             let status = viewer::Status {
                 rendering: self.doc.busy(),
                 failed: self.doc.failed,
