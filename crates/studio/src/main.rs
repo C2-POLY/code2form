@@ -6,6 +6,7 @@ mod app_icon;
 mod camera;
 mod catalogue;
 mod circuit;
+mod code_edit;
 mod console;
 mod customizer;
 mod editor;
