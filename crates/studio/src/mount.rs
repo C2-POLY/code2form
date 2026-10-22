@@ -82,6 +82,12 @@ impl Mount {
         }
     }
 
+    /// Whether this is the progress of the circuit at `circuit`: progress
+    /// is only ever written for the circuit it was read for.
+    pub fn is_for(&self, circuit: &Path) -> bool {
+        self.path.as_deref() == Some(progress_path(circuit).as_path())
+    }
+
     /// The circuit was saved under a new name: its progress goes along.
     pub fn moved(&mut self, path: &Path) {
         self.path = Some(progress_path(path));
@@ -205,6 +211,7 @@ mod tests {
         assert_eq!((mount.step, mount.done_count(&names)), (2, 3));
         mount.set_done(&names, 1, false);
         assert_eq!(progress_path(&path).file_name().unwrap(), "test.mount.json");
+        assert!(mount.is_for(&path) && !mount.is_for(&path.with_file_name("other.c2fc")));
 
         let mut again = Mount::default();
         again.open(Some(&path));

@@ -162,8 +162,13 @@ impl PartRender {
     }
 }
 
-/// What renders an enclosure: its file, its text, and the circuit's text.
+/// What renders an enclosure: its file, its text, and the circuit's text
+/// with its parts' (their pins, holes and ports shape it).
 type EnclosureKey = (PathBuf, String, String);
+
+/// What the collisions come from: each part's render and placement, and
+/// the enclosure's render; held, so that a render compares by identity.
+type CollisionKey = (Vec<(Arc<PartRender>, [[f64; 4]; 4])>, Option<Arc<PartRender>>);
 
 /// What renders a part: its file, and its text with the parameters set.
 type Key = (PathBuf, String);
@@ -177,6 +182,9 @@ fn key(instance: &Instance) -> Key {
 pub struct PartCache {
     parts: HashMap<Key, Arc<PartRender>>,
     enclosure: Option<(EnclosureKey, Arc<PartRender>)>,
+    collisions: Option<(CollisionKey, Vec<Collision>)>,
+    /// How many times collisions were computed, for tests.
+    collision_runs: usize,
 }
 
 impl PartCache {
@@ -254,7 +262,14 @@ impl PartCache {
                 return Some(Arc::new(PartRender::failed(vec![line])));
             }
         };
-        let key = (path.clone(), text, source.to_string());
+        let mut inputs = source.to_string();
+        for part in &circuit.parts {
+            inputs.push('\0');
+            inputs.push_str(&part.path.to_string_lossy());
+            inputs.push('\0');
+            inputs.push_str(&part.source_with_params());
+        }
+        let key = (path.clone(), text, inputs);
         match &self.enclosure {
             Some((known, render)) if *known == key => Some(render.clone()),
             _ => {
@@ -263,6 +278,36 @@ impl PartCache {
                 Some(rendered)
             }
         }
+    }
+
+    /// [`collisions`], computed again only when a part's render or place,
+    /// or the enclosure's render, changed: not for a wire's color.
+    pub fn collisions(
+        &mut self,
+        circuit: &Circuit,
+        parts: &[Arc<PartRender>],
+        enclosure: Option<&Arc<PartRender>>,
+    ) -> Vec<Collision> {
+        let placed = parts.iter().zip(&circuit.parts).map(|(part, instance)| (part.clone(), instance.matrix())).collect();
+        let key: CollisionKey = (placed, enclosure.cloned());
+        let same = |known: &CollisionKey| {
+            known.0.len() == key.0.len()
+                && known.0.iter().zip(&key.0).all(|(a, b)| Arc::ptr_eq(&a.0, &b.0) && a.1 == b.1)
+                && match (&known.1, &key.1) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        };
+        if let Some((known, found)) = &self.collisions {
+            if same(known) {
+                return found.clone();
+            }
+        }
+        self.collision_runs += 1;
+        let found = collisions(circuit, parts, enclosure.map(|e| &**e));
+        self.collisions = Some((key, found.clone()));
+        found
     }
 }
 
@@ -532,6 +577,43 @@ to = "b.B"
         assert!(found.iter().any(|c| c.part == touch && c.other.is_none() && c.volume > 1.0), "{found:?}");
         let lines = collision_lines(&circuit, &found);
         assert!(lines.iter().any(|l| l.level == Level::Warning && l.text.contains("`touch` runs into the enclosure")));
+    }
+
+    #[test]
+    fn collisions_and_the_enclosure_follow_what_they_come_from() {
+        let dir = parts_folder("enclosure");
+        std::fs::write(dir.join("box.c2f"), "translate([-5, -5, -1]) cube([60, 40, 1.5]);\n").unwrap();
+        let path = dir.join("test.c2fc");
+        let source = format!("enclosure = \"box.c2f\"\n{CIRCUIT}");
+        let circuit = c2f_circuit::parse(&source, &path, &[]).unwrap();
+        let mut cache = PartCache::default();
+        let parts = cache.update(&circuit, &[], crate::worker::render_part);
+        let renders = AtomicUsize::new(0);
+        let render = |text: &str, file: &Path| {
+            renders.fetch_add(1, Ordering::Relaxed);
+            crate::worker::render_enclosure(text, file, &path, &circuit, &[])
+        };
+        let enclosure = cache.enclosure(&circuit, &source, render).unwrap();
+        let found = cache.collisions(&circuit, &parts, Some(&enclosure));
+        // Every board sinks 0.5 mm into the box; d sits in a, which
+        // overlaps b turned onto it.
+        assert!(found.iter().filter(|c| c.other.is_none()).count() >= 3, "{found:?}");
+        // The same parts again: neither the enclosure nor the collisions
+        // run again.
+        let again = cache.enclosure(&circuit, &source, |t, f| crate::worker::render_enclosure(t, f, &path, &circuit, &[]));
+        assert!(Arc::ptr_eq(&again.unwrap(), &enclosure));
+        assert_eq!(cache.collisions(&circuit, &parts, Some(&enclosure)), found);
+        assert_eq!((renders.load(Ordering::Relaxed), cache.collision_runs), (1, 1));
+
+        // A part file changed on disk renders the enclosure again.
+        std::fs::write(dir.join("plain.c2f"), "// @pin X [0, 0, 0] -z\ncube(3);\n").unwrap();
+        let circuit = c2f_circuit::parse(&source, &path, &[]).unwrap();
+        let parts = cache.update(&circuit, &[], crate::worker::render_part);
+        let changed = cache.enclosure(&circuit, &source, |t, f| crate::worker::render_enclosure(t, f, &path, &circuit, &[]));
+        assert!(!Arc::ptr_eq(&changed.clone().unwrap(), &enclosure));
+        cache.collisions(&circuit, &parts, changed.as_ref());
+        assert_eq!(cache.collision_runs, 2);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

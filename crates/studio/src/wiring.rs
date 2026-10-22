@@ -80,6 +80,8 @@ pub struct Wiring {
     pub lengths: Vec<f64>,
     /// Pins that have a wire.
     pub wired: HashSet<End>,
+    /// Each wire's name for the assembly's progress.
+    pub names: Vec<String>,
 }
 
 impl Wiring {
@@ -88,7 +90,8 @@ impl Wiring {
         let colors = circuit.wires.iter().map(|w| wire_color(w.color.as_deref())).collect();
         let wired = circuit.wires.iter().flat_map(|w| [w.from, w.to]).collect();
         let lengths = paths.iter().map(|path| route::length_of(path)).collect();
-        Wiring { circuit, paths, colors, lengths, wired }
+        let names = crate::mount::wire_names(&circuit);
+        Wiring { circuit, paths, colors, lengths, wired, names }
     }
 
     /// Every pin of every part.

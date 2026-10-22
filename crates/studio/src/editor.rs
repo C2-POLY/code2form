@@ -444,8 +444,7 @@ impl Editor {
     /// Puts the cursor at the start of the line holding byte `offset` of
     /// `text`, and scrolls it into view.
     pub fn go_to(&mut self, ctx: &egui::Context, text: &str, offset: usize) {
-        let offset = offset.min(text.len());
-        let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+        let line_start = line_start(text, offset);
         let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();
         state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(char_index(text, line_start)))));
         state.store(ctx, self.id);
@@ -539,6 +538,17 @@ fn byte_index(text: &str, char_index: usize) -> usize {
 }
 
 /// The character index of a byte offset on a character boundary.
+/// The start of the line holding byte `offset` of `text`, wherever the
+/// offset falls: past the end, or inside a character (it may come from an
+/// older text).
+fn line_start(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    text[..offset].rfind('\n').map_or(0, |i| i + 1)
+}
+
 fn char_index(text: &str, byte: usize) -> usize {
     text.get(..byte).map_or_else(|| text.chars().count(), |before| before.chars().count())
 }
@@ -890,5 +900,17 @@ mod tests {
     fn lines_and_columns() {
         assert_eq!(line_and_column("ab\nécd", 5), (1, 2));
         assert_eq!(line_and_column("", 0), (0, 0));
+    }
+
+    #[test]
+    fn go_to_takes_any_offset() {
+        let text = "a\néé\nb";
+        assert_eq!(line_start(text, 3), 2);
+        // Inside `é`, and past the end.
+        assert_eq!(line_start(text, 4), 2);
+        assert_eq!(line_start(text, 99), 7);
+        let mut editor = Editor::new();
+        editor.go_to(&egui::Context::default(), text, 3);
+        assert_eq!(editor.reveal_at, Some(2));
     }
 }

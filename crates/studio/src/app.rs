@@ -285,6 +285,10 @@ impl StudioApp {
                                 empty,
                                 parts: scene.parts.len(),
                             });
+                            if !self.is_circuit() && current {
+                                // A design's @circuit and its parts.
+                                self.watch(outcome.watch.clone());
+                            }
                             self.part_boxes = part_boxes(&scene);
                             self.viewer.set_scene(scene, frame);
                             // The new solid comes in its own colors.
@@ -327,23 +331,15 @@ impl StudioApp {
     /// Shows a circuit just read, or none, and watches its part files.
     fn set_circuit(&mut self, found: Option<Arc<c2f_circuit::Circuit>>) {
         // The parts' files and the enclosure's: an edit to one renders again.
-        let mut files: Vec<PathBuf> = found
+        let files: Vec<PathBuf> = found
             .iter()
             .flat_map(|c| c.parts.iter().map(|p| p.path.clone()).chain(c.enclosure.clone()))
             .collect();
-        files.sort();
-        files.dedup();
-        let known = std::mem::take(&mut self.part_files);
-        self.part_files = files
-            .into_iter()
-            .map(|file| {
-                // A file already watched keeps its time, so that a change
-                // made since it was read is not missed.
-                let mtime = known.iter().find(|(f, _)| *f == file).map_or_else(|| modified(&file), |(_, m)| *m);
-                (file, mtime)
-            })
-            .collect();
+        self.watch(files);
         self.wiring = found.map(Wiring::new);
+        // The boxes are the last render's, of the circuit before: the
+        // render of this one brings its own.
+        self.part_boxes.clear();
         // A selection outlives an edit when what it names is still there.
         let valid = |hit: Option<Hit>| match (hit, &self.wiring) {
             (Some(Hit::Pin(end)), Some(w)) => {
@@ -357,10 +353,23 @@ impl StudioApp {
             self.selection = None;
         }
         self.hover = self.hover.filter(|&h| valid(Some(h)));
-        if self.wiring.is_none() {
-            self.part_boxes.clear();
-        }
         self.update_overlay();
+    }
+
+    /// Watches `files` for changes on disk, besides the open file.
+    fn watch(&mut self, mut files: Vec<PathBuf>) {
+        files.sort();
+        files.dedup();
+        let known = std::mem::take(&mut self.part_files);
+        self.part_files = files
+            .into_iter()
+            .map(|file| {
+                // A file already watched keeps its time, so that a change
+                // made since it was read is not missed.
+                let mtime = known.iter().find(|(f, _)| *f == file).map_or_else(|| modified(&file), |(_, m)| *m);
+                (file, mtime)
+            })
+            .collect();
     }
 
     /// How the wires, pins and parts show: what a selection picks out
@@ -412,9 +421,16 @@ impl StudioApp {
 
     // ---- Assembly ----
 
-    /// The wires of the circuit, by name, when there are any.
+    /// The wires of the circuit, by name, when there are any and the
+    /// assembly's progress is this circuit's.
     fn mount_names(&self) -> Option<Vec<String>> {
-        self.wiring.as_ref().map(|w| mount::wire_names(&w.circuit)).filter(|names| !names.is_empty())
+        self.mount_wiring().map(|w| w.names.clone())
+    }
+
+    /// The circuit's wiring, when the assembly's progress is its own.
+    fn mount_wiring(&self) -> Option<&Wiring> {
+        self.path.as_deref().filter(|p| self.mount.is_for(p))?;
+        self.wiring.as_ref().filter(|w| !w.names.is_empty())
     }
 
     /// The assembly mode's look: the wire on screen picked out, its pins
@@ -423,15 +439,15 @@ impl StudioApp {
         if !self.mount.active {
             return None;
         }
-        let wiring = self.wiring.as_ref()?;
-        let names = self.mount_names()?;
+        let wiring = self.mount_wiring()?;
+        let names = &wiring.names;
         let circuit = &wiring.circuit;
         let step = self.mount.step.min(names.len() - 1);
         let current = &circuit.wires[step];
         let wires = (0..names.len())
             .map(|i| match i {
                 _ if i == step => Emphasis::Strong,
-                _ if self.mount.is_done(&names, i) => Emphasis::Normal,
+                _ if self.mount.is_done(names, i) => Emphasis::Normal,
                 _ => Emphasis::Dim,
             })
             .collect();
@@ -613,9 +629,9 @@ impl StudioApp {
                 self.customizer.open(Some(path.as_path()).filter(|p| !circuit::is_circuit(p)));
                 self.mount.open(Some(path.as_path()).filter(|p| circuit::is_circuit(p)));
                 self.report_mount_problem();
-                if !circuit::is_circuit(&path) {
-                    self.set_circuit(None);
-                }
+                // Nothing of the file before carries over, even when this
+                // one does not read.
+                self.set_circuit(None);
                 self.path = Some(path);
                 self.frame_next = true;
                 self.editor.error_line = None;
@@ -966,12 +982,15 @@ impl StudioApp {
                         }
                         toolbar_separator(ui);
                     }
-                    let mut shown = self.customizer_shown();
-                    let toggle = ui.toggle_value(&mut shown, "Customizer");
-                    if toggle.on_hover_text("Show the parameters the file declares").changed() {
-                        self.customizer_open = Some(shown);
+                    // A circuit has no parameters: room for its own toggles.
+                    if !self.is_circuit() {
+                        let mut shown = self.customizer_shown();
+                        let toggle = ui.toggle_value(&mut shown, "Customizer");
+                        if toggle.on_hover_text("Show the parameters the file declares").changed() {
+                            self.customizer_open = Some(shown);
+                        }
+                        toolbar_separator(ui);
                     }
-                    toolbar_separator(ui);
                     ui.toggle_value(&mut self.viewer.show_grid, "Grid").on_hover_text("Show the XY grid");
                     ui.toggle_value(&mut self.viewer.show_axes, "Axes").on_hover_text("Show the axes");
                     ui.toggle_value(&mut self.viewer.layer_view, "Layers")

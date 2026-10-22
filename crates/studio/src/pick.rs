@@ -94,8 +94,10 @@ pub fn pick(wiring: &Wiring, part_boxes: &[Option<(Vec3, Vec3)>], ray: &Ray) -> 
     if let Some(hit) = nearest(wires) {
         return Some(hit);
     }
+    // Boxes from a render before the circuit lost parts name none.
     let parts = &mut part_boxes
         .iter()
+        .take(circuit.parts.len())
         .enumerate()
         .filter_map(|(index, b)| b.and_then(|(lo, hi)| ray.aabb(lo, hi)).map(|t| (t, Hit::Part(index))));
     nearest(parts)
@@ -170,6 +172,14 @@ mod tests {
         let mid = wiring.paths[2][wiring.paths[2].len() / 2].map(|c| c as f32);
         assert_eq!(pick(&wiring, &boxes, &ray([mid[0], mid[1], 80.0], mid)), Some(Hit::Wire(2)));
         assert_eq!(pick(&wiring, &boxes, &ray([50.0, 50.0, 50.0], [60.0, 60.0, 0.0])), None);
+    }
+
+    #[test]
+    fn boxes_of_parts_the_circuit_no_longer_has_name_nothing() {
+        let wiring = Wiring::new(circuit());
+        let stale = Some((Vec3::new(100.0, 100.0, 0.0), Vec3::new(110.0, 110.0, 5.0)));
+        let boxes = [None, None, stale];
+        assert_eq!(pick(&wiring, &boxes, &ray([105.0, 105.0, 50.0], [105.0, 105.0, 0.0])), None);
     }
 
     #[test]

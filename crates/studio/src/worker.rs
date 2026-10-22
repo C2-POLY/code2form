@@ -78,6 +78,10 @@ pub struct RenderOutcome {
     /// The line (0-based) of the first badly written electronics annotation
     /// of the file, marked like an error while the model still renders.
     pub annotation_error: Option<usize>,
+    /// For a design, the files it was rendered from besides its own, to
+    /// render again when one changes: the circuit its `// @circuit` names
+    /// and that circuit's parts.
+    pub watch: Vec<PathBuf>,
 }
 
 pub enum Reply {
@@ -275,7 +279,20 @@ fn render_source(
         }
         Err(line) => (Err(line), None),
     };
-    (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters, annotation_error }, rendered)
+    let watch = circuit_files(source, path, library_paths);
+    (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters, annotation_error, watch }, rendered)
+}
+
+/// The circuit a design names in `// @circuit`, and its part files.
+fn circuit_files(source: &str, path: &Path, library_paths: &[PathBuf]) -> Vec<PathBuf> {
+    let (annotations, _) = c2f_lang::annotations::read(source);
+    let Some(link) = annotations.circuit else { return Vec::new() };
+    let circuit_path = path.parent().unwrap_or(Path::new("")).join(&link.path);
+    let mut files = vec![circuit_path.clone()];
+    if let Ok(circuit) = c2f_circuit::load(&circuit_path, library_paths) {
+        files.extend(circuit.parts.iter().map(|part| part.path.clone()));
+    }
+    files
 }
 
 /// Reads the circuit `source` at `path`, hands it to `read`, then renders
@@ -291,7 +308,7 @@ fn render_circuit(
     let start = Instant::now();
     let mut console = Vec::new();
     let mut annotation_error = None;
-    let result = match c2f_circuit::parse(source, path, library_paths) {
+    let result = catch_unwind(AssertUnwindSafe(|| match c2f_circuit::parse(source, path, library_paths) {
         Ok(found) => {
             let found = Arc::new(found);
             read(found.clone());
@@ -313,15 +330,22 @@ fn render_circuit(
             let enclosure = parts.enclosure(&found, source, |text, enclosure_path| {
                 render_enclosure(text, enclosure_path, path, &found, library_paths)
             });
-            let collisions = circuit::collisions(&found, &rendered, enclosure.as_deref());
+            let collisions = parts.collisions(&found, &rendered, enclosure.as_ref());
             Ok(circuit::scene(&found, &rendered, enclosure.as_deref(), &collisions, source, &mut console))
         }
         Err(errors) => {
             console.extend(errors.iter().map(|err| Line::new(Level::Error, err.render())));
             Err(circuit::error_line(&errors, path, source))
         }
-    };
-    RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters: None, annotation_error }
+    }))
+    .unwrap_or_else(|panic| {
+        console.push(Line::new(Level::Error, format!("internal error: {}", panic_message(&*panic))));
+        // Whatever the cache held when it broke is not to be trusted.
+        *parts = PartCache::default();
+        Err(None)
+    });
+    let watch = Vec::new();
+    RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters: None, annotation_error, watch }
 }
 
 /// Renders a part of a circuit, its parameters set in `source`, as a
@@ -669,6 +693,23 @@ mod tests {
         assert!(outcome.result.is_ok(), "the parts still render");
         assert!(outcome.console.iter().any(|l| l.level == Level::Error && l.text.contains("c.IN")), "{:?}", outcome.console.iter().map(|l| &l.text).collect::<Vec<_>>());
         assert_eq!(outcome.annotation_error, Some(7));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_design_watches_the_circuit_it_names_and_its_parts() {
+        let dir = std::env::temp_dir().join(format!("code2form-worker-watch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("part.c2f"), "// @pin A [0, 0, 1] up\ncube(1);\n").unwrap();
+        std::fs::write(dir.join("test.c2fc"), "[parts.a]\npart = \"part.c2f\"\n").unwrap();
+        let worker = Worker::spawn(egui::Context::default());
+        let source = "// @circuit test.c2fc\ncube(5);\n";
+        let generation = worker.render(source.into(), dir.join("box.c2f"), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
+        assert_eq!(outcome.watch, [dir.join("test.c2fc"), dir.join("part.c2f")]);
+        let generation = worker.render("cube(5);".into(), dir.join("box.c2f"), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
+        assert!(outcome.watch.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
