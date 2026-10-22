@@ -5,8 +5,9 @@
 //!
 //! Each feature lives in a file of its own: the properties panel
 //! (`properties.rs`), the move, turn and scale handles (`handles.rs`), the
-//! shapes toolbar and the booleans (`shapes.rs`), and the tree of the
-//! program with the code-free mode (`tree.rs`).
+//! shapes toolbar and the booleans (`shapes.rs`), the tree of the
+//! program with the code-free mode (`tree.rs`), and the sketch mode
+//! (`sketch.rs`).
 
 use std::ops::Range;
 
@@ -23,6 +24,7 @@ impl StudioApp {
         if self.doc.is_circuit() {
             return;
         }
+        self.sketch_panel(ctx);
         self.tree_panel(ctx);
         self.properties_panel(ctx);
     }
@@ -31,6 +33,10 @@ impl StudioApp {
     /// pointer and the keys there, after the view took its own input.
     pub(super) fn modelling_view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, response: &egui::Response) {
         if self.doc.is_circuit() {
+            return;
+        }
+        // While sketching, the view is the sketch's alone.
+        if self.sketch_view(ctx, ui, response) {
             return;
         }
         self.handles_view(ctx, ui, response);

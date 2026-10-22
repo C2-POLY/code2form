@@ -28,6 +28,7 @@ mod rewire;
 mod screenshot;
 mod select;
 mod settings;
+mod sketch_view;
 mod tabs;
 mod theme;
 mod viewer;

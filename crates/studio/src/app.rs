@@ -42,6 +42,7 @@ mod handles;
 mod modelling;
 mod properties;
 mod shapes;
+mod sketch;
 mod tree;
 
 /// File dialog filters: a name and an extension.
@@ -219,6 +220,8 @@ struct Tab {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    /// The sketch mode, when on, and the sketch it left unfinished.
+    sketch: sketch::SketchState,
 }
 
 impl Tab {
@@ -255,6 +258,7 @@ impl Tab {
             console: Console::default(),
             customizer: Customizer::default(),
             customizer_open: None,
+            sketch: sketch::SketchState::default(),
         }
     }
 
@@ -686,6 +690,10 @@ impl StudioApp {
                         if let Some(offset) = target.and_then(|t| self.doc.text.find(t.strip_prefix("code:")?)) {
                             self.doc.viewer.select_at(offset);
                             self.doc.viewer.take_picked();
+                        }
+                        // The sketch mode, as `sketch:xy` or `sketch:open:l_bracket` asks.
+                        if let Some(spec) = self.screenshot.as_mut().and_then(|s| s.select.take_if(|t| shown && t.starts_with("sketch:"))) {
+                            self.doc.sketch.screenshot = Some(spec);
                         }
                         // The new solid comes in its own colors.
                         self.update_overlay();
@@ -2116,8 +2124,10 @@ impl StudioApp {
             // A double-click on a part opens it rather than framing the view.
             self.doc.viewer.frame_on_double_click = !matches!(self.doc.hover, Some(Hit::Part(_)));
             self.start_rewire(ctx);
-            let handles = self.handles_before_view(ctx);
+            // The handles are off while sketching.
+            let handles = !self.doc.sketch.active() && self.handles_before_view(ctx);
             self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none() && !handles;
+            self.sketch_before_view();
             let response = self.doc.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);

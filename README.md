@@ -85,6 +85,18 @@ they are. Written in Rust, it renders as you type.
   change as one undo step: the object's `translate`, `rotate` or `scale`
   is rewritten, or added around it. World or Local picks the world's
   axes or the object's own once turned.
+- **Sketches**: Sketch ▸ On the XY plane (or XZ, YZ, or a flat face of
+  the model) turns the view face on, with a grid, to draw lines,
+  rectangles, circles and arcs that snap to points, midpoints and
+  centers. Constraints (horizontal, vertical, parallel, perpendicular,
+  coincident, tangent, equal, fixed) and dimensions (length, radius,
+  angle, optionally named) hold the profile, solved live as points are
+  dragged: blue can still move, white is fully constrained, red
+  conflicts. Finishing writes a `sketch_<name>()` module with its named
+  dimensions as Customizer parameters, in one undo step; Extrude
+  (`linear_extrude`, adding or cutting into the object it was drawn on)
+  and Revolve (`rotate_extrude` around a line of the sketch) write the
+  solid too. Edit sketch reopens it with its constraints from the code.
 - **Electronics**: a part declares its pins, mount holes and ports in
   comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
   the reference implementation ignores. A `.c2fc` circuit file (TOML)

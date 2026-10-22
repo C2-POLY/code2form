@@ -697,6 +697,7 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "c2f-sketch",
  "eframe",
  "glam",
  "objc2 0.6.5",

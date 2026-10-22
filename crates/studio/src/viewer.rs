@@ -110,6 +110,9 @@ pub struct Viewer {
     /// A drag turns or pans the camera; the app turns it off while a drag
     /// rewires a circuit.
     pub orbit_enabled: bool,
+    /// A click selects; the app turns it off while it uses clicks itself,
+    /// as the sketch mode does.
+    pub select_enabled: bool,
     pauses: Vec<PauseMark>,
     /// The text the scene was rendered from.
     scene_source: String,
@@ -185,6 +188,7 @@ impl Viewer {
             show_enclosure: true,
             frame_on_double_click: true,
             orbit_enabled: true,
+            select_enabled: true,
             pauses: Vec::new(),
             scene_source: String::new(),
             dragging: None,
@@ -289,7 +293,6 @@ impl Viewer {
 
     /// The point of the model under `pos`, its normal (facing the eye) and
     /// the statement a click there picks.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub fn surface_at(&self, rect: Rect, pos: Pos2) -> Option<(Vec3, Vec3, Option<Statement>)> {
         let picking = self.picking.as_ref()?;
         let ray = self.ray(rect, pos);
@@ -384,9 +387,9 @@ impl Viewer {
         if self.picking.is_none() {
             return;
         }
-        // The pointer is on something drawn over the view (a handle): it
-        // neither hovers nor picks the model under it.
-        if !self.orbit_enabled {
+        // The pointer is on something drawn over the view (a handle), or a
+        // sketch is being drawn: it neither hovers nor picks the model.
+        if !self.orbit_enabled || !self.select_enabled {
             if self.hovered.take().is_some() {
                 self.send_highlight(false);
             }
