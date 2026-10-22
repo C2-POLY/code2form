@@ -25,6 +25,8 @@
 mod fonts;
 mod outline;
 
+pub use fonts::set_folders as set_font_folders;
+
 use clipper2_rust::{FillRule, Path64, Paths64, Point64, union_64};
 use manifold_rust::cross_section::CrossSection;
 use manifold_rust::linalg::Vec2;

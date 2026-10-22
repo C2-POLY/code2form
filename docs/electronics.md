@@ -386,7 +386,7 @@ bubble and card give its length, as "About 32 mm of wire: 22 mm routed
 ### Enclosure, collisions and cut
 
 When the circuit names an `enclosure`, the app draws it see-through
-around the parts; the **Enclosure** button in the toolbar hides and
+around the parts; **Enclosure** in the **View** menu hides and
 shows it. It follows the circuit as you type, before you save.
 
 A part that runs into the enclosure or into another part turns red, and

@@ -12,6 +12,11 @@ they are. Written in Rust, it renders as you type.
   Open Recent lists the last ten files opened or saved; each file opens in
   a tab of its own, with its view, console and undo history, and the tabs
   come back at the next launch.
+- **Settings** (⌘,): the app icon in ten tints (graphite by default,
+  shown in the Dock and the Finder), the code's size, whether to render
+  as you type and after what pause, and folders searched for libraries
+  and for `text()`'s fonts before the default ones. The grid, the axes
+  and the layer height are kept as left.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text
   fields, grouped by `/* [Group] */`; presets are saved next to the design

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, Frame, Id, Key, KeyboardShortcut, Layout, Margin, Modifiers, RichText,
-    Sense, Stroke, Vec2,
+    self, Align, Button, Color32, CornerRadius, Frame, Id, Key, KeyboardShortcut, Layout, Margin, Modifiers, Rect,
+    RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use eframe::glow;
 use c2f_circuit::End;
@@ -16,9 +16,11 @@ use c2f_geom::Stats;
 
 use crate::catalogue::{self, Catalogue};
 use crate::circuit;
+use crate::app_icon::{self, Tint};
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
+use crate::icon_setting;
 use crate::open_events;
 use crate::pause_edit;
 use crate::part_edit::{self, Grab};
@@ -26,6 +28,7 @@ use crate::recent::RecentFiles;
 use crate::tabs::{self, Owners, Session, Shelf};
 use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
+use crate::settings::{self, Settings};
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
 use crate::inspect;
@@ -40,8 +43,6 @@ const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
 const CIRCUIT_FILES: (&str, &str) = ("Code2Form circuit", "c2fc");
 
-/// How long typing must pause before a re-render.
-const DEBOUNCE: Duration = Duration::from_millis(400);
 /// How long a customizer control must rest before a re-render.
 const PARAMETER_DEBOUNCE: Duration = Duration::from_millis(120);
 /// How often the file is checked for changes on disk.
@@ -60,6 +61,39 @@ const FIND_REPLACE: KeyboardShortcut = KeyboardShortcut::new(Modifiers { alt: tr
 const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
 const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::G);
 const CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
+const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+
+/// The app icons in the settings, in points, and how many in a row.
+const ICON_CHOICE: f32 = 56.0;
+const ICONS_PER_ROW: usize = 5;
+/// The height of the settings' pages, so that the window keeps its size.
+const SETTINGS_HEIGHT: f32 = 330.0;
+
+/// The pages of the settings window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Section {
+    AppIcon,
+    Editor,
+    Libraries,
+}
+
+impl Section {
+    const ALL: [Section; 3] = [Section::AppIcon, Section::Editor, Section::Libraries];
+
+    fn name(self) -> &'static str {
+        match self {
+            Section::AppIcon => "App Icon",
+            Section::Editor => "Editor",
+            Section::Libraries => "Libraries",
+        }
+    }
+}
+
+/// A change to a list of folders in the settings.
+enum FolderEdit {
+    Add,
+    Remove(usize),
+}
 
 /// Something that would lose the active tab's unsaved edits, waiting for
 /// confirmation.
@@ -249,9 +283,20 @@ impl Tab {
         self.sent > self.finished
     }
 
+    /// Whether the text or the values changed since the last render.
+    fn unrendered(&self) -> bool {
+        self.sent_source.as_deref() != Some(self.text.as_str()) || self.sent_values != self.customizer.values()
+    }
+
     fn customizer_shown(&self) -> bool {
         self.customizer_open.unwrap_or_else(|| self.customizer.has_parameters())
     }
+}
+
+/// Where the open tabs and the settings are kept; `None` for this run only.
+struct Stores {
+    session: Option<PathBuf>,
+    settings: Option<PathBuf>,
 }
 
 pub struct StudioApp {
@@ -285,6 +330,17 @@ pub struct StudioApp {
     catalogue: Catalogue,
     catalogue_open: bool,
     recent: RecentFiles,
+    /// The settings, as last saved, and where they are kept: those of the
+    /// view apply to every tab's.
+    settings: Settings,
+    saved_settings: Settings,
+    settings_store: Option<PathBuf>,
+    settings_open: bool,
+    settings_section: Section,
+    /// The icons the settings offer, drawn when first shown.
+    icon_choices: Vec<TextureHandle>,
+    /// The icon at the toolbar's left, in the tint picked.
+    logo: TextureHandle,
     confirm: Option<Pending>,
     allow_close: bool,
     title: String,
@@ -294,23 +350,31 @@ pub struct StudioApp {
 impl StudioApp {
     /// Opens the tabs of the last session, then `paths` (from the command
     /// line or the Finder), the last of them active.
-    pub fn new(cc: &eframe::CreationContext<'_>, paths: Vec<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, paths: Vec<PathBuf>, settings: Settings) -> Self {
         theme::apply(&cc.egui_ctx);
         open_events::wake(&cc.egui_ctx);
         // Launched by opening files in the Finder.
         let paths = paths.into_iter().chain(open_events::take()).collect();
         let recent = RecentFiles::load(crate::recent::store());
-        StudioApp::with(&cc.egui_ctx, cc.gl.clone(), tabs::store(), recent, paths)
+        let stores = Stores { session: tabs::store(), settings: settings::store() };
+        let mut app = StudioApp::with(&cc.egui_ctx, cc.gl.clone(), stores, recent, settings, paths);
+        let icon = app.settings.icon;
+        if let Err(err) = icon_setting::restore(icon) {
+            app.doc.console.log(Level::Warning, format!("Cannot give the app its {} icon: {err}", icon.name()));
+        }
+        app
     }
 
-    /// The app, with its tabs kept in `session_store`.
+    /// The app, with its tabs and settings kept in `stores`.
     fn with(
         ctx: &egui::Context,
         gl: Option<Arc<glow::Context>>,
-        session_store: Option<PathBuf>,
+        stores: Stores,
         recent: RecentFiles,
+        settings: Settings,
         paths: Vec<PathBuf>,
     ) -> Self {
+        let session_store = stores.session;
         let mut app = StudioApp {
             doc: Tab::new(0, gl.as_ref()),
             shelf: Shelf::default(),
@@ -330,11 +394,19 @@ impl StudioApp {
             catalogue: Catalogue::new(ctx),
             catalogue_open: false,
             recent,
+            logo: logo_texture(ctx, settings.icon),
+            saved_settings: settings.clone(),
+            settings,
+            settings_store: stores.settings,
+            settings_open: false,
+            settings_section: Section::AppIcon,
+            icon_choices: Vec::new(),
             confirm: None,
             allow_close: false,
             title: String::new(),
             screenshot: Screenshot::from_env(),
         };
+        app.apply_settings(ctx);
         // The tabs of the last session, quietly: a file gone since is
         // simply not reopened.
         let session = std::mem::take(&mut app.session);
@@ -370,9 +442,16 @@ impl StudioApp {
 
     /// Opens a new untitled tab, after the others, and makes it active.
     fn add_tab(&mut self) {
-        let tab = Tab::new(self.next_id, self.gl.as_ref());
-        self.next_id += 1;
+        let tab = self.fresh_tab();
         self.shelf.push(&mut self.doc, tab);
+    }
+
+    /// An untitled tab, its view as the settings say.
+    fn fresh_tab(&mut self) -> Tab {
+        let mut tab = Tab::new(self.next_id, self.gl.as_ref());
+        self.next_id += 1;
+        apply_view_settings(&self.settings, &mut tab.viewer);
+        tab
     }
 
     /// The tab of `id`, when it is still open.
@@ -444,8 +523,7 @@ impl StudioApp {
         let closed = match self.shelf.close(&mut self.doc, index) {
             Some(closed) => closed,
             None if active => {
-                let tab = Tab::new(self.next_id, self.gl.as_ref());
-                self.next_id += 1;
+                let tab = self.fresh_tab();
                 std::mem::replace(&mut self.doc, tab)
             }
             None => return,
@@ -509,9 +587,7 @@ impl StudioApp {
     /// Renders unless the text and values are what was last rendered.
     fn render_if_changed(&mut self) {
         self.doc.render_deadline = None;
-        if self.doc.sent_source.as_deref() != Some(self.doc.text.as_str())
-            || self.doc.sent_values != self.doc.customizer.values()
-        {
+        if self.doc.unrendered() {
             self.render_now();
         }
     }
@@ -1559,10 +1635,13 @@ impl StudioApp {
         if self.confirm.is_some() {
             return;
         }
-        let [save_as, save, open, new, render, export, close] = ctx.input_mut(|i| {
+        let [save_as, save, open, new, render, export, close, settings] = ctx.input_mut(|i| {
             // Shift+Cmd+S first: Cmd+S also matches it.
-            [SAVE_AS, SAVE, OPEN, NEW, RENDER, EXPORT, CLOSE_TAB].map(|s| i.consume_shortcut(&s))
+            [SAVE_AS, SAVE, OPEN, NEW, RENDER, EXPORT, CLOSE_TAB, SETTINGS].map(|s| i.consume_shortcut(&s))
         });
+        if settings {
+            self.settings_open = true;
+        }
         if save_as {
             self.save_as();
         } else if save {
@@ -1628,7 +1707,7 @@ impl StudioApp {
         egui::TopBottomPanel::top("toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                logo(ui);
+                ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
                 ui.label(RichText::new("Code2Form").strong().color(theme::TEXT).size(14.5));
                 ui.add_space(10.0);
                 toolbar_separator(ui);
@@ -1687,19 +1766,16 @@ impl StudioApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    if tool_button(ui, "Settings…", "Settings", Some(SETTINGS)).clicked() {
+                        self.settings_open = true;
+                    }
+                    toolbar_separator(ui);
                     if self.doc.is_circuit() {
                         let button = egui::Button::selectable(self.doc.mount.active, "Assembly");
                         let toggle = ui.add_enabled(self.mount_names().is_some(), button);
                         let hint = "Wire the circuit one wire at a time, in the file's order";
                         if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
                             self.set_mount(!self.doc.mount.active);
-                        }
-                        if self.doc.viewer.has_enclosure() {
-                            let mut shown = self.doc.viewer.shows_enclosure();
-                            let toggle = ui.toggle_value(&mut shown, "Enclosure");
-                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
-                                self.doc.viewer.set_show_enclosure(shown);
-                            }
                         }
                         toolbar_separator(ui);
                     }
@@ -1731,6 +1807,19 @@ impl StudioApp {
                                 ui.close();
                             }
                         }
+                        ui.separator();
+                        ui.checkbox(&mut self.doc.viewer.turntable, "Turntable")
+                            .on_hover_text("Turn the view around the model (a drag in the view stops it)");
+                        // A circuit's enclosure: a view setting, kept off the
+                        // toolbar, which a circuit fills.
+                        if self.doc.is_circuit() && self.doc.viewer.has_enclosure() {
+                            ui.separator();
+                            let mut shown = self.doc.viewer.shows_enclosure();
+                            let toggle = ui.checkbox(&mut shown, "Enclosure");
+                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
+                                self.doc.viewer.set_show_enclosure(shown);
+                            }
+                        }
                     });
                     if ui
                         .button("Reset view")
@@ -1739,8 +1828,6 @@ impl StudioApp {
                     {
                         self.doc.viewer.reset();
                     }
-                    ui.toggle_value(&mut self.doc.viewer.turntable, "Turntable")
-                        .on_hover_text("Turn the view around the model (a drag in the view stops it)");
                 });
             });
         });
@@ -1786,6 +1873,11 @@ impl StudioApp {
                 if self.doc.busy() {
                     ui.add(egui::Spinner::new().size(11.0).color(theme::ACCENT_STRONG));
                     ui.label(RichText::new("Rendering…").size(12.0).color(theme::ACCENT_STRONG));
+                } else if !self.settings.render_while_typing && self.doc.unrendered() {
+                    status_dot(ui, theme::WARNING);
+                    let shortcut = ctx.format_shortcut(&RENDER);
+                    ui.label(RichText::new(format!("Not rendered · {shortcut}")).size(12.0).color(theme::WARNING))
+                        .on_hover_text("Rendering as you type is off in the settings");
                 } else if self.doc.failed {
                     status_dot(ui, theme::ERROR);
                     ui.label(RichText::new("Render failed").size(12.0).color(theme::ERROR));
@@ -1892,8 +1984,9 @@ impl StudioApp {
             .default_width((width * 0.42).max(320.0))
             .width_range(260.0..=(width - 300.0).max(300.0))
             .show(ctx, |ui| {
-                if self.doc.editor.show(ui, &mut self.doc.text) {
-                    self.doc.render_deadline = Some(Instant::now() + DEBOUNCE);
+                if self.doc.editor.show(ui, &mut self.doc.text) && self.settings.render_while_typing {
+                    let delay = Duration::from_millis(self.settings.render_delay.into());
+                    self.doc.render_deadline = Some(Instant::now() + delay);
                 }
             });
     }
@@ -1954,7 +2047,7 @@ impl StudioApp {
             .default_width(300.0)
             .width_range(220.0..=(width * 0.4).max(240.0))
             .show(ctx, |ui| {
-                if self.doc.customizer.show(ui) {
+                if self.doc.customizer.show(ui) && self.settings.render_while_typing {
                     self.doc.render_deadline = Some(Instant::now() + PARAMETER_DEBOUNCE);
                 }
             });
@@ -2087,6 +2180,163 @@ impl StudioApp {
         }
     }
 
+    /// Gives the app, the view and the render worker the settings.
+    fn apply_settings(&mut self, ctx: &egui::Context) {
+        self.apply_view_settings();
+        let settings = &self.settings;
+        theme::set_code_size(ctx, settings.code_size);
+        self.worker.set_libraries(settings.library_folders.clone());
+        self.catalogue.set_libraries(settings.library_folders.clone());
+        c2f_geom::set_font_folders(settings.font_folders.clone());
+    }
+
+    /// Gives every tab's view the grid, axes and layer height of the
+    /// settings.
+    fn apply_view_settings(&mut self) {
+        apply_view_settings(&self.settings, &mut self.doc.viewer);
+        for index in 0..self.shelf.len() {
+            if let Some(tab) = self.shelf.other_mut(index) {
+                apply_view_settings(&self.settings, &mut tab.viewer);
+            }
+        }
+    }
+
+    /// Saves the settings when they changed, the view's among them, but not
+    /// while a drag (of a slider, say) is still changing them. The view's
+    /// are the active tab's, and go to the other tabs.
+    fn keep_settings(&mut self, ctx: &egui::Context) {
+        let viewer = &self.doc.viewer;
+        let view = (viewer.show_grid, viewer.show_axes, viewer.layer_height);
+        if view != (self.settings.show_grid, self.settings.show_axes, self.settings.layer_height) {
+            (self.settings.show_grid, self.settings.show_axes, self.settings.layer_height) = view;
+            self.apply_view_settings();
+        }
+        if self.settings == self.saved_settings || ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        if let Err(err) = self.settings.save(self.settings_store.as_deref()) {
+            self.doc.console.log(Level::Warning, format!("Cannot save the settings: {err}"));
+        }
+        self.saved_settings = self.settings.clone();
+    }
+
+    fn settings_dialog(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        if self.icon_choices.is_empty() {
+            let pixels = (ICON_CHOICE * ctx.pixels_per_point()).ceil() as usize;
+            self.icon_choices = Tint::ALL.iter().map(|&tint| icon_texture(ctx, tint, pixels)).collect();
+        }
+        let mut chosen = None;
+        let mut libraries = None;
+        let mut fonts = None;
+        let mut done = false;
+        let before = self.settings.clone();
+        let modal = egui::Modal::new(Id::new("settings")).show(ctx, |ui| {
+            ui.label(RichText::new("Settings").heading().color(theme::TEXT));
+            ui.add_space(10.0);
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(120.0);
+                    for section in Section::ALL {
+                        let selected = self.settings_section == section;
+                        let label = egui::Button::selectable(selected, section.name()).min_size(Vec2::new(120.0, 28.0));
+                        if ui.add(label).clicked() {
+                            self.settings_section = section;
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+                let (line, _) = ui.allocate_exact_size(Vec2::new(1.0, SETTINGS_HEIGHT), Sense::hover());
+                ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, theme::BORDER));
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.set_width(440.0);
+                    ui.set_min_height(SETTINGS_HEIGHT);
+                    // The window is the controls' usual color: lift them off it.
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    widgets.inactive.bg_fill = theme::HOVER;
+                    widgets.inactive.weak_bg_fill = theme::HOVER;
+                    widgets.hovered.bg_fill = theme::BORDER_STRONG;
+                    widgets.hovered.weak_bg_fill = theme::BORDER_STRONG;
+                    match self.settings_section {
+                        Section::AppIcon => chosen = self.icon_page(ui),
+                        Section::Editor => editor_page(ui, ctx, &mut self.settings),
+                        Section::Libraries => (libraries, fonts) = libraries_page(ui, &self.settings),
+                    }
+                });
+            });
+            ui.add_space(10.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let button = Button::new(RichText::new("Done").color(Color32::WHITE).strong()).fill(theme::ACCENT);
+                if ui.add(button).clicked() {
+                    done = true;
+                }
+            });
+        });
+        if let Some(tint) = chosen {
+            self.choose_icon(ctx, tint);
+        }
+        if self.settings.code_size != before.code_size {
+            theme::set_code_size(ctx, self.settings.code_size);
+        }
+        if !self.settings.render_while_typing {
+            self.doc.render_deadline = None;
+        }
+        if let Some(edit) = libraries {
+            if edit_folders(&mut self.settings.library_folders, edit, "Add a library folder") {
+                self.worker.set_libraries(self.settings.library_folders.clone());
+                self.catalogue.set_libraries(self.settings.library_folders.clone());
+                self.render_now();
+            }
+        }
+        if let Some(edit) = fonts {
+            if edit_folders(&mut self.settings.font_folders, edit, "Add a font folder") {
+                c2f_geom::set_font_folders(self.settings.font_folders.clone());
+                self.render_now();
+            }
+        }
+        if done || modal.should_close() {
+            self.settings_open = false;
+        }
+    }
+
+    /// The icons to pick from; the one clicked.
+    fn icon_page(&self, ui: &mut egui::Ui) -> Option<Tint> {
+        let mut chosen = None;
+        let shown_in = if cfg!(target_os = "macos") { "the Dock and the Finder" } else { "the window's title bar" };
+        section_heading(ui, "App icon", &format!("Shown in {shown_in}."));
+        for (row, tints) in Tint::ALL.chunks(ICONS_PER_ROW).enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                for (column, &tint) in tints.iter().enumerate() {
+                    let texture = &self.icon_choices[row * ICONS_PER_ROW + column];
+                    if icon_choice(ui, texture, tint, tint == self.settings.icon).clicked() {
+                        chosen = Some(tint);
+                    }
+                }
+            });
+        }
+        chosen
+    }
+
+    /// Shows `tint` from now on; the settings keep it.
+    fn choose_icon(&mut self, ctx: &egui::Context, tint: Tint) {
+        if tint == self.settings.icon {
+            return;
+        }
+        self.settings.icon = tint;
+        self.logo = logo_texture(ctx, tint);
+        match icon_setting::apply(ctx, tint) {
+            Ok(()) => self.doc.console.log(Level::Info, format!("App icon: {}", tint.name())),
+            Err(err) => {
+                let message = format!("The Dock shows the {} icon while the app runs, but {err}", tint.name());
+                self.doc.console.log(Level::Warning, message);
+            }
+        }
+    }
+
     fn confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(action) = self.confirm else { return };
         #[derive(Clone, Copy)]
@@ -2171,7 +2421,9 @@ impl eframe::App for StudioApp {
         self.customizer_panel(ctx);
         self.catalogue_panel(ctx);
         self.view_panel(ctx);
+        self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
+        self.keep_settings(ctx);
 
         if let Some(deadline) = self.doc.render_deadline {
             let now = Instant::now();
@@ -2199,6 +2451,9 @@ impl eframe::App for StudioApp {
 
     fn on_exit(&mut self, gl: Option<&glow::Context>) {
         self.save_session();
+        if self.settings != self.saved_settings {
+            let _ = self.settings.save(self.settings_store.as_deref());
+        }
         if let Some(gl) = gl {
             self.doc.viewer.destroy(gl);
             for index in 0..self.shelf.len() {
@@ -2288,12 +2543,161 @@ fn tab_step(input: &mut egui::InputState) -> Option<bool> {
     step
 }
 
-fn logo(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+/// Gives `viewer` the grid, axes and layer height of `settings`.
+fn apply_view_settings(settings: &Settings, viewer: &mut Viewer) {
+    viewer.show_grid = settings.show_grid;
+    viewer.show_axes = settings.show_axes;
+    viewer.layer_height = settings.layer_height;
+}
+
+/// A settings section's title and what it is for.
+fn section_heading(ui: &mut egui::Ui, title: &str, about: &str) {
+    ui.label(RichText::new(title).strong().color(theme::TEXT));
+    ui.label(RichText::new(about).color(theme::TEXT_DIM));
+    ui.add_space(8.0);
+}
+
+/// The code's size and when to render.
+fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
+    section_heading(ui, "Code", "The editor's and the console's text.");
+    ui.horizontal(|ui| {
+        ui.label("Size");
+        let slider = egui::Slider::new(&mut settings.code_size, settings::CODE_SIZES)
+            .step_by(0.5)
+            .max_decimals(1)
+            .suffix(" pt")
+            .trailing_fill(true);
+        ui.add(slider);
+    });
+    ui.add_space(14.0);
+    let shortcut = ctx.format_shortcut(&RENDER);
+    section_heading(
+        ui,
+        "Rendering",
+        &format!("Off, the model renders only on Render ({shortcut}), which suits models that take long."),
+    );
+    ui.checkbox(&mut settings.render_while_typing, "Render as you type and as parameters change");
+    ui.add_enabled_ui(settings.render_while_typing, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("After a pause of");
+            let slider = egui::Slider::new(&mut settings.render_delay, settings::RENDER_DELAYS)
+                .step_by(50.0)
+                .suffix(" ms")
+                .trailing_fill(true);
+            ui.add(slider);
+        });
+    });
+    ui.add_space(14.0);
+    ui.label(
+        RichText::new("The grid, the axes and the layer height are kept as you leave them.").color(theme::TEXT_DIM),
+    );
+}
+
+/// The library and font folders; the change asked for in each list.
+fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>, Option<FolderEdit>) {
+    section_heading(
+        ui,
+        "Library folders",
+        "Searched for include <…> and use <…> before ~/Documents/OpenSCAD/libraries, OPENSCADPATH and the app's own.",
+    );
+    let libraries = folder_list(ui, "libraries", &settings.library_folders);
+    ui.add_space(14.0);
+    section_heading(
+        ui,
+        "Font folders",
+        "Searched for text()'s fonts, with their subfolders, before OPENSCAD_FONT_PATH, the app's and the system's.",
+    );
+    let fonts = folder_list(ui, "fonts", &settings.font_folders);
+    (libraries, fonts)
+}
+
+/// A list of folders, each removable, and a button to add one.
+fn folder_list(ui: &mut egui::Ui, id: &str, folders: &[PathBuf]) -> Option<FolderEdit> {
+    let mut edit = None;
+    let frame = Frame::new().fill(theme::EDITOR).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(8));
+    frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        if folders.is_empty() {
+            ui.label(RichText::new("None").color(theme::TEXT_FAINT));
+        }
+        for (i, folder) in folders.iter().enumerate() {
+            ui.push_id((id, i), |ui| {
+                ui.horizontal(|ui| {
+                    let missing = !folder.is_dir();
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("Remove").clicked() {
+                            edit = Some(FolderEdit::Remove(i));
+                        }
+                        let color = if missing { theme::WARNING } else { theme::TEXT };
+                        let name = RichText::new(display_folder(folder)).color(color);
+                        let label = ui.add(egui::Label::new(name).truncate());
+                        let note = if missing { " (not found)" } else { "" };
+                        label.on_hover_text(format!("{}{note}", folder.display()));
+                    });
+                });
+            });
+        }
+    });
+    if ui.button("Add Folder…").clicked() {
+        edit = Some(FolderEdit::Add);
+    }
+    edit
+}
+
+/// Applies `edit` to `folders`, asking which folder to add; whether the
+/// list changed.
+fn edit_folders(folders: &mut Vec<PathBuf>, edit: FolderEdit, title: &str) -> bool {
+    match edit {
+        FolderEdit::Remove(i) if i < folders.len() => {
+            folders.remove(i);
+            true
+        }
+        FolderEdit::Remove(_) => false,
+        FolderEdit::Add => {
+            let Some(folder) = rfd::FileDialog::new().set_title(title).pick_folder() else { return false };
+            if folders.contains(&folder) {
+                return false;
+            }
+            folders.push(folder);
+            true
+        }
+    }
+}
+
+/// The app icon in `tint`, `pixels` square, for the settings.
+fn icon_texture(ctx: &egui::Context, tint: Tint, pixels: usize) -> TextureHandle {
+    let image = app_icon::render(tint, pixels, app_icon::Layout::Full);
+    let image = egui::ColorImage::from_rgba_premultiplied([pixels, pixels], &image.premultiplied);
+    ctx.load_texture(format!("app-icon-{}-{pixels}", tint.id()), image, TextureOptions::LINEAR)
+}
+
+/// The icon at the toolbar's left: 18 points, drawn for sharp screens.
+fn logo_texture(ctx: &egui::Context, tint: Tint) -> TextureHandle {
+    icon_texture(ctx, tint, (18.0 * ctx.pixels_per_point().max(2.0)).ceil() as usize)
+}
+
+/// One icon the settings offer, with its name, ringed when picked.
+fn icon_choice(ui: &mut egui::Ui, texture: &TextureHandle, tint: Tint, selected: bool) -> egui::Response {
+    let size = Vec2::new(ICON_CHOICE + 16.0, ICON_CHOICE + 30.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, tint.name()));
+    let center = rect.center_top() + Vec2::new(0.0, 8.0 + ICON_CHOICE / 2.0);
+    let icon = Rect::from_center_size(center, Vec2::splat(ICON_CHOICE));
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(5), theme::ACCENT);
-    let inner = rect.shrink(5.0);
-    painter.rect_filled(inner, CornerRadius::same(1), Color32::from_rgb(0xe8, 0xf0, 0xff));
+    if selected || response.hovered() {
+        let (color, width): (Color32, f32) = if selected { (theme::ACCENT, 2.5) } else { (theme::BORDER, 1.5) };
+        painter.rect_stroke(icon.expand(4.0), CornerRadius::same(17), Stroke::new(width, color), StrokeKind::Outside);
+    }
+    egui::Image::new(texture).paint_at(ui, icon);
+    let color = if selected { theme::TEXT } else { theme::TEXT_DIM };
+    painter.text(
+        rect.center_bottom() - Vec2::new(0.0, 2.0),
+        egui::Align2::CENTER_BOTTOM,
+        tint.name(),
+        egui::FontId::proportional(11.5),
+        color,
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn toolbar_separator(ui: &mut egui::Ui) {
@@ -2436,7 +2840,8 @@ mod tests {
 
     /// The app without a window, nor the user's Open Recent list.
     fn studio(ctx: &egui::Context, store: Option<PathBuf>, paths: Vec<PathBuf>) -> StudioApp {
-        StudioApp::with(ctx, None, store, RecentFiles::default(), paths)
+        let stores = Stores { session: store, settings: None };
+        StudioApp::with(ctx, None, stores, RecentFiles::default(), Settings::load(None), paths)
     }
 
     /// The files of the tabs, in order, and the active tab.
