@@ -229,6 +229,35 @@ translate([20, 20, 5]) rotate([0, 0, 360 * $t]) part("turret") {
   a warning; so do parts that come and go. A model that reads `$t`
   without any `part()` exports still, with a warning.
 
+### In Godot 4 and Unity
+
+`examples/game/chest.c2f` is a treasure chest whose lid opens and closes
+while a gem on it turns: three nodes (`chest`, `lid`, `gem`), two
+materials and a transparent one, and an animation that loops.
+
+**Godot 4** (checked with 4.7): copy the `.glb` into the project. Godot
+imports it as a scene: open it, or drag it into another scene. The nodes
+keep their names and hierarchy, the materials their colors, and an
+`AnimationPlayer` holds the animation, set to loop, under the file's name
+without `-loop` (`$AnimationPlayer.play("chest")`). Godot simplifies
+animation tracks on import with tolerances counted in meters: a movement
+of a few millimeters comes out rounded (a 2 mm rise of a real-size part
+came out 1.2 mm high), while turns and movements of a centimeter or more
+keep their shape. For a small object with small movements, export with a
+unit as a meter and scale the node in Godot.
+
+**Unity**: install the glTFast package (Package Manager > Add package by
+name > `com.unity.cloud.gltfast`) or UnityGLTF, then drop the `.glb` into
+`Assets`. The model comes in as a prefab with its nodes and materials,
+and its animation as a clip; in glTFast's import settings, *Animation
+Method: Mecanim* makes it a clip an `Animator` plays. This path is not
+yet checked in Unity itself.
+
+**Triangles**: a game draws every triangle every frame. Curves are split
+as `$fn`, `$fa` and `$fs` say; the export prints the count (and the app
+shows it under the view). Keep `$fn` low on small curves: `$fn = 8` for a
+gem, 24 to 48 for a wheel or a barrel.
+
 ## Compatibility
 
 Code2Form opens `.scad` files. Its parser, evaluator and geometry are

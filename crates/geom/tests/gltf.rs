@@ -374,3 +374,21 @@ fn an_error_at_any_frame_is_the_error() {
     let error = animated("assert($t < 0.5); rotate(360 * $t) part(\"a\") cube(1);", &GltfOptions::default()).unwrap_err();
     assert!(error.starts_with("at $t = 0.5"), "{error}");
 }
+
+#[test]
+fn the_chest_example_opens_and_loops() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/game/chest.c2f");
+    let src = c2f_eval::read_source(&path).unwrap();
+    let mut program = c2f_eval::Program::load(&src, &path, &[]).unwrap();
+    let glb = c2f_geom::program_glb(&mut program, &GltfOptions { name: "chest".into(), ..GltfOptions::default() }).unwrap();
+    assert!(glb.warnings.is_empty(), "{:?}", glb.warnings);
+    let model = Gltf::read(&glb.bytes);
+    let names: Vec<&str> = model.json["nodes"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["chest", "lid", "gem"]);
+    // Closed at both ends of the loop, open halfway.
+    let (_, rotations) = track(&model, 1, "rotation").expect("the lid turns");
+    let angle = |q: &[f32]| 2.0 * q[0].atan2(q[3]).to_degrees();
+    assert!(angle(&rotations[0]).abs() < 1e-3 && angle(&rotations[60]).abs() < 1e-3);
+    assert!((angle(&rotations[30]) + 100.0).abs() < 1e-3, "{}", angle(&rotations[30]));
+    assert!(track(&model, 2, "rotation").is_some(), "the gem turns");
+}
