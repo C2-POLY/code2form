@@ -167,7 +167,6 @@ impl Picking {
     }
 
     /// The point and the normal (facing the ray) of a hit.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub fn surface(&self, ray: &Ray, hit: &Hit) -> (Vec3, Vec3) {
         let [a, b, c] = self.layer(hit.layer).corners(hit.triangle);
         let normal = (b - a).cross(c - a).normalize_or(Vec3::Z);

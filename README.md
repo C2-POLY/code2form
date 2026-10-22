@@ -97,6 +97,13 @@ they are. Written in Rust, it renders as you type.
   (`linear_extrude`, adding or cutting into the object it was drawn on)
   and Revolve (`rotate_extrude` around a line of the sketch) write the
   solid too. Edit sketch reopens it with its constraints from the code.
+- **Modelling without code**: a toolbar over the 3D view puts a cube,
+  cylinder, sphere, cone, tube or text where you click, on the build
+  plate or on a face, turned to stand on it; with Hole on, the shape is
+  cut out of the object clicked. Objects selected in turn are united,
+  subtracted (the first minus the others) or intersected, and Delete,
+  ⌘D, ⌘C, ⌘X and ⌘V delete, duplicate, copy, cut and paste them with their
+  transforms. Each gesture writes the code, indented, as one undo step.
 - **Electronics**: a part declares its pins, mount holes and ports in
   comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
   the reference implementation ignores. A `.c2fc` circuit file (TOML)
