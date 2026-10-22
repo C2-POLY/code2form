@@ -85,18 +85,20 @@ const MODEL_COLORS: [(&str, [u8; 3]); 8] = [
 
 /// The pages of the settings window.
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// The settings' pages, in their order: the work first, the app's icon
+/// last.
 enum Section {
-    AppIcon,
     Editor,
     View,
     Export,
     Libraries,
     Shortcuts,
+    AppIcon,
 }
 
 impl Section {
     const ALL: [Section; 6] =
-        [Section::AppIcon, Section::Editor, Section::View, Section::Export, Section::Libraries, Section::Shortcuts];
+        [Section::Editor, Section::View, Section::Export, Section::Libraries, Section::Shortcuts, Section::AppIcon];
 
     /// As a screenshot run names it.
     fn id(self) -> String {
@@ -105,12 +107,12 @@ impl Section {
 
     fn name(self) -> &'static str {
         match self {
-            Section::AppIcon => "App Icon",
             Section::Editor => "Editor",
             Section::View => "View",
             Section::Export => "Export",
             Section::Libraries => "Libraries",
             Section::Shortcuts => "Shortcuts",
+            Section::AppIcon => "App Icon",
         }
     }
 }
@@ -457,7 +459,7 @@ impl StudioApp {
             settings,
             settings_store: stores.settings,
             settings_open: false,
-            settings_section: Section::AppIcon,
+            settings_section: Section::Editor,
             recording: None,
             record_problem: None,
             icon_choices: Vec::new(),
@@ -2519,7 +2521,6 @@ impl StudioApp {
                     widgets.hovered.bg_fill = theme::palette().border_strong;
                     widgets.hovered.weak_bg_fill = theme::palette().border_strong;
                     match self.settings_section {
-                        Section::AppIcon => chosen = self.icon_page(ui),
                         Section::Editor => editor_page(ui, ctx, &mut self.settings),
                         Section::View => view_page(ui, ctx, &mut self.settings),
                         Section::Export => export_folder = export_page(ui, &mut self.settings),
@@ -2528,6 +2529,7 @@ impl StudioApp {
                             let problem = self.record_problem.as_deref();
                             shortcut_edit = shortcuts_page(ui, ctx, &self.settings.shortcuts, self.recording, problem);
                         }
+                        Section::AppIcon => chosen = self.icon_page(ui),
                     }
                 });
             });
@@ -2934,6 +2936,54 @@ fn view_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
     ui.label(RichText::new(kept).color(theme::palette().text_dim));
 }
 
+/// The STL format and where exports go; the change asked for in the folder.
+fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
+    section_heading(ui, "STL files", "3D printers' slicers read both.");
+    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
+    ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
+    ui.add_space(14.0);
+    section_heading(ui, "Export folder", "Where Export… opens.");
+    let mut edit = None;
+    if ui.radio(settings.export_folder.is_none(), "Next to the design").clicked() {
+        edit = Some(ExportFolderEdit::NextToTheDesign);
+    }
+    ui.horizontal(|ui| {
+        let folder = settings.export_folder.as_deref();
+        if ui.radio(folder.is_some(), "In this folder:").clicked() && folder.is_none() {
+            edit = Some(ExportFolderEdit::Choose);
+        }
+        if let Some(folder) = folder {
+            let missing = !folder.is_dir();
+            let color = if missing { theme::palette().warning } else { theme::palette().text };
+            let label = ui.add(egui::Label::new(RichText::new(display_folder(folder)).color(color)).truncate());
+            let note = if missing { " (not found: Export… opens next to the design)" } else { "" };
+            label.on_hover_text(format!("{}{note}", folder.display()));
+        }
+    });
+    if ui.button("Choose Folder…").clicked() {
+        edit = Some(ExportFolderEdit::Choose);
+    }
+    edit
+}
+
+/// The library and font folders; the change asked for in each list.
+fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>, Option<FolderEdit>) {
+    section_heading(
+        ui,
+        "Library folders",
+        "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
+    );
+    let libraries = folder_list(ui, "libraries", &settings.library_folders);
+    ui.add_space(14.0);
+    section_heading(
+        ui,
+        "Font folders",
+        "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
+    );
+    let fonts = folder_list(ui, "fonts", &settings.font_folders);
+    (libraries, fonts)
+}
+
 /// Each action's keys, which a click records anew, with the actions that
 /// share keys; the change asked for.
 fn shortcuts_page(
@@ -3012,54 +3062,6 @@ fn names(actions: &[Action]) -> String {
             format!("{} and {}", rest.join(", "), last.name())
         }
     }
-}
-
-/// The STL format and where exports go; the change asked for in the folder.
-fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
-    section_heading(ui, "STL files", "3D printers' slicers read both.");
-    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
-    ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
-    ui.add_space(14.0);
-    section_heading(ui, "Export folder", "Where Export… opens.");
-    let mut edit = None;
-    if ui.radio(settings.export_folder.is_none(), "Next to the design").clicked() {
-        edit = Some(ExportFolderEdit::NextToTheDesign);
-    }
-    ui.horizontal(|ui| {
-        let folder = settings.export_folder.as_deref();
-        if ui.radio(folder.is_some(), "In this folder:").clicked() && folder.is_none() {
-            edit = Some(ExportFolderEdit::Choose);
-        }
-        if let Some(folder) = folder {
-            let missing = !folder.is_dir();
-            let color = if missing { theme::palette().warning } else { theme::palette().text };
-            let label = ui.add(egui::Label::new(RichText::new(display_folder(folder)).color(color)).truncate());
-            let note = if missing { " (not found: Export… opens next to the design)" } else { "" };
-            label.on_hover_text(format!("{}{note}", folder.display()));
-        }
-    });
-    if ui.button("Choose Folder…").clicked() {
-        edit = Some(ExportFolderEdit::Choose);
-    }
-    edit
-}
-
-/// The library and font folders; the change asked for in each list.
-fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>, Option<FolderEdit>) {
-    section_heading(
-        ui,
-        "Library folders",
-        "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
-    );
-    let libraries = folder_list(ui, "libraries", &settings.library_folders);
-    ui.add_space(14.0);
-    section_heading(
-        ui,
-        "Font folders",
-        "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
-    );
-    let fonts = folder_list(ui, "fonts", &settings.font_folders);
-    (libraries, fonts)
 }
 
 /// A list of folders, each removable, and a button to add one.

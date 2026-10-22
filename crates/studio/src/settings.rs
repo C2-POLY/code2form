@@ -79,7 +79,8 @@ pub enum Workspace {
 }
 
 impl Workspace {
-    pub const ALL: [Workspace; 2] = [Workspace::Model, Workspace::Code];
+    /// In the switch's order: the code first.
+    pub const ALL: [Workspace; 2] = [Workspace::Code, Workspace::Model];
 
     /// As `settings.txt` writes it.
     pub fn id(self) -> &'static str {
