@@ -11,6 +11,19 @@ use std::time::Duration;
 /// Relative volume difference tolerated (the STL rounds coordinates).
 const TOLERANCE: f64 = 1e-4;
 
+/// Files whose volume is known to differ from the reference's, by this
+/// much (ours minus the reference's), still checked within `TOLERANCE`.
+///
+/// GEB.scad: the reference's `projection()` without `cut` unites the
+/// projected facets with Clipper 1. On GEB's exact setup, Clipper returns
+/// all three contours of `projection() GEB()` clockwise, so the next 2D
+/// boolean (NonZero) fills B's two holes, and the plate under GEB loses
+/// their 6.0817 + 8.5646 mm² over its 1 mm. The same solid with its
+/// children in B, G, E order, shifted by 0.001 in X or rotated 90° keeps
+/// them open: an artifact, not a rule, so we keep them open
+/// (`tests/projection.rs`).
+const KNOWN_GAPS: &[(&str, f64)] = &[("examples/Advanced/GEB.scad", 14.6463277)];
+
 fn reference() -> String {
     std::env::var("C2F_REFERENCE").unwrap_or_else(|_| "/Applications/OpenSCAD-2021.01.app/Contents/MacOS/OpenSCAD".into())
 }
@@ -110,6 +123,8 @@ fn live_volumes() {
             Err(why) => failures.push(format!("{name}: ours failed ({why}); the reference's volume is {expected}")),
             Ok((actual, warnings)) => {
                 compared += 1;
+                let gap = KNOWN_GAPS.iter().find(|(file, _)| name == *file).map_or(0.0, |(_, gap)| *gap);
+                let expected = expected + gap;
                 let relative = (actual - expected).abs() / expected.abs().max(1e-9);
                 if relative > TOLERANCE {
                     failures.push(format!(
