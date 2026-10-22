@@ -39,6 +39,22 @@ they take in volts; the ESP32-S3's strapping pins (GPIO0, GPIO3, GPIO45,
 GPIO46) are marked `reserved`. Annotations are plain numbers: they stay
 where the file's default parameters put them.
 
+## Shapes
+
+`shapes/rounded.c2f` rounds or chamfers the edges of a cube or a
+cylinder, keeping its bounding box and placement, as the properties panel
+writes it:
+
+```
+use <shapes/rounded.c2f>
+rounded_cube([30, 20, 10], fillet = 2, edges = "vertical");
+chamfered_cylinder(h = 20, r = 10, chamfer = 1, rims = "top");
+```
+
+`edges` is `"all"` (the default), `"vertical"`, `"top"` or `"bottom"`;
+`rims` is `"both"` (the default), `"top"` or `"bottom"`; `center` is
+`cylinder()`'s and `cube()`'s.
+
 ## Licence
 
 The files in this folder are licensed as the rest of the repository,

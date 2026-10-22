@@ -7,8 +7,12 @@
 //! `rewire:xiao.5V>mic.VDD`, a new wire dragged from one pin to another;
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
 //! `mic` mid-drag at x 40, y 10; `settings:view` shows a page of the
-//! settings (`app-icon`, `editor`, `view`, `export`, `libraries`,
-//! `shortcuts`). `CODE2FORM_APPEARANCE` picks the theme.
+//! settings (`editor`, `view`, `export`, `libraries`, `shortcuts`,
+//! `app-icon`). In a design, `code:cylinder(h = 7` selects the statement
+//! holding the first match of that text, and
+//! `CODE2FORM_SCREENSHOT_HANDLE=turn-z:30` holds its handles mid-drag
+//! (`move-x:12`, `scale-y:1.5`, `scale:2`). `CODE2FORM_APPEARANCE` picks
+//! the theme, and `CODE2FORM_WORKSPACE` the workspace (`model`, `code`).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

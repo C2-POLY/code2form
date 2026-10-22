@@ -6,10 +6,13 @@ mod app_icon;
 mod camera;
 mod catalogue;
 mod circuit;
+mod code_edit;
 mod console;
 mod customizer;
 mod editor;
+mod fillet;
 mod find;
+mod gizmo;
 mod highlight;
 mod icon_setting;
 mod inspect;
@@ -23,8 +26,10 @@ mod recent;
 mod renderer;
 mod rewire;
 mod screenshot;
+mod select;
 mod settings;
 mod shortcuts;
+mod sketch_view;
 mod tabs;
 mod theme;
 mod viewer;
@@ -52,7 +57,8 @@ file CODE2FORM_RECENT_FILES names; screenshot runs without that variable
 neither read nor change it. The settings and the open tabs are kept in
 that folder too; screenshot runs leave them aside, and show the theme
 CODE2FORM_APPEARANCE names (system, light or dark), the system's by
-default.";
+default, and the workspace CODE2FORM_WORKSPACE names (model or code), the
+Code one by default.";
 
 fn main() -> ExitCode {
     // Old macOS versions add a process serial number to apps the Finder starts.
@@ -68,6 +74,8 @@ fn main() -> ExitCode {
     if background {
         let appearance = std::env::var("CODE2FORM_APPEARANCE").ok().and_then(|a| theme::Appearance::from_id(&a));
         settings.appearance = appearance.unwrap_or_default();
+        let workspace = std::env::var("CODE2FORM_WORKSPACE").ok().and_then(|w| settings::Workspace::from_id(&w));
+        settings.workspace = workspace.unwrap_or_default();
     }
 
     let saved = settings.window;

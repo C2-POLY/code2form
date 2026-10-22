@@ -134,6 +134,8 @@ pub fn place(out: &mut RenderMesh, mesh: &RenderMesh, matrix: &[[f64; 4]; 4], ti
         Some(tint) if c == UNCOLORED => tint,
         _ => c,
     }));
+    // A part's origins index its own program's table, not the design's.
+    out.origins.resize(out.triangle_count(), 0);
 }
 
 /// A part file rendered once, in its own coordinates.
@@ -420,6 +422,7 @@ pub fn scene(
         source: source.to_string(),
         parts: ranges,
         enclosure: enclosure_range,
+        picking: None,
     }
 }
 

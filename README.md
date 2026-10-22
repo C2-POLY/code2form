@@ -46,6 +46,65 @@ they are. Written in Rust, it renders as you type.
   app writes the change into the code, as one step to undo. A height
   computed in the code moves there, and pauses from a library or an
   included file stay as they are.
+- **Selection** in the 3D view: a click on an object lights it up and
+  puts the editor on the line of the statement that made it, and the
+  editor's cursor lights up the geometry of the statement it is in. A
+  module written in the file is one object, which a double-click goes
+  inside; Shift-click adds to the selection, Alt-click reaches the shape
+  a `difference()` subtracts (shown see-through), and Escape clears it.
+  Shapes from a library or an included file are read-only.
+- **Tree** of the program, between the editor and the view: its
+  operations, transforms, shapes and module calls, nested as in the code
+  and named by the `// name` comment ending their line. A click selects
+  the object in the view (Shift-click adds), and what the view selects
+  lights up in the tree; a double-click or F2 renames it, the eye hides
+  it (`*`), `!` isolates it and `%` makes it see-through, and a drag
+  moves it before, after or into another, as into a `difference()`.
+  Each is one edit of the code, one step to undo. The **Code** toggle
+  (⌘E) hides the editor, to model with the view, the tree and the panels
+  alone.
+- **Properties panel**: the selected call's arguments in a panel on the
+  right, as in Fusion: sizes, radii, `$fn`, vectors component by
+  component, booleans, texts and a color picker, for builtins and for the
+  parameters a module declares (in the file or in a `use`d library).
+  Changing a value rewrites its literal in place, as one undo step; a
+  number dragged (on its field or its label) is written once, when the
+  drag ends. A parameter left out shows its default, greyed, and editing
+  it adds the argument; a computed one (`width / 2`) is never overwritten:
+  it shows its value, with buttons to replace it by that number, to go to
+  the variable's definition or to open it in the Customizer. The
+  *Placement* section edits the `translate`, `rotate` and `scale` around
+  the object, and *Edges* rounds or chamfers a `cube` or a `cylinder`
+  (all, vertical, top or bottom edges; top, bottom or both rims) into a
+  call to the library's `shapes/rounded.c2f`, keeping its size.
+- **Move, turn and scale handles** on the selected object, as in Fusion:
+  arrows and squares move it along an axis or in a plane, rings turn it
+  about its centre, and the end squares and the centre dot scale it.
+  The object follows the drag with the amount by the pointer, snapped to
+  1 mm and 15° (steps set in the bar over the view; Shift snaps off), or
+  type an exact value and press Enter. On release the code gets the
+  change as one undo step: the object's `translate`, `rotate` or `scale`
+  is rewritten, or added around it. World or Local picks the world's
+  axes or the object's own once turned.
+- **Sketches**: Sketch ▸ On the XY plane (or XZ, YZ, or a flat face of
+  the model) turns the view face on, with a grid, to draw lines,
+  rectangles, circles and arcs that snap to points, midpoints and
+  centers. Constraints (horizontal, vertical, parallel, perpendicular,
+  coincident, tangent, equal, fixed) and dimensions (length, radius,
+  angle, optionally named) hold the profile, solved live as points are
+  dragged: blue can still move, white is fully constrained, red
+  conflicts. Finishing writes a `sketch_<name>()` module with its named
+  dimensions as Customizer parameters, in one undo step; Extrude
+  (`linear_extrude`, adding or cutting into the object it was drawn on)
+  and Revolve (`rotate_extrude` around a line of the sketch) write the
+  solid too. Edit sketch reopens it with its constraints from the code.
+- **Modelling without code**: a toolbar over the 3D view puts a cube,
+  cylinder, sphere, cone, tube or text where you click, on the build
+  plate or on a face, turned to stand on it; with Hole on, the shape is
+  cut out of the object clicked. Objects selected in turn are united,
+  subtracted (the first minus the others) or intersected, and Delete,
+  ⌘D, ⌘C, ⌘X and ⌘V delete, duplicate, copy, cut and paste them with their
+  transforms. Each gesture writes the code, indented, as one undo step.
 - **Electronics**: a part declares its pins, mount holes and ports in
   comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
   the reference implementation ignores. A `.c2fc` circuit file (TOML)

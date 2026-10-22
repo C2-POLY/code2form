@@ -45,6 +45,8 @@ pub struct Scene {
     /// For a circuit, the vertices of its enclosure in `solid`, after the
     /// parts': see-through.
     pub enclosure: std::ops::Range<usize>,
+    /// What a click in the view picks, for a design (not a circuit).
+    pub picking: Option<Arc<crate::select::Picking>>,
 }
 
 impl Scene {
@@ -273,7 +275,14 @@ fn render_source(
         },
     );
     let (result, rendered) = match result {
-        Ok(mut rendered) => {
+        Ok((mut rendered, origins)) => {
+            let picking = crate::select::Picking::new(
+                origins,
+                &rendered.solid,
+                &rendered.highlights,
+                &rendered.backgrounds,
+                &rendered.cutters,
+            );
             let scene = Scene {
                 solid: std::mem::take(&mut rendered.solid),
                 highlights: std::mem::take(&mut rendered.highlights),
@@ -286,6 +295,7 @@ fn render_source(
                 source: source.to_string(),
                 parts: Vec::new(),
                 enclosure: 0..0,
+                picking: Some(Arc::new(picking)),
             };
             (Ok(scene), Some(rendered))
         }
@@ -374,7 +384,7 @@ pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> Part
     });
     let console = circuit::label_lines(console, path);
     match result {
-        Ok(rendered) => PartRender {
+        Ok((rendered, _)) => PartRender {
             triangles: rendered.stats.triangles,
             solid: rendered.solid,
             highlights: rendered.highlights,
@@ -452,7 +462,7 @@ fn pipeline(
     console: &mut Vec<Line>,
     parameters: &mut Option<Vec<Parameter>>,
     annotation_error: &mut Option<usize>,
-) -> Result<Rendered, Option<usize>> {
+) -> Result<(Rendered, Vec<c2f_eval::Origin>), Option<usize>> {
     let mut program = match c2f_eval::Program::load(source, path, library_paths) {
         Ok(program) => program,
         Err(err) => {
@@ -486,7 +496,7 @@ fn pipeline(
     let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")))
         .with_pauses(output.pauses);
     console.extend(rendered.warnings.iter().map(|text| Line::new(Level::Warning, text.clone())));
-    Ok(rendered)
+    Ok((rendered, output.origins))
 }
 
 fn export(shown: Option<&Rendered>, target: &Path, format: Format, binary_stl: bool) -> Result<String, String> {

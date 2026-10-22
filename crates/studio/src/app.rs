@@ -40,6 +40,16 @@ use crate::window;
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
+mod handles;
+mod modelling;
+mod properties;
+mod shapes;
+mod sketch;
+mod toolbar;
+mod tree;
+mod view_bar;
+mod workspace;
+
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
@@ -75,18 +85,20 @@ const MODEL_COLORS: [(&str, [u8; 3]); 8] = [
 
 /// The pages of the settings window.
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// The settings' pages, in their order: the work first, the app's icon
+/// last.
 enum Section {
-    AppIcon,
     Editor,
     View,
     Export,
     Libraries,
     Shortcuts,
+    AppIcon,
 }
 
 impl Section {
     const ALL: [Section; 6] =
-        [Section::AppIcon, Section::Editor, Section::View, Section::Export, Section::Libraries, Section::Shortcuts];
+        [Section::Editor, Section::View, Section::Export, Section::Libraries, Section::Shortcuts, Section::AppIcon];
 
     /// As a screenshot run names it.
     fn id(self) -> String {
@@ -95,12 +107,12 @@ impl Section {
 
     fn name(self) -> &'static str {
         match self {
-            Section::AppIcon => "App Icon",
             Section::Editor => "Editor",
             Section::View => "View",
             Section::Export => "Export",
             Section::Libraries => "Libraries",
             Section::Shortcuts => "Shortcuts",
+            Section::AppIcon => "App Icon",
         }
     }
 }
@@ -241,6 +253,8 @@ struct Tab {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    /// The sketch mode, when on, and the sketch it left unfinished.
+    sketch: sketch::SketchState,
 }
 
 impl Tab {
@@ -277,6 +291,7 @@ impl Tab {
             console: Console::default(),
             customizer: Customizer::default(),
             customizer_open: None,
+            sketch: sketch::SketchState::default(),
         }
     }
 
@@ -384,6 +399,10 @@ pub struct StudioApp {
     allow_close: bool,
     title: String,
     screenshot: Option<Screenshot>,
+    /// The tree of the active tab's program, as last read.
+    tree: tree::TreeState,
+    /// The tabs picked in the side panels.
+    panels: workspace::Panels,
 }
 
 impl StudioApp {
@@ -431,7 +450,7 @@ impl StudioApp {
             wire_margin: WireMargin::load(crate::prefs::wire_margin_store()),
             started: Instant::now(),
             view_rect: egui::Rect::NOTHING,
-            console_open: true,
+            console_open: false,
             catalogue: Catalogue::new(ctx),
             catalogue_open: false,
             recent,
@@ -440,7 +459,7 @@ impl StudioApp {
             settings,
             settings_store: stores.settings,
             settings_open: false,
-            settings_section: Section::AppIcon,
+            settings_section: Section::Editor,
             recording: None,
             record_problem: None,
             icon_choices: Vec::new(),
@@ -450,6 +469,8 @@ impl StudioApp {
             allow_close: false,
             title: String::new(),
             screenshot: Screenshot::from_env(),
+            tree: tree::TreeState::default(),
+            panels: workspace::Panels::default(),
         };
         app.apply_settings(ctx);
         // A screenshot of a settings page, as `settings:shortcuts`.
@@ -721,6 +742,16 @@ impl StudioApp {
                         }
                         self.doc.part_boxes = part_boxes(&scene);
                         self.doc.viewer.set_scene(scene, frame);
+                        // A screenshot of a design's selection, as `code:cube(` asks.
+                        let target = self.screenshot.as_ref().and_then(|s| s.select.clone()).filter(|_| shown);
+                        if let Some(offset) = target.and_then(|t| self.doc.text.find(t.strip_prefix("code:")?)) {
+                            self.doc.viewer.select_at(offset);
+                            self.doc.viewer.take_picked();
+                        }
+                        // The sketch mode, as `sketch:xy` or `sketch:open:l_bracket` asks.
+                        if let Some(spec) = self.screenshot.as_mut().and_then(|s| s.select.take_if(|t| shown && t.starts_with("sketch:"))) {
+                            self.doc.sketch.screenshot = Some(spec);
+                        }
                         // The new solid comes in its own colors.
                         self.update_overlay();
                         // A part still being dragged stays where the drag has it.
@@ -729,6 +760,10 @@ impl StudioApp {
                         }
                     }
                     Err(line) => {
+                        // A render that starts failing shows why.
+                        if !self.doc.failed {
+                            self.console_open = true;
+                        }
                         self.doc.failed = true;
                         self.doc.editor.error_line = line.or(outcome.annotation_error);
                     }
@@ -1428,6 +1463,26 @@ impl StudioApp {
         }
     }
 
+    /// Links the objects selected in a design's view and the code: a click
+    /// puts the editor on the statement's line, and the editor's cursor
+    /// lights up the statement it is in. Both only while the code is the
+    /// one on screen, whose bytes the statements point into.
+    fn design_selection(&mut self, ctx: &egui::Context) {
+        let current = self.doc.viewer.scene_source() == self.doc.text;
+        if let Some(key) = self.doc.viewer.take_picked() {
+            match key.range() {
+                Some(range) if current => self.doc.editor.go_to(ctx, &self.doc.text, range.start),
+                Some(_) => {}
+                None => {
+                    let message = "This shape comes from a library or an included file: it is read-only here";
+                    self.doc.console.log(Level::Info, message);
+                }
+            }
+        }
+        let offset = self.doc.editor.focused_offset.filter(|_| current);
+        self.doc.viewer.set_cursor(offset);
+    }
+
     // ---- Files ----
 
     /// Opens the file at `path` in a tab: its own tab when it is open
@@ -1738,6 +1793,11 @@ impl StudioApp {
                 Action::ZoomOut => zoom_steps -= 1,
                 Action::ZoomReset => zoom_reset = true,
                 Action::Settings => self.settings_open = true,
+                Action::SwitchWorkspace => {
+                    if !self.doc.is_circuit() {
+                        self.set_workspace(ctx, self.settings.workspace.other());
+                    }
+                }
             }
         }
         let size = if zoom_reset {
@@ -1814,138 +1874,136 @@ impl StudioApp {
 
     // ---- Panels ----
 
+    /// The bar across the top of the window: the File menu and the open
+    /// files on the left, a design's workspaces in the middle, and on the
+    /// right what renders, exports and sets the app up. The view's own
+    /// settings are in the view bar.
     fn toolbar(&mut self, ctx: &egui::Context) {
         let keys = self.settings.shortcuts.clone();
-        let frame = Frame::new().fill(theme::palette().bg).inner_margin(Margin::symmetric(12, 8));
-        egui::TopBottomPanel::top("toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
-            ui.horizontal(|ui| {
+        let palette = theme::palette();
+        let frame = Frame::new().fill(palette.bg).inner_margin(Margin::symmetric(10, 6));
+        egui::TopBottomPanel::top("toolbar").frame(frame).exact_height(44.0).show_separator_line(true).show(ctx, |ui| {
+            let bar = ui.max_rect();
+            // The workspaces in the middle of the window, laid out first so
+            // that the open files stop short of them.
+            let switch = (!self.doc.is_circuit()).then(|| Rect::from_center_size(bar.center(), Vec2::new(126.0, 28.0)));
+            if let Some(rect) = switch {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)));
+                self.workspace_switch(ctx, &mut child);
+            }
+            ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
-                ui.label(RichText::new("Code2Form").strong().color(theme::palette().text).size(14.5));
-                ui.add_space(10.0);
+                ui.label(RichText::new("Code2Form").strong().color(palette.text).size(14.5));
+                ui.add_space(4.0);
+                self.file_menu(ctx, ui, &keys);
                 toolbar_separator(ui);
-
-                if tool_button(ui, "New", "New file, in a new tab", Some(keys.get(Action::New))).clicked() {
-                    self.new_tab(ctx);
-                }
-                if tool_button(ui, "Open…", "Open files, each in its tab", Some(keys.get(Action::Open))).clicked() {
-                    self.open_dialog(ctx);
-                }
-                self.recent_menu(ui);
-                if tool_button(ui, "Save", "Save the file", Some(keys.get(Action::Save))).clicked() {
-                    self.save();
-                }
-                if tool_button(ui, "Save As…", "Save under a new name", Some(keys.get(Action::SaveAs))).clicked() {
-                    self.save_as();
-                }
-                toolbar_separator(ui);
-
-                let render = Button::new(RichText::new("Render").color(theme::palette().on_accent).strong())
-                    .fill(theme::palette().accent)
-                    .stroke(Stroke::NONE)
-                    .corner_radius(CornerRadius::same(6));
-                let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
-                if ui.add(render).on_hover_text(format!("Render now ({shortcut})")).clicked() {
-                    self.render_now();
-                }
-                let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
-                let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
-                    ui.menu_button("Export", |ui| {
-                        // Solids above the separator, 2D models below.
-                        let stl = if self.settings.binary_stl { "A binary STL" } else { "An ASCII STL" };
-                        let entries = [
-                            (Format::Stl, stl),
-                            (Format::ThreeMf, "A 3MF package, in millimeters"),
-                            (Format::Svg, "An SVG drawing, in millimeters"),
-                            (Format::Dxf, "A DXF drawing of line segments"),
-                        ];
-                        for (format, hover) in entries {
-                            if format == Format::Svg {
-                                ui.separator();
-                            }
-                            let mut button = Button::new(format!("{}…", format.name()));
-                            if format == Format::Stl {
-                                button = button.shortcut_text(shortcuts::describe(ctx, &keys.get(Action::Export)));
-                            }
-                            let disabled =
-                                if Format::SOLID.contains(&format) { "For 3D models" } else { "For 2D models" };
-                            let response = ui.add_enabled(formats.contains(&format), button);
-                            if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
-                                self.export(format);
-                                ui.close();
-                            }
-                        }
-                    })
-                });
-                export.response.on_disabled_hover_text("Render a non-empty model first");
+                // Room for the buttons on the right, without a switch.
+                let end = switch.map_or(bar.right() - 330.0, |s| s.left() - 16.0);
+                self.tab_strip(ctx, ui, (end - ui.cursor().left()).max(60.0));
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if tool_button(ui, "Settings…", "Settings", Some(keys.get(Action::Settings))).clicked() {
+                    let settings = format!("Settings ({})", shortcuts::describe(ctx, &keys.get(Action::Settings)));
+                    if toolbar::icon_button(ui, toolbar::Icon::Gear, self.settings_open, &settings).clicked() {
                         self.settings_open = true;
                     }
-                    toolbar_separator(ui);
+                    self.export_menu(ctx, ui, &keys);
+                    // The Model workspace renders after each change, unless
+                    // rendering as you type is off.
+                    if self.shows_code() || !self.settings.render_while_typing {
+                        let render = Button::new(RichText::new("Render").color(palette.on_accent).strong())
+                            .fill(palette.accent)
+                            .stroke(Stroke::NONE)
+                            .corner_radius(CornerRadius::same(6));
+                        let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
+                        if ui.add(render).on_hover_text(format!("Render now ({shortcut})")).clicked() {
+                            self.render_now();
+                        }
+                    }
                     if self.doc.is_circuit() {
+                        toolbar_separator(ui);
+                        let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
+                        toggle.on_hover_text("The parts of the library and your own, to add to the circuit");
                         let button = egui::Button::selectable(self.doc.mount.active, "Assembly");
                         let toggle = ui.add_enabled(self.mount_names().is_some(), button);
                         let hint = "Wire the circuit one wire at a time, in the file's order";
                         if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
                             self.set_mount(!self.doc.mount.active);
                         }
+                    } else if self.shows_code() {
+                        // The Model workspace shows the parameters in its
+                        // inspector.
                         toolbar_separator(ui);
-                    }
-                    // A circuit has no parameters: room for its own toggles.
-                    if self.doc.is_circuit() {
-                        let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
-                        toggle.on_hover_text("The parts of the library and your own, to add to the circuit");
-                    } else {
                         let mut shown = self.doc.customizer_shown();
-                        let toggle = ui.toggle_value(&mut shown, "Customizer");
+                        let toggle = ui.toggle_value(&mut shown, "Parameters");
                         if toggle.on_hover_text("Show the parameters the file declares").changed() {
                             self.doc.customizer_open = Some(shown);
                         }
                     }
-                    toolbar_separator(ui);
-                    ui.toggle_value(&mut self.doc.viewer.show_grid, "Grid").on_hover_text("Show the XY grid");
-                    ui.toggle_value(&mut self.doc.viewer.show_axes, "Axes").on_hover_text("Show the axes");
-                    ui.toggle_value(&mut self.doc.viewer.layer_view, "Layers")
-                        .on_hover_text("Cut the model at the top of a layer, picked with the slider on the right");
-                    if self.doc.viewer.has_pauses() {
-                        ui.toggle_value(&mut self.doc.viewer.show_pauses, "Pauses")
-                            .on_hover_text("Show the heights where the print pauses");
-                    }
-                    toolbar_separator(ui);
-                    ui.menu_button("View", |ui| {
-                        for &(name, yaw, pitch) in viewer::PRESETS {
-                            if ui.button(name).clicked() {
-                                self.doc.viewer.look_from(yaw, pitch);
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                        ui.checkbox(&mut self.doc.viewer.turntable, "Turntable")
-                            .on_hover_text("Turn the view around the model (a drag in the view stops it)");
-                        // A circuit's enclosure: a view setting, kept off the
-                        // toolbar, which a circuit fills.
-                        if self.doc.is_circuit() && self.doc.viewer.has_enclosure() {
-                            ui.separator();
-                            let mut shown = self.doc.viewer.shows_enclosure();
-                            let toggle = ui.checkbox(&mut shown, "Enclosure");
-                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
-                                self.doc.viewer.set_show_enclosure(shown);
-                            }
-                        }
-                    });
-                    if ui
-                        .button("Reset view")
-                        .on_hover_text("Default angle, fit the model (or double-click the view)")
-                        .clicked()
-                    {
-                        self.doc.viewer.reset();
-                    }
                 });
             });
         });
+    }
+
+    /// The File menu: new, open, save and close.
+    fn file_menu(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, keys: &Shortcuts) {
+        let item = |ui: &mut egui::Ui, label: &str, action: Action| {
+            let button = Button::new(label).shortcut_text(shortcuts::describe(ctx, &keys.get(action)));
+            ui.add(button).clicked()
+        };
+        ui.menu_button("File", |ui| {
+            if item(ui, "New File", Action::New) {
+                self.new_tab(ctx);
+            }
+            if item(ui, "Open…", Action::Open) {
+                self.open_dialog(ctx);
+            }
+            self.recent_menu(ui);
+            ui.separator();
+            if item(ui, "Save", Action::Save) {
+                self.save();
+            }
+            if item(ui, "Save As…", Action::SaveAs) {
+                self.save_as();
+            }
+            ui.separator();
+            if item(ui, "Close Tab", Action::CloseTab) {
+                self.close_tab(ctx, self.shelf.active());
+            }
+        });
+    }
+
+    /// The Export menu: solids above the separator, 2D models below.
+    fn export_menu(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, keys: &Shortcuts) {
+        let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
+        let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
+            ui.menu_button("Export", |ui| {
+                let stl = if self.settings.binary_stl { "A binary STL" } else { "An ASCII STL" };
+                let entries = [
+                    (Format::Stl, stl),
+                    (Format::ThreeMf, "A 3MF package, in millimeters"),
+                    (Format::Svg, "An SVG drawing, in millimeters"),
+                    (Format::Dxf, "A DXF drawing of line segments"),
+                ];
+                for (format, hover) in entries {
+                    if format == Format::Svg {
+                        ui.separator();
+                    }
+                    let mut button = Button::new(format!("{}…", format.name()));
+                    if format == Format::Stl {
+                        button = button.shortcut_text(shortcuts::describe(ctx, &keys.get(Action::Export)));
+                    }
+                    let disabled = if Format::SOLID.contains(&format) { "For 3D models" } else { "For 2D models" };
+                    let response = ui.add_enabled(formats.contains(&format), button);
+                    if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
+                        self.export(format);
+                        ui.close();
+                    }
+                }
+            })
+        });
+        export.response.on_disabled_hover_text("Render a non-empty model first");
     }
 
     fn recent_menu(&mut self, ui: &mut egui::Ui) {
@@ -2023,6 +2081,8 @@ impl StudioApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    self.console_button(ui);
+                    toolbar_separator(ui);
                     if self.doc.is_dirty() {
                         ui.label(RichText::new("●").size(12.0).color(theme::palette().warning))
                             .on_hover_text("Unsaved changes");
@@ -2074,6 +2134,7 @@ impl StudioApp {
         };
         let frame =
             Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 6 });
+        // Folded, the console is a button of the status bar.
         if self.console_open {
             egui::TopBottomPanel::bottom("console")
                 .frame(frame)
@@ -2089,32 +2150,64 @@ impl StudioApp {
                         .inner_margin(Margin::symmetric(10, 6))
                         .show(ui, |ui| self.doc.console.show(ui));
                 });
-        } else {
-            egui::TopBottomPanel::bottom("console-collapsed")
-                .frame(frame)
-                .resizable(false)
-                .show(ctx, |ui| header(ui, &mut self.console_open, &mut self.doc.console));
         }
     }
 
+    /// The status bar's console button: what the console holds, the worst
+    /// first; a click shows or hides it.
+    fn console_button(&mut self, ui: &mut egui::Ui) {
+        let palette = theme::palette();
+        let console = &self.doc.console;
+        let count = |level: Level| console.count(level);
+        let (text, color) = match (count(Level::Error), count(Level::Warning), count(Level::Echo)) {
+            (0, 0, 0) => ("Console".to_string(), palette.text_dim),
+            (0, 0, n) => (format!("{n} echo"), palette.text),
+            (0, n, _) => (format!("{n} warning{}", plural(n)), palette.warning),
+            (n, _, _) => (format!("{n} error{}", plural(n)), palette.error),
+        };
+        let button = Button::selectable(self.console_open, RichText::new(text).size(12.0).color(color));
+        if ui.add(button).on_hover_text("Show or hide the console").clicked() {
+            self.console_open = !self.console_open;
+        }
+    }
+
+    /// The code, on the left of the Code workspace; a design's tree is a
+    /// tab away.
     fn editor_panel(&mut self, ctx: &egui::Context) {
+        if !self.shows_code() {
+            return;
+        }
+        let design = !self.doc.is_circuit();
         let width = ctx.screen_rect().width();
         egui::SidePanel::left("editor")
             .frame(Frame::new().fill(theme::palette().editor))
             .resizable(true)
-            .default_width((width * 0.42).max(320.0))
+            .default_width((width * 0.36).max(320.0))
             .width_range(260.0..=(width - 300.0).max(300.0))
             .show(ctx, |ui| {
-                if self.doc.editor.show(ui, &mut self.doc.text) && self.settings.render_while_typing {
+                if design {
+                    let tabs = Frame::new()
+                        .fill(theme::palette().panel)
+                        .inner_margin(Margin { left: 12, right: 12, top: 8, bottom: 0 });
+                    tabs.show(ui, |ui| {
+                        let choices = [(workspace::CodeTab::Code, "Code"), (workspace::CodeTab::Tree, "Tree")];
+                        workspace::tab_strip(ui, &mut self.panels.code_tab, &choices);
+                    });
+                }
+                if design && self.panels.code_tab == workspace::CodeTab::Tree {
+                    Frame::new().inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 }).show(ui, |ui| {
+                        self.tree_view(ctx, ui);
+                    });
+                } else if self.doc.editor.show(ui, &mut self.doc.text) && self.settings.render_while_typing {
                     let delay = Duration::from_millis(self.settings.render_delay.into());
                     self.doc.render_deadline = Some(Instant::now() + delay);
                 }
             });
     }
 
-    /// The open files, one tab each, across the window under the toolbar:
-    /// a click shows one, the × or a middle-click closes it.
-    fn tab_bar(&mut self, ctx: &egui::Context) {
+    /// The open files, one tab each, in the top bar within `width`: a
+    /// click shows one, the × or a middle-click closes it.
+    fn tab_strip(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, width: f32) {
         let names = tabs::names(&self.shelf.iter(&self.doc).map(|tab| tab.path.as_deref()).collect::<Vec<_>>());
         let tabs: Vec<(u64, String, bool, Option<String>)> = self
             .shelf
@@ -2125,29 +2218,25 @@ impl StudioApp {
         let active = self.shelf.active();
         let new_keys = self.settings.shortcuts.get(Action::New);
         let (mut select, mut close, mut new) = (None, None, false);
-        let frame =
-            Frame::new().fill(theme::palette().bg).inner_margin(Margin { left: 8, right: 8, top: 4, bottom: 0 });
-        egui::TopBottomPanel::top("tabs").frame(frame).show_separator_line(false).show(ctx, |ui| {
-            egui::ScrollArea::horizontal().auto_shrink([false, true]).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    for (index, (id, name, dirty, path)) in tabs.iter().enumerate() {
-                        match tab(ui, *id, name, index == active, *dirty) {
-                            TabClick::Select => select = Some(index),
-                            TabClick::Close => close = Some(index),
-                            TabClick::None(response) => {
-                                if let Some(path) = path {
-                                    response.on_hover_text(path);
-                                }
+        egui::ScrollArea::horizontal().max_width(width).auto_shrink([true, true]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (index, (id, name, dirty, path)) in tabs.iter().enumerate() {
+                    match tab(ui, *id, name, index == active, *dirty) {
+                        TabClick::Select => select = Some(index),
+                        TabClick::Close => close = Some(index),
+                        TabClick::None(response) => {
+                            if let Some(path) = path {
+                                response.on_hover_text(path);
                             }
                         }
                     }
-                    ui.add_space(4.0);
-                    let shortcut = shortcuts::describe(ctx, &new_keys);
-                    let plus = ui
-                        .add(Button::new(RichText::new("+").size(15.0).color(theme::palette().text_dim)).frame(false));
-                    new = plus.on_hover_text(format!("New file in a new tab ({shortcut})")).clicked();
-                });
+                }
+                ui.add_space(2.0);
+                let shortcut = shortcuts::describe(ctx, &new_keys);
+                let plus =
+                    ui.add(Button::new(RichText::new("+").size(15.0).color(theme::palette().text_dim)).frame(false));
+                new = plus.on_hover_text(format!("New file in a new tab ({shortcut})")).clicked();
             });
         });
         if let Some(index) = close {
@@ -2160,8 +2249,10 @@ impl StudioApp {
         }
     }
 
+    /// The file's parameters, on the right of the Code workspace (the
+    /// Model one has them in its inspector).
     fn customizer_panel(&mut self, ctx: &egui::Context) {
-        if !self.doc.customizer_shown() {
+        if !self.shows_code() || !self.doc.customizer_shown() {
             return;
         }
         let width = ctx.screen_rect().width();
@@ -2171,7 +2262,7 @@ impl StudioApp {
             .default_width(300.0)
             .width_range(220.0..=(width * 0.4).max(240.0))
             .show(ctx, |ui| {
-                if self.doc.customizer.show(ui) && self.settings.render_while_typing {
+                if self.doc.customizer.show(ui, true) && self.settings.render_while_typing {
                     self.doc.render_deadline = Some(Instant::now() + PARAMETER_DEBOUNCE);
                 }
             });
@@ -2180,7 +2271,9 @@ impl StudioApp {
     fn view_panel(&mut self, ctx: &egui::Context) {
         let mut remove_part = None;
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
-            let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
+            // A sketch being drawn is something to show: no empty-state card
+            // over it.
+            let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty) || self.doc.sketch.active();
             let status = viewer::Status {
                 rendering: self.doc.busy(),
                 failed: self.doc.failed,
@@ -2195,10 +2288,16 @@ impl StudioApp {
             // A double-click on a part opens it rather than framing the view.
             self.doc.viewer.frame_on_double_click = !matches!(self.doc.hover, Some(Hit::Part(_)));
             self.start_rewire(ctx);
-            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none();
+            // The handles are off while sketching.
+            let handles = !self.doc.sketch.active() && self.handles_before_view(ctx);
+            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none() && !handles;
+            self.sketch_before_view();
             let response = self.doc.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
+            self.design_selection(ctx);
+            self.modelling_view(ctx, ui, &response);
+            self.view_bar(ctx, response.rect);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
             if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
                 let name = &original.parts[drag.part].name;
@@ -2422,7 +2521,6 @@ impl StudioApp {
                     widgets.hovered.bg_fill = theme::palette().border_strong;
                     widgets.hovered.weak_bg_fill = theme::palette().border_strong;
                     match self.settings_section {
-                        Section::AppIcon => chosen = self.icon_page(ui),
                         Section::Editor => editor_page(ui, ctx, &mut self.settings),
                         Section::View => view_page(ui, ctx, &mut self.settings),
                         Section::Export => export_folder = export_page(ui, &mut self.settings),
@@ -2431,6 +2529,7 @@ impl StudioApp {
                             let problem = self.record_problem.as_deref();
                             shortcut_edit = shortcuts_page(ui, ctx, &self.settings.shortcuts, self.recording, problem);
                         }
+                        Section::AppIcon => chosen = self.icon_page(ui),
                     }
                 });
             });
@@ -2628,12 +2727,13 @@ impl eframe::App for StudioApp {
         self.poll_disk(ctx);
 
         self.toolbar(ctx);
-        self.tab_bar(ctx);
+        self.tools_panel(ctx);
         self.status_bar(ctx);
         self.console_panel(ctx);
         self.editor_panel(ctx);
         self.customizer_panel(ctx);
         self.catalogue_panel(ctx);
+        self.modelling_panels(ctx);
         self.view_panel(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
@@ -2693,7 +2793,7 @@ enum TabClick {
 fn tab(ui: &mut egui::Ui, id: u64, name: &str, active: bool, dirty: bool) -> TabClick {
     let color = if active { theme::palette().text } else { theme::palette().text_dim };
     let galley = ui.painter().layout_no_wrap(name.to_string(), egui::FontId::proportional(13.0), color);
-    let size = Vec2::new(galley.size().x + 46.0, 30.0);
+    let size = Vec2::new(galley.size().x + 46.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), Vec2::splat(18.0));
     // Over the tab: it takes the clicks within its box.
@@ -2707,12 +2807,9 @@ fn tab(ui: &mut egui::Ui, id: u64, name: &str, active: bool, dirty: bool) -> Tab
     } else {
         theme::palette().bg
     };
-    painter.rect_filled(rect, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, fill);
+    painter.rect_filled(rect, CornerRadius::same(6), fill);
     if active {
-        painter.line_segment(
-            [rect.left_top() + Vec2::new(6.0, 0.0), rect.right_top() - Vec2::new(6.0, 0.0)],
-            Stroke::new(2.0, theme::palette().accent),
-        );
+        painter.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, theme::palette().border), StrokeKind::Inside);
     }
     painter.galley(egui::pos2(rect.left() + 14.0, rect.center().y - galley.size().y / 2.0), galley, color);
     if close.hovered() {
@@ -2839,6 +2936,54 @@ fn view_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
     ui.label(RichText::new(kept).color(theme::palette().text_dim));
 }
 
+/// The STL format and where exports go; the change asked for in the folder.
+fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
+    section_heading(ui, "STL files", "3D printers' slicers read both.");
+    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
+    ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
+    ui.add_space(14.0);
+    section_heading(ui, "Export folder", "Where Export… opens.");
+    let mut edit = None;
+    if ui.radio(settings.export_folder.is_none(), "Next to the design").clicked() {
+        edit = Some(ExportFolderEdit::NextToTheDesign);
+    }
+    ui.horizontal(|ui| {
+        let folder = settings.export_folder.as_deref();
+        if ui.radio(folder.is_some(), "In this folder:").clicked() && folder.is_none() {
+            edit = Some(ExportFolderEdit::Choose);
+        }
+        if let Some(folder) = folder {
+            let missing = !folder.is_dir();
+            let color = if missing { theme::palette().warning } else { theme::palette().text };
+            let label = ui.add(egui::Label::new(RichText::new(display_folder(folder)).color(color)).truncate());
+            let note = if missing { " (not found: Export… opens next to the design)" } else { "" };
+            label.on_hover_text(format!("{}{note}", folder.display()));
+        }
+    });
+    if ui.button("Choose Folder…").clicked() {
+        edit = Some(ExportFolderEdit::Choose);
+    }
+    edit
+}
+
+/// The library and font folders; the change asked for in each list.
+fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>, Option<FolderEdit>) {
+    section_heading(
+        ui,
+        "Library folders",
+        "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
+    );
+    let libraries = folder_list(ui, "libraries", &settings.library_folders);
+    ui.add_space(14.0);
+    section_heading(
+        ui,
+        "Font folders",
+        "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
+    );
+    let fonts = folder_list(ui, "fonts", &settings.font_folders);
+    (libraries, fonts)
+}
+
 /// Each action's keys, which a click records anew, with the actions that
 /// share keys; the change asked for.
 fn shortcuts_page(
@@ -2917,54 +3062,6 @@ fn names(actions: &[Action]) -> String {
             format!("{} and {}", rest.join(", "), last.name())
         }
     }
-}
-
-/// The STL format and where exports go; the change asked for in the folder.
-fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
-    section_heading(ui, "STL files", "3D printers' slicers read both.");
-    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
-    ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
-    ui.add_space(14.0);
-    section_heading(ui, "Export folder", "Where Export… opens.");
-    let mut edit = None;
-    if ui.radio(settings.export_folder.is_none(), "Next to the design").clicked() {
-        edit = Some(ExportFolderEdit::NextToTheDesign);
-    }
-    ui.horizontal(|ui| {
-        let folder = settings.export_folder.as_deref();
-        if ui.radio(folder.is_some(), "In this folder:").clicked() && folder.is_none() {
-            edit = Some(ExportFolderEdit::Choose);
-        }
-        if let Some(folder) = folder {
-            let missing = !folder.is_dir();
-            let color = if missing { theme::palette().warning } else { theme::palette().text };
-            let label = ui.add(egui::Label::new(RichText::new(display_folder(folder)).color(color)).truncate());
-            let note = if missing { " (not found: Export… opens next to the design)" } else { "" };
-            label.on_hover_text(format!("{}{note}", folder.display()));
-        }
-    });
-    if ui.button("Choose Folder…").clicked() {
-        edit = Some(ExportFolderEdit::Choose);
-    }
-    edit
-}
-
-/// The library and font folders; the change asked for in each list.
-fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>, Option<FolderEdit>) {
-    section_heading(
-        ui,
-        "Library folders",
-        "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
-    );
-    let libraries = folder_list(ui, "libraries", &settings.library_folders);
-    ui.add_space(14.0);
-    section_heading(
-        ui,
-        "Font folders",
-        "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
-    );
-    let fonts = folder_list(ui, "fonts", &settings.font_folders);
-    (libraries, fonts)
 }
 
 /// A list of folders, each removable, and a button to add one.
@@ -3087,17 +3184,6 @@ fn zoom_step(size: f32, steps: i32) -> f32 {
 fn toolbar_separator(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 20.0), Sense::hover());
     ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme::palette().border));
-}
-
-fn tool_button(ui: &mut egui::Ui, label: &str, help: &str, shortcut: Option<KeyboardShortcut>) -> egui::Response {
-    let response = ui.button(label);
-    match shortcut {
-        Some(shortcut) => {
-            let keys = shortcuts::describe(ui.ctx(), &shortcut);
-            response.on_hover_text(format!("{help} ({keys})"))
-        }
-        None => response.on_hover_text(help),
-    }
 }
 
 fn status_dot(ui: &mut egui::Ui, color: Color32) {
