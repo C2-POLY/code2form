@@ -105,6 +105,9 @@ pub struct Viewer {
     /// A double-click frames the view; the app turns it off while the
     /// pointer is over something a double-click opens.
     pub frame_on_double_click: bool,
+    /// A drag turns or pans the camera; the app turns it off while a drag
+    /// rewires a circuit.
+    pub orbit_enabled: bool,
     pauses: Vec<PauseMark>,
     /// The text the scene was rendered from.
     scene_source: String,
@@ -149,6 +152,7 @@ impl Viewer {
             enclosure: 0..0,
             show_enclosure: true,
             frame_on_double_click: true,
+            orbit_enabled: true,
             pauses: Vec::new(),
             scene_source: String::new(),
             dragging: None,
@@ -261,6 +265,16 @@ impl Viewer {
                 r.set_solid_colors(colors);
             }
         }
+    }
+
+    /// Where a point shows in the view's `rect`, when in front of the eye.
+    pub fn to_screen(&self, rect: Rect, p: Vec3) -> Option<Pos2> {
+        let view_projection = self.camera.projection(self.aspect, self.scene_radius()) * self.camera.view();
+        let clip = view_projection * p.extend(1.0);
+        (clip.w > 1e-6).then(|| {
+            let ndc = clip.truncate() / clip.w;
+            Pos2::new(rect.left() + (ndc.x + 1.0) * 0.5 * rect.width(), rect.top() + (1.0 - ndc.y) * 0.5 * rect.height())
+        })
     }
 
     /// The ray from the eye through `pos` in the view's `rect`.
@@ -470,7 +484,7 @@ impl Viewer {
             self.goal = None;
         }
         let delta = response.drag_delta();
-        if response.dragged() && delta != Vec2::ZERO {
+        if response.dragged() && delta != Vec2::ZERO && self.orbit_enabled {
             let shift = ui.input(|i| i.modifiers.shift);
             let delta = GVec2::new(delta.x, delta.y);
             if response.dragged_by(PointerButton::Secondary)
@@ -482,7 +496,7 @@ impl Viewer {
                 self.camera.orbit(delta);
             }
         }
-        if response.dragged() {
+        if response.dragged() && self.orbit_enabled {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if response.double_clicked() && self.frame_on_double_click {
@@ -1088,5 +1102,33 @@ mod tests {
         let yaw = viewer.camera.yaw;
         frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
         assert_ne!(viewer.camera.yaw, yaw);
+    }
+
+    #[test]
+    fn a_drag_does_not_orbit_while_rewiring() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        let at = Pos2::new(400.0, 300.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        viewer.orbit_enabled = false;
+        frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at), press(true)], 1.0 / 60.0);
+        let before = viewer.camera;
+        for step in 1..=5 {
+            frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at + Vec2::new(step as f32 * 10.0, 0.0))], 1.0 / 60.0);
+        }
+        assert_eq!((viewer.camera.yaw, viewer.camera.pitch), (before.yaw, before.pitch));
+        frame(&ctx, &mut viewer, vec![press(false)], 1.0 / 60.0);
+        // Rewiring done, a drag turns the camera again.
+        viewer.orbit_enabled = true;
+        frame(&ctx, &mut viewer, vec![press(true)], 1.0 / 60.0);
+        for step in 1..=5 {
+            frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at + Vec2::new(step as f32 * 10.0, 0.0))], 1.0 / 60.0);
+        }
+        assert_ne!(viewer.camera.yaw, before.yaw);
     }
 }

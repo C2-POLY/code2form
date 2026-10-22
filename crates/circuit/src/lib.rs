@@ -87,8 +87,10 @@ pub struct Wire {
     /// The checks whose warnings about its two pins are accepted, from
     /// [`check::ALLOWABLE`].
     pub allow: Vec<String>,
-    /// Its `from` in the circuit file.
+    /// Its `from` in the circuit file: the quoted value.
     pub span: Span,
+    /// Its `to` in the circuit file: the quoted value.
+    pub to_span: Span,
 }
 
 /// A pin of a part: indices into [`Circuit::parts`] and that part's pins.
@@ -445,7 +447,8 @@ impl Reader<'_> {
             self.error(format!("`{}` is not a warning that can be allowed: expected one of {expected}", rule.get_ref()), span(rule));
         }
         let allow = entry.allow.into_iter().map(Spanned::into_inner).collect();
-        Some(Wire { from, to, color: entry.color, label: entry.label, allow, span: span(&entry.from) })
+        let (span, to_span) = (span(&entry.from), span(&entry.to));
+        Some(Wire { from, to, color: entry.color, label: entry.label, allow, span, to_span })
     }
 
     fn end(&mut self, circuit: &Circuit, end: &Spanned<String>) -> Option<End> {

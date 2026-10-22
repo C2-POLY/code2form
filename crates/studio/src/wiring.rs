@@ -26,6 +26,7 @@ pub const WIRED_PIN_RADIUS: f32 = 0.75;
 const DEFAULT_WIRE: [f32; 4] = [0.78, 0.80, 0.84, 1.0];
 const PIN: [f32; 4] = [0.42, 0.44, 0.48, 1.0];
 const WIRED_PIN: [f32; 4] = [0.96, 0.96, 0.92, 1.0];
+const ERROR_PIN: [f32; 4] = [1.0, 0.22, 0.20, 1.0];
 /// What greyed-out things fade towards.
 const GREY: [f32; 4] = [0.30, 0.32, 0.36, 1.0];
 
@@ -52,6 +53,8 @@ pub struct Look {
     pub pulse: Option<f32>,
     /// By part index; missing ones are normal.
     pub parts: Vec<Emphasis>,
+    /// Pins shown in red, picked out: a drop there would break a check.
+    pub error_pins: HashSet<End>,
 }
 
 impl Look {
@@ -131,7 +134,14 @@ impl Wiring {
             if emphasis == Emphasis::Strong {
                 radius *= 1.5 + look.pulse.unwrap_or(0.0);
             }
-            let base = if wired { WIRED_PIN } else { PIN };
+            let base = if look.error_pins.contains(&end) {
+                radius = self.pin_radius(end) * 1.8;
+                ERROR_PIN
+            } else if wired {
+                WIRED_PIN
+            } else {
+                PIN
+            };
             let position = self.circuit.place(end).position.map(|c| c as f32);
             push_sphere(&mut pins, position, radius, shade(base, emphasis));
         }

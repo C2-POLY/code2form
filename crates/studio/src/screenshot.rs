@@ -3,7 +3,8 @@
 //!
 //! `CODE2FORM_SCREENSHOT_SELECT` selects something of a circuit first: a
 //! pin as `part.pin`, a part by its name, or a wire as `wire:7` (from 1);
-//! `assembly:7` shows the assembly mode at its seventh wire.
+//! `assembly:7` shows the assembly mode at its seventh wire; and
+//! `rewire:xiao.5V>mic.VDD`, a new wire dragged from one pin to another.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

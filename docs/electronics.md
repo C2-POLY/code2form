@@ -411,6 +411,29 @@ enclosure and the wires at a height.
 - **Double-click a part**: opens its `.c2f` file, to fix an annotation.
 - **Escape** clears the selection.
 
+### Rewire with the mouse
+
+The view edits the wiring too, by writing into the circuit file: only
+the values or the table concerned change, and the file keeps its
+comments, order and layout. Each gesture is one step to undo (Cmd+Z in
+the editor).
+
+- **Move a wire's end**: press on the wire near one of its ends (its
+  first or last third, not on the pin's dot) and drop it on another pin.
+  That end's `from` or `to` changes; its color, label and `allow` stay.
+- **Add a wire**: press on a pin and drop on another. A `[[wires]]`
+  table with `from` and `to` goes at the end of the file, last in the
+  mount order; give it a color and a label in the editor.
+- **Remove a wire**: drop its end away from any pin, or click the wire
+  and press **Delete** (or Backspace). Its `[[wires]]` table goes, from
+  its header to its last key; comments before the next table stay.
+
+While you drag, the pin under the pointer stands out. When dropping
+there would break a check (5 V onto a 3.3 V pin, two supplies tied), it
+turns red and the bubble says why; you can still drop. A drag that
+starts elsewhere turns the camera as usual. Rewiring is off in Assembly
+mode.
+
 ### Assembly mode
 
 The **Assembly** button in the toolbar (for a circuit with wires) walks

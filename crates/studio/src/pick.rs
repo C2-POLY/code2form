@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashSet};
 use c2f_circuit::{Circuit, End};
 use glam::Vec3;
 
+use crate::rewire::Side;
 use crate::wiring::{WIRE_RADIUS, Wiring};
 
 /// Something of the circuit, under the pointer or selected.
@@ -44,6 +45,13 @@ impl Ray {
     /// The distance along the ray where it comes within `radius` (plus the
     /// slack) of the segment `a`..`b`.
     pub fn segment(&self, a: Vec3, b: Vec3, radius: f32) -> Option<f32> {
+        let (along, distance) = self.closest(a, b)?;
+        (distance <= radius + self.slack * along).then_some(along)
+    }
+
+    /// Where the segment `a`..`b` comes closest to the ray: the distance
+    /// along the ray, and how close; `None` when it is behind the eye.
+    fn closest(&self, a: Vec3, b: Vec3) -> Option<(f32, f32)> {
         // The closest points of two lines, kept within the segment.
         let (u, v, w) = (self.direction, b - a, self.origin - a);
         let (bb, c, d, e) = (u.dot(v), v.dot(v), u.dot(w), v.dot(w));
@@ -56,8 +64,7 @@ impl Ray {
         if along <= 0.0 {
             return None;
         }
-        let distance = (self.origin + u * along).distance(on_segment);
-        (distance <= radius + self.slack * along).then_some(along)
+        Some((along, (self.origin + u * along).distance(on_segment)))
     }
 
     /// The distance along the ray where it enters the box.
@@ -101,6 +108,27 @@ pub fn pick(wiring: &Wiring, part_boxes: &[Option<(Vec3, Vec3)>], ray: &Ray) -> 
         .enumerate()
         .filter_map(|(index, b)| b.and_then(|(lo, hi)| ray.aabb(lo, hi)).map(|t| (t, Hit::Part(index))));
     nearest(parts)
+}
+
+/// The end of wire `index` the ray meets it near: its first or last third,
+/// where a press grabs that end; `None` in the middle.
+pub fn wire_side(wiring: &Wiring, index: usize, ray: &Ray) -> Option<Side> {
+    let path = wiring.paths.get(index)?;
+    let points: Vec<Vec3> = path.iter().map(|p| Vec3::from(p.map(|c| c as f32))).collect();
+    let segments = points.len().checked_sub(1).filter(|&n| n > 0)?;
+    let (nearest, _) = points
+        .windows(2)
+        .enumerate()
+        .filter_map(|(i, pair)| ray.closest(pair[0], pair[1]).map(|(_, distance)| (i, distance)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let along = (nearest as f32 + 0.5) / segments as f32;
+    if along < 1.0 / 3.0 {
+        Some(Side::From)
+    } else if along > 2.0 / 3.0 {
+        Some(Side::To)
+    } else {
+        None
+    }
 }
 
 /// The pins joined to `end` through wires, it among them, and those wires.
@@ -172,6 +200,22 @@ mod tests {
         let mid = wiring.paths[2][wiring.paths[2].len() / 2].map(|c| c as f32);
         assert_eq!(pick(&wiring, &boxes, &ray([mid[0], mid[1], 80.0], mid)), Some(Hit::Wire(2)));
         assert_eq!(pick(&wiring, &boxes, &ray([50.0, 50.0, 50.0], [60.0, 60.0, 0.0])), None);
+    }
+
+    #[test]
+    fn a_wire_is_grabbed_by_the_end_nearer_the_press() {
+        let wiring = Wiring::new(circuit());
+        let at = |t: f64| {
+            let path = &wiring.paths[2];
+            let p = path[((path.len() - 1) as f64 * t).round() as usize].map(|c| c as f32);
+            ray([p[0], p[1], p[2] + 60.0], p)
+        };
+        // Just above each end's pin the pin wins; along the wire, the end.
+        assert_eq!(pick(&wiring, &[], &at(0.0)), Some(Hit::Pin(End { part: 0, pin: 1 })));
+        assert_eq!(wire_side(&wiring, 2, &at(0.2)), Some(Side::From));
+        assert_eq!(wire_side(&wiring, 2, &at(0.5)), None);
+        assert_eq!(wire_side(&wiring, 2, &at(0.8)), Some(Side::To));
+        assert_eq!(wire_side(&wiring, 7, &at(0.8)), None);
     }
 
     #[test]

@@ -131,7 +131,12 @@ pub fn card(circuit: &Circuit, hit: Hit, source: &str, lengths: Lengths) -> (Str
 
 /// The bubble next to the pointer, kept inside the view.
 pub fn paint_bubble(painter: &egui::Painter, rect: Rect, pointer: Pos2, text: &str) {
-    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), TEXT);
+    paint_bubble_in(painter, rect, pointer, text, TEXT);
+}
+
+/// [`paint_bubble`], its text in `color`.
+pub fn paint_bubble_in(painter: &egui::Painter, rect: Rect, pointer: Pos2, text: &str, color: Color32) {
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), color);
     let size = galley.size() + Vec2::new(16.0, 8.0);
     let inside = rect.shrink(6.0);
     let min = Pos2::new(
@@ -141,7 +146,7 @@ pub fn paint_bubble(painter: &egui::Painter, rect: Rect, pointer: Pos2, text: &s
     let bubble = Rect::from_min_size(min, size);
     let border = Stroke::new(1.0, Color32::from_white_alpha(40));
     painter.rect(bubble, CornerRadius::same(6), Color32::from_black_alpha(200), border, StrokeKind::Inside);
-    painter.galley(bubble.min + Vec2::new(8.0, 4.0), galley, TEXT);
+    painter.galley(bubble.min + Vec2::new(8.0, 4.0), galley, color);
 }
 
 /// The selection's card, in the top-left corner of the view, under the

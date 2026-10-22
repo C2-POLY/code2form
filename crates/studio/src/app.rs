@@ -10,6 +10,7 @@ use eframe::egui::{
     Sense, Stroke, Vec2,
 };
 use eframe::glow;
+use c2f_circuit::End;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
@@ -20,6 +21,7 @@ use crate::editor::{Editor, FindRequest};
 use crate::open_events;
 use crate::pause_edit;
 use crate::recent::RecentFiles;
+use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
@@ -68,6 +70,33 @@ impl Pending {
             Pending::New => "starting a new file",
             Pending::Open | Pending::OpenPath(_) => "opening another file",
             Pending::Quit => "quitting",
+        }
+    }
+}
+
+/// A drag in the view that rewires the circuit.
+struct Rewire {
+    /// The wire end grabbed; `None` for a new wire from `anchor`.
+    grabbed: Option<(usize, Side)>,
+    /// The pin the wire keeps: its other end, or where a new one starts.
+    anchor: End,
+    /// Where the press was, to tell a drag from a click.
+    origin: egui::Pos2,
+    moved: bool,
+    /// The pin under the pointer, and the check error dropping there
+    /// would bring.
+    target: Option<End>,
+    error: Option<String>,
+}
+
+impl Rewire {
+    /// What dropping now does.
+    fn edit(&self) -> Option<Edit> {
+        match (self.grabbed, self.target) {
+            (Some((wire, side)), Some(to)) => Some(Edit::Move { wire, side, to }),
+            (Some((wire, _)), None) => Some(Edit::Remove { wire }),
+            (None, Some(to)) => Some(Edit::Add { from: self.anchor, to }),
+            (None, None) => None,
         }
     }
 }
@@ -123,6 +152,8 @@ pub struct StudioApp {
     started: Instant,
     /// Where the 3D view is, as last shown.
     view_rect: egui::Rect,
+    /// A drag rewiring the circuit, from a pin or a wire's end.
+    rewire: Option<Rewire>,
     /// The generation it was read for.
     circuit_generation: u64,
     /// The circuit's part files and their modification times, to render
@@ -174,6 +205,7 @@ impl StudioApp {
             wire_margin: WireMargin::load(crate::prefs::wire_margin_store()),
             started: Instant::now(),
             view_rect: egui::Rect::NOTHING,
+            rewire: None,
             circuit_generation: 0,
             part_files: Vec::new(),
             editor: Editor::new(),
@@ -307,7 +339,21 @@ impl StudioApp {
                     self.circuit_generation = generation;
                     self.set_circuit(Some(circuit));
                     if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()) {
-                        if let Some(step) = target.strip_prefix("assembly:").and_then(|n| n.parse::<usize>().ok()) {
+                        let rewire = target.strip_prefix("rewire:").and_then(|t| t.split_once('>'));
+                        if let Some((from, to)) = rewire {
+                            // A new wire held over a pin, as a drag shows it.
+                            let end = |name: &str| match self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, name)) {
+                                Some(Hit::Pin(end)) => Some(end),
+                                _ => None,
+                            };
+                            if let (Some(anchor), Some(to), Some(wiring)) = (end(from), end(to), &self.wiring) {
+                                let error = rewire::new_error(&wiring.circuit, Edit::Add { from: anchor, to });
+                                let origin = egui::Pos2::ZERO;
+                                let held = Rewire { grabbed: None, anchor, origin, moved: true, target: Some(to), error };
+                                self.rewire = Some(held);
+                                self.update_overlay();
+                            }
+                        } else if let Some(step) = target.strip_prefix("assembly:").and_then(|n| n.parse::<usize>().ok()) {
                             // Set before turning the mode on: a screenshot
                             // leaves the saved progress as it is.
                             self.mount.step = step.saturating_sub(1);
@@ -378,6 +424,15 @@ impl StudioApp {
         if let Some(look) = self.mount_look() {
             return look;
         }
+        if let (Some(wiring), Some(rewire)) = (&self.wiring, &self.rewire) {
+            // The wire being moved fades; the pins at stake stand out.
+            let wires = (0..wiring.circuit.wires.len())
+                .map(|i| if rewire.grabbed.is_some_and(|(w, _)| w == i) { Emphasis::Dim } else { Emphasis::Normal })
+                .collect();
+            let strong_pins = std::iter::once(rewire.anchor).chain(rewire.target).collect();
+            let error_pins = rewire.target.filter(|_| rewire.error.is_some()).into_iter().collect();
+            return Look { wires, strong_pins, error_pins, ..Look::default() };
+        }
         let (Some(wiring), Some(selection)) = (&self.wiring, self.selection) else { return Look::default() };
         let circuit = &wiring.circuit;
         let pick_out = |on: bool| if on { Emphasis::Strong } else { Emphasis::Dim };
@@ -400,7 +455,7 @@ impl StudioApp {
                 ((0..circuit.wires.len()).map(|i| shown(touches(i))).collect(), pins, parts)
             }
         };
-        Look { wires, strong_pins, dim_pins: true, pulse: None, parts }
+        Look { wires, strong_pins, dim_pins: true, pulse: None, parts, error_pins: Default::default() }
     }
 
     /// Sends the wires and pins, as they now look, to the view.
@@ -457,7 +512,8 @@ impl StudioApp {
         // Two pulses a second.
         let time = self.started.elapsed().as_secs_f32();
         let pulse = 0.5 + 0.5 * (time * std::f32::consts::TAU * 2.0).sin();
-        Some(Look { wires, strong_pins: [current.from, current.to].into(), dim_pins: true, pulse: Some(pulse), parts })
+        let strong_pins = [current.from, current.to].into();
+        Some(Look { wires, strong_pins, dim_pins: true, pulse: Some(pulse), parts, error_pins: Default::default() })
     }
 
     /// Turns the assembly mode on or off.
@@ -583,8 +639,160 @@ impl StudioApp {
         self.update_overlay();
     }
 
+    // ---- Rewiring ----
+
+    /// A press in the view on a pin, or on a wire near one of its ends,
+    /// starts rewiring: before the view handles the press, so that it does
+    /// not turn the camera. Not while assembling.
+    fn start_rewire(&mut self, ctx: &egui::Context) {
+        let (pressed, origin, shift) =
+            ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin(), i.modifiers.shift));
+        let (Some(wiring), Some(origin)) = (&self.wiring, origin.filter(|_| pressed)) else { return };
+        let slider = self.viewer.layer_view && origin.x > self.view_rect.right() - 60.0;
+        // Not through a menu, a popup or the assembly bar.
+        let covered = ctx.layer_id_at(origin).is_some_and(|layer| layer.order != egui::Order::Background);
+        if shift || self.mount.active || !self.view_rect.contains(origin) || slider || covered {
+            return;
+        }
+        let ray = self.viewer.ray(self.view_rect, origin);
+        let grabbed = match pick::pick(wiring, &self.part_boxes, &ray) {
+            Some(Hit::Pin(end)) => Some((None, end)),
+            Some(Hit::Wire(index)) => pick::wire_side(wiring, index, &ray).map(|side| {
+                let wire = &wiring.circuit.wires[index];
+                (Some((index, side)), if side == Side::From { wire.to } else { wire.from })
+            }),
+            _ => None,
+        };
+        if let Some((grabbed, anchor)) = grabbed {
+            self.rewire = Some(Rewire { grabbed, anchor, origin, moved: false, target: None, error: None });
+        }
+    }
+
+    /// Follows a rewiring drag: the pin under the pointer and what a drop
+    /// there would break; on release, the edit. Returns false when the
+    /// press turned out to be a click, for the view to handle.
+    fn follow_rewire(&mut self, ctx: &egui::Context, response: &egui::Response) -> bool {
+        let (Some(wiring), Some(rewire)) = (&self.wiring, &mut self.rewire) else {
+            self.rewire = None;
+            return false;
+        };
+        let (pointer, released) = ctx.input(|i| (i.pointer.interact_pos(), i.pointer.primary_released()));
+        let mut changed = false;
+        if let Some(pos) = pointer {
+            rewire.moved |= pos.distance(rewire.origin) > 4.0;
+            let ray = self.viewer.ray(response.rect, pos);
+            let target = match pick::pick(wiring, &[], &ray) {
+                Some(Hit::Pin(end)) if end != rewire.anchor => Some(end),
+                _ => None,
+            };
+            if target != rewire.target {
+                rewire.target = target;
+                rewire.error = rewire.edit().and_then(|edit| rewire::new_error(&wiring.circuit, edit));
+                changed = true;
+            }
+        }
+        if !released {
+            if changed {
+                self.update_overlay();
+            }
+            ctx.request_repaint();
+            return true;
+        }
+        let Some(rewire) = self.rewire.take() else { return false };
+        self.update_overlay();
+        // A press and release in place is a click.
+        if !rewire.moved {
+            return false;
+        }
+        // Back onto the pin it came from: nothing to do.
+        let unchanged = match (&self.wiring, rewire.grabbed) {
+            (Some(wiring), Some((wire, side))) => {
+                let w = &wiring.circuit.wires[wire];
+                rewire.target == Some(if side == Side::From { w.from } else { w.to })
+            }
+            _ => false,
+        };
+        if let Some(edit) = rewire.edit().filter(|_| !unchanged) {
+            self.apply_rewire(ctx, edit);
+        }
+        true
+    }
+
+    /// The rubber band from the pin kept to the pointer, and what a drop
+    /// does, in red when it would break a check.
+    fn paint_rewire(&self, painter: &egui::Painter, rect: egui::Rect, pointer: Option<egui::Pos2>) {
+        let (Some(wiring), Some(rewire)) = (&self.wiring, &self.rewire) else { return };
+        if !rewire.moved {
+            return;
+        }
+        let circuit = &wiring.circuit;
+        let place = |end: End| glam::Vec3::from(circuit.place(end).position.map(|c| c as f32));
+        // Without a pointer (a scripted screenshot), at the pin targeted.
+        let held = rewire.target.and_then(|t| self.viewer.to_screen(rect, place(t)));
+        let Some(pointer) = pointer.or(held) else { return };
+        let color = if rewire.error.is_some() { theme::ERROR } else { theme::ACCENT_STRONG };
+        if let Some(anchor) = self.viewer.to_screen(rect, place(rewire.anchor)) {
+            let to = rewire.target.and_then(|t| self.viewer.to_screen(rect, place(t))).unwrap_or(pointer);
+            painter.line_segment([anchor, to], Stroke::new(2.0, color));
+        }
+        let text = match (&rewire.error, rewire.grabbed, rewire.target) {
+            (Some(error), _, _) => format!("{error} (drop anyway to wire it)"),
+            (None, Some(_), Some(to)) => format!("Move this end to {}", circuit.end_name(to)),
+            (None, Some(_), None) => "Drop away from a pin to remove this wire".to_string(),
+            (None, None, Some(to)) => {
+                format!("New wire: {} ➡ {}", circuit.end_name(rewire.anchor), circuit.end_name(to))
+            }
+            (None, None, None) => "Drop on a pin to wire it".to_string(),
+        };
+        let color = if rewire.error.is_some() { theme::ERROR } else { wiring::TEXT };
+        inspect::paint_bubble_in(painter, rect, pointer, &text, color);
+    }
+
+    /// Writes a rewiring into the circuit's text, as one step of the
+    /// editor's undo history, and renders it.
+    fn apply_rewire(&mut self, ctx: &egui::Context, edit: Edit) {
+        let Some(wiring) = &self.wiring else { return };
+        let circuit = &wiring.circuit;
+        let done = match edit {
+            Edit::Move { to, .. } => format!("Moved a wire's end to {}", circuit.end_name(to)),
+            Edit::Add { from, to } => format!("Added a wire: {} ➡ {}", circuit.end_name(from), circuit.end_name(to)),
+            Edit::Remove { wire } => {
+                let w = &circuit.wires[wire];
+                format!("Removed the wire {} ➡ {}", circuit.end_name(w.from), circuit.end_name(w.to))
+            }
+        };
+        let fresh = self.sent_source.as_deref() == Some(self.text.as_str());
+        let result = if fresh {
+            rewire::apply(&self.text, circuit, edit)
+        } else {
+            Err("the code changed since the last render: try again once it is rendered".to_string())
+        };
+        match result {
+            Ok((text, cursor)) => {
+                if matches!(edit, Edit::Remove { .. }) {
+                    self.selection = None;
+                }
+                self.editor.replace_text(ctx, &mut self.text, text, cursor);
+                self.console.log(Level::Info, done);
+                self.render_now();
+            }
+            Err(why) => self.console.log(Level::Warning, format!("Cannot rewire: {why}")),
+        }
+    }
+
     /// Hovering, clicks and Escape over the view of a circuit.
     fn circuit_input(&mut self, ctx: &egui::Context, response: &egui::Response) {
+        if self.rewire.is_some() && self.follow_rewire(ctx, response) {
+            self.hover = None;
+            return;
+        }
+        // Delete or Backspace removes the wire selected.
+        let delete = ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace));
+        if delete && !self.mount.active && ctx.memory(|m| m.focused().is_none()) {
+            if let Some(Hit::Wire(wire)) = self.selection {
+                self.apply_rewire(ctx, Edit::Remove { wire });
+            }
+        }
         let Some(wiring) = &self.wiring else { return };
         if !response.dragged() {
             self.hover = response.hover_pos().and_then(|pos| {
@@ -1234,9 +1442,12 @@ impl StudioApp {
             };
             // A double-click on a part opens it rather than framing the view.
             self.viewer.frame_on_double_click = !matches!(self.hover, Some(Hit::Part(_)));
+            self.start_rewire(ctx);
+            self.viewer.orbit_enabled = self.rewire.is_none();
             let response = self.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
+            self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
             if let Some(wiring) = &self.wiring {
                 let painter = ui.painter_at(response.rect);
                 let right = if self.viewer.layer_view { 70.0 } else { 12.0 };

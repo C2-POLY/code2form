@@ -17,6 +17,7 @@ mod pick;
 mod prefs;
 mod recent;
 mod renderer;
+mod rewire;
 mod screenshot;
 mod theme;
 mod viewer;
