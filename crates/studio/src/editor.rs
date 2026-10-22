@@ -407,6 +407,12 @@ impl Editor {
         changed
     }
 
+    /// Replaces the text from outside the editor, as one step of its undo
+    /// history, with the cursor at char `cursor`.
+    pub fn replace_text(&self, ctx: &egui::Context, text: &mut String, new_text: String, cursor: usize) {
+        self.edit(ctx, text, new_text, CCursorRange::one(CCursor::new(cursor)));
+    }
+
     /// Replaces the text as one step of the editor's undo history.
     fn edit(&self, ctx: &egui::Context, text: &mut String, new_text: String, selection: CCursorRange) {
         let mut state = TextEdit::load_state(ctx, self.id).unwrap_or_default();

@@ -1,8 +1,9 @@
 //! OpenGL drawing of the 3D view, run from an egui paint callback.
 //!
 //! Meshes are uploaded once, when a new scene arrives, and drawn every
-//! frame: a background gradient, the grid, the opaque model, the axes,
-//! then the translucent parts with depth writes off.
+//! frame: a background gradient, the grid, the opaque model, the axes and
+//! the outlines of the print's pauses, then the translucent parts with
+//! depth writes off, the pause planes last.
 
 use eframe::egui_glow::ShaderVersion;
 use eframe::glow::{self, HasContext};
@@ -20,6 +21,16 @@ const ATTR_POSITION: u32 = 0;
 const ATTR_NORMAL: u32 = 1;
 const ATTR_COLOR: u32 = 2;
 
+/// The print's pauses: a translucent plane and a bright outline at each
+/// pause height, in cyan, which stands out from the yellow model.
+const PAUSE_PLANE: [f32; 4] = [0.20, 0.78, 1.0, 0.30];
+const PAUSE_OUTLINE: [f32; 4] = [0.45, 0.90, 1.0, 1.0];
+
+/// No cut: everything is drawn.
+const NO_CUT: f32 = 1e30;
+/// Keeps what lies exactly at the cut, such as a pause plane at its height.
+const CUT_TOLERANCE: f32 = 1e-4;
+
 const BACKGROUND_TOP: [f32; 3] = [0.215, 0.240, 0.290];
 const BACKGROUND_BOTTOM: [f32; 3] = [0.078, 0.086, 0.106];
 
@@ -30,6 +41,9 @@ pub struct Frame {
     pub projection: Mat4,
     pub show_grid: bool,
     pub show_axes: bool,
+    pub show_pauses: bool,
+    /// The layer view: what lies above this height is not drawn.
+    pub cut: Option<f32>,
 }
 
 /// The XY grid, sized to the model.
@@ -81,6 +95,8 @@ struct MeshProgram {
     view: Option<glow::UniformLocation>,
     projection: Option<glow::UniformLocation>,
     pass: Option<glow::UniformLocation>,
+    cut: Option<glow::UniformLocation>,
+    cut_face: Option<glow::UniformLocation>,
 }
 
 struct LineProgram {
@@ -89,6 +105,7 @@ struct LineProgram {
     projection: Option<glow::UniformLocation>,
     fade: Option<glow::UniformLocation>,
     bias: Option<glow::UniformLocation>,
+    cut: Option<glow::UniformLocation>,
 }
 
 struct BackgroundProgram {
@@ -113,6 +130,8 @@ pub struct Renderer {
     solid: Option<GpuBuffer>,
     highlights: Option<GpuBuffer>,
     backgrounds: Option<GpuBuffer>,
+    pause_planes: Option<GpuBuffer>,
+    pause_outlines: Option<GpuBuffer>,
     grid_lines: Option<GpuBuffer>,
     axes: Option<GpuBuffer>,
     grid: Option<Grid>,
@@ -154,6 +173,8 @@ impl Renderer {
                     view: gl.get_uniform_location(mesh, "u_view"),
                     projection: gl.get_uniform_location(mesh, "u_projection"),
                     pass: gl.get_uniform_location(mesh, "u_pass"),
+                    cut: gl.get_uniform_location(mesh, "u_cut"),
+                    cut_face: gl.get_uniform_location(mesh, "u_cut_face"),
                     program: mesh,
                 },
                 line: LineProgram {
@@ -161,6 +182,7 @@ impl Renderer {
                     projection: gl.get_uniform_location(line, "u_projection"),
                     fade: gl.get_uniform_location(line, "u_fade"),
                     bias: gl.get_uniform_location(line, "u_bias"),
+                    cut: gl.get_uniform_location(line, "u_cut"),
                     program: line,
                 },
                 background: BackgroundProgram {
@@ -172,6 +194,8 @@ impl Renderer {
                 solid: None,
                 highlights: None,
                 backgrounds: None,
+                pause_planes: None,
+                pause_outlines: None,
                 grid_lines: None,
                 axes: None,
                 grid: None,
@@ -196,13 +220,26 @@ impl Renderer {
     fn upload(&mut self, gl: &glow::Context) {
         if let Some(scene) = self.pending_scene.take() {
             unsafe {
-                for buffer in [self.solid.take(), self.highlights.take(), self.backgrounds.take()].into_iter().flatten()
+                for buffer in [
+                    self.solid.take(),
+                    self.highlights.take(),
+                    self.backgrounds.take(),
+                    self.pause_planes.take(),
+                    self.pause_outlines.take(),
+                ]
+                .into_iter()
+                .flatten()
                 {
                     delete(gl, buffer);
                 }
                 self.solid = upload_mesh(gl, &scene.solid);
                 self.highlights = upload_mesh(gl, &scene.highlights);
                 self.backgrounds = upload_mesh(gl, &scene.backgrounds);
+                if let Some(footprint) = pause_footprint(&scene) {
+                    let heights: Vec<f32> = scene.pauses.iter().map(|p| p.z as f32).collect();
+                    self.pause_planes = upload_mesh(gl, &pause_planes(&heights, footprint));
+                    self.pause_outlines = upload_lines(gl, &pause_outlines(&heights, footprint));
+                }
             }
         }
         if let Some(grid) = self.pending_grid.take() {
@@ -246,7 +283,7 @@ impl Renderer {
             if frame.show_grid {
                 if let Some(grid) = &self.grid_lines {
                     gl.depth_mask(false);
-                    self.draw_lines(gl, frame, grid, fade, 0.0);
+                    self.draw_lines(gl, frame, grid, fade, 0.0, false);
                 }
             }
 
@@ -254,14 +291,20 @@ impl Renderer {
             gl.depth_mask(true);
             gl.disable(glow::BLEND);
             if let Some(solid) = &self.solid {
-                self.draw_mesh(gl, frame, solid, Pass::Opaque);
+                self.draw_mesh(gl, frame, solid, Pass::Opaque, true);
             }
             gl.enable(glow::BLEND);
 
             if frame.show_axes {
                 if let Some(axes) = &self.axes {
                     gl.depth_mask(true);
-                    self.draw_lines(gl, frame, axes, 0.0, 2e-4);
+                    self.draw_lines(gl, frame, axes, 0.0, 2e-4, false);
+                }
+            }
+            if frame.show_pauses {
+                if let Some(outlines) = &self.pause_outlines {
+                    gl.depth_mask(false);
+                    self.draw_lines(gl, frame, outlines, 0.0, 2e-4, true);
                 }
             }
 
@@ -272,19 +315,24 @@ impl Renderer {
             for culled in [glow::FRONT, glow::BACK] {
                 gl.cull_face(culled);
                 if let Some(solid) = &self.solid {
-                    self.draw_mesh(gl, frame, solid, Pass::Translucent);
+                    self.draw_mesh(gl, frame, solid, Pass::Translucent, true);
                 }
                 // `#` and `%` parts often share faces with the model (the
                 // walls of a hole they cut): pull them forward to win.
                 gl.enable(glow::POLYGON_OFFSET_FILL);
                 gl.polygon_offset(-1.0, -4.0);
                 if let Some(backgrounds) = &self.backgrounds {
-                    self.draw_mesh(gl, frame, backgrounds, Pass::All);
+                    self.draw_mesh(gl, frame, backgrounds, Pass::All, false);
                 }
                 if let Some(highlights) = &self.highlights {
-                    self.draw_mesh(gl, frame, highlights, Pass::All);
+                    self.draw_mesh(gl, frame, highlights, Pass::All, false);
                 }
                 gl.disable(glow::POLYGON_OFFSET_FILL);
+                if frame.show_pauses {
+                    if let Some(planes) = &self.pause_planes {
+                        self.draw_mesh(gl, frame, planes, Pass::All, false);
+                    }
+                }
             }
 
             // Leave the state as egui expects it.
@@ -297,9 +345,13 @@ impl Renderer {
         }
     }
 
-    unsafe fn draw_mesh(&self, gl: &glow::Context, frame: &Frame, buffer: &GpuBuffer, pass: Pass) {
+    /// Draws a mesh, cut at the layer view's height; `solid` colors the
+    /// inside of a cut model as the cut face.
+    unsafe fn draw_mesh(&self, gl: &glow::Context, frame: &Frame, buffer: &GpuBuffer, pass: Pass, solid: bool) {
         unsafe {
             gl.use_program(Some(self.mesh.program));
+            gl.uniform_1_f32(self.mesh.cut.as_ref(), frame.cut.map_or(NO_CUT, |z| z + CUT_TOLERANCE));
+            gl.uniform_1_i32(self.mesh.cut_face.as_ref(), i32::from(solid && frame.cut.is_some()));
             gl.uniform_matrix_4_f32_slice(self.mesh.view.as_ref(), false, &frame.view.to_cols_array());
             gl.uniform_matrix_4_f32_slice(self.mesh.projection.as_ref(), false, &frame.projection.to_cols_array());
             gl.uniform_1_i32(self.mesh.pass.as_ref(), pass as i32);
@@ -308,9 +360,12 @@ impl Renderer {
         }
     }
 
-    unsafe fn draw_lines(&self, gl: &glow::Context, frame: &Frame, buffer: &GpuBuffer, fade: f32, bias: f32) {
+    /// Draws lines; `cut` hides those above the layer view's height.
+    unsafe fn draw_lines(&self, gl: &glow::Context, frame: &Frame, buffer: &GpuBuffer, fade: f32, bias: f32, cut: bool) {
         unsafe {
             gl.use_program(Some(self.line.program));
+            let cut = frame.cut.filter(|_| cut).map_or(NO_CUT, |z| z + CUT_TOLERANCE);
+            gl.uniform_1_f32(self.line.cut.as_ref(), cut);
             gl.uniform_matrix_4_f32_slice(self.line.view.as_ref(), false, &frame.view.to_cols_array());
             gl.uniform_matrix_4_f32_slice(self.line.projection.as_ref(), false, &frame.projection.to_cols_array());
             gl.uniform_1_f32(self.line.fade.as_ref(), fade);
@@ -326,6 +381,8 @@ impl Renderer {
                 self.solid.take(),
                 self.highlights.take(),
                 self.backgrounds.take(),
+                self.pause_planes.take(),
+                self.pause_outlines.take(),
                 self.grid_lines.take(),
                 self.axes.take(),
             ]
@@ -340,6 +397,46 @@ impl Renderer {
             gl.delete_vertex_array(self.background.vao);
         }
     }
+}
+
+/// The rectangle the pause planes cover: the model's XY footprint with a
+/// margin, so their outlines show around it. `None` without pauses.
+pub fn pause_footprint(scene: &Scene) -> Option<([f32; 2], [f32; 2])> {
+    if scene.pauses.is_empty() {
+        return None;
+    }
+    let (lo, hi) = scene.solid.bounds()?;
+    let margin = 0.08 * (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1e-3);
+    Some(([lo[0] - margin, lo[1] - margin], [hi[0] + margin, hi[1] + margin]))
+}
+
+/// The corners of the pause rectangle at height `z`, in order around it.
+pub fn pause_corners(z: f32, (lo, hi): ([f32; 2], [f32; 2])) -> [[f32; 3]; 4] {
+    [[lo[0], lo[1], z], [hi[0], lo[1], z], [hi[0], hi[1], z], [lo[0], hi[1], z]]
+}
+
+fn pause_planes(heights: &[f32], footprint: ([f32; 2], [f32; 2])) -> RenderMesh {
+    let mut mesh = RenderMesh::default();
+    for &z in heights {
+        let [a, b, c, d] = pause_corners(z, footprint);
+        mesh.push_triangle([a, b, c], [PAUSE_PLANE; 3]);
+        mesh.push_triangle([a, c, d], [PAUSE_PLANE; 3]);
+    }
+    mesh
+}
+
+fn pause_outlines(heights: &[f32], footprint: ([f32; 2], [f32; 2])) -> Vec<f32> {
+    let mut out = Vec::with_capacity(heights.len() * 8 * LINE_FLOATS);
+    for &z in heights {
+        let corners = pause_corners(z, footprint);
+        for i in 0..4 {
+            for corner in [corners[i], corners[(i + 1) % 4]] {
+                out.extend(corner);
+                out.extend(PAUSE_OUTLINE);
+            }
+        }
+    }
+    out
 }
 
 fn grid_vertices(grid: Grid) -> Vec<f32> {
@@ -483,7 +580,9 @@ uniform mat4 u_projection;
 out vec3 v_position;
 out vec3 v_normal;
 out vec4 v_color;
+out float v_height;
 void main() {
+    v_height = a_position.z;
     vec4 p = u_view * vec4(a_position, 1.0);
     v_position = p.xyz;
     v_normal = mat3(u_view) * a_normal;
@@ -496,12 +595,22 @@ const MESH_FRAGMENT: &str = r#"
 in vec3 v_position;
 in vec3 v_normal;
 in vec4 v_color;
+in float v_height;
 uniform int u_pass;
+uniform float u_cut;
+uniform int u_cut_face;
 out vec4 f_color;
 void main() {
+    if (v_height > u_cut) discard;
     float alpha = v_color.a;
     if (u_pass == 0 && alpha < 0.999) discard;
     if (u_pass == 1 && alpha >= 0.999) discard;
+    // A cut model shows the inside of its walls: drawn flat, in red, they
+    // read as the cut face, where the cut runs through solid.
+    if (u_cut_face == 1 && !gl_FrontFacing) {
+        f_color = vec4(0.86, 0.34, 0.30, alpha);
+        return;
+    }
     vec3 n = normalize(v_normal);
     vec3 to_eye = normalize(-v_position);
     // Two-sided: light whichever side faces the camera.
@@ -526,9 +635,11 @@ uniform mat4 u_projection;
 uniform float u_bias;
 out vec4 v_color;
 out vec2 v_world;
+out float v_height;
 void main() {
     v_color = a_color;
     v_world = a_position.xy;
+    v_height = a_position.z;
     vec4 p = u_projection * u_view * vec4(a_position, 1.0);
     // Pull lines slightly towards the camera so they win over coplanar faces.
     p.z -= u_bias * p.w;
@@ -539,9 +650,12 @@ void main() {
 const LINE_FRAGMENT: &str = r#"
 in vec4 v_color;
 in vec2 v_world;
+in float v_height;
 uniform float u_fade;
+uniform float u_cut;
 out vec4 f_color;
 void main() {
+    if (v_height > u_cut) discard;
     float alpha = v_color.a;
     if (u_fade > 0.0) {
         float d = length(v_world) / u_fade;
