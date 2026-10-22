@@ -125,7 +125,7 @@ app_zip="$root/target/release/Code2Form-$version-macos-universal.zip"
 cli_zip="$root/target/release/c2f-$version-macos-universal.zip"
 rm -f "$app_zip" "$cli_zip"
 ditto -c -k --keepParent "$app" "$app_zip"
-ditto -c -k "$universal/c2f" "$cli_zip"
+zip -q -j "$cli_zip" "$universal/c2f" "$root/LICENSE-MIT" "$root/LICENSE-APACHE"
 echo "zipped $app_zip and $cli_zip"
 
 if $install; then
