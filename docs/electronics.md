@@ -396,6 +396,32 @@ enclosure by 120.00 mm³". Parts that only touch are fine.
 To look inside, turn on **Layers**: the slider cuts the parts, the
 enclosure and the wires at a height.
 
+### Catalogue
+
+The **Catalogue** button in the toolbar (for a circuit) opens a panel
+of every part under `electronics/` in the library folders: the
+library's, the app's and your own (`~/Documents/OpenSCAD/libraries/electronics`),
+a part found in several listed once, from the first folder searched.
+Each row shows a picture of the part, its name, the first sentence of
+its opening comment and its number of pins; the search field filters on
+the name, that sentence and the pins' names.
+
+- **Drag a picture into the view**: the part goes where you drop it, on
+  the ground (z = 0), to the nearest 0.1 mm. Dropping outside the view
+  does nothing.
+- **Add** places it 5 mm right of the circuit's parts, level with their
+  front.
+
+Either way, the app writes a `[parts.NAME]` table, with `part` and `at`,
+after the circuit's last part, as one step to undo. NAME is the file's
+name, `_2`, `_3`... when it is taken; rename it in the editor.
+
+**New part...** asks for a name and makes `NAME.c2f` in your parts
+folder from a template: a 20 x 15 x 1.6 mm board in a `/* [Size] */`
+section of the customizer, two pins (`VCC`, `GND`) and a mount hole,
+drawn by a module `NAME()`. It then opens it (asking first to save the
+circuit if it changed), and the catalogue lists it.
+
 ### Hover, click, double-click
 
 - **Hover** a pin, a wire or a part: a bubble names it, as "xiao · 5V ·

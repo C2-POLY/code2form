@@ -21,10 +21,19 @@ pub enum Side {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Edit {
     /// Wire `wire`'s `side` goes to pin `to`.
-    Move { wire: usize, side: Side, to: End },
+    Move {
+        wire: usize,
+        side: Side,
+        to: End,
+    },
     /// A new wire, last in the mount order.
-    Add { from: End, to: End },
-    Remove { wire: usize },
+    Add {
+        from: End,
+        to: End,
+    },
+    Remove {
+        wire: usize,
+    },
 }
 
 /// The circuit as `edit` would leave it.
@@ -208,7 +217,13 @@ to = "b.B"
     fn removing_a_wire_takes_its_table_and_leaves_the_comments() {
         let c = read();
         let (text, _) = apply(SRC, &c, Edit::Remove { wire: 1 }).unwrap();
-        assert_eq!(text, SRC.replace("\n[[wires]]\nfrom = \"a.A\"   # the first pin\nto = \"b.B\"\ncolor = \"Red\"\nlabel = \"5 V\"\n", ""));
+        assert_eq!(
+            text,
+            SRC.replace(
+                "\n[[wires]]\nfrom = \"a.A\"   # the first pin\nto = \"b.B\"\ncolor = \"Red\"\nlabel = \"5 V\"\n",
+                ""
+            )
+        );
         assert!(text.contains("label = \"5 V\"\n\n# Signals, from here on.\n\n[[wires]]\nfrom = \"a.B\""), "{text}");
         // The last one, to the end of the file.
         let (text, _) = apply(SRC, &c, Edit::Remove { wire: 2 }).unwrap();
@@ -221,8 +236,13 @@ to = "b.B"
     fn the_checks_run_on_the_circuit_as_the_drop_would_leave_it() {
         let dir = std::env::temp_dir().join(format!("code2form-rewire-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("supply.c2f"), "// @pin V5 [0, 0, 0] power_out 5V\n// @pin GND [1, 0, 0] ground\ncube(1);\n").unwrap();
-        std::fs::write(dir.join("chip.c2f"), "// @pin IO [0, 0, 0] io 3.3V\n// @pin GND [1, 0, 0] ground\ncube(1);\n").unwrap();
+        std::fs::write(
+            dir.join("supply.c2f"),
+            "// @pin V5 [0, 0, 0] power_out 5V\n// @pin GND [1, 0, 0] ground\ncube(1);\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("chip.c2f"), "// @pin IO [0, 0, 0] io 3.3V\n// @pin GND [1, 0, 0] ground\ncube(1);\n")
+            .unwrap();
         let src = "[parts.s]\npart = \"supply.c2f\"\n\n[parts.c]\npart = \"chip.c2f\"\n\n[[wires]]\nfrom = \"s.GND\"\nto = \"c.GND\"\n";
         let c = c2f_circuit::parse(src, &dir.join("test.c2fc"), &[]).unwrap();
         let (supply, chip) = (|pin| End { part: 0, pin }, |pin| End { part: 1, pin });

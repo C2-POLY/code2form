@@ -50,7 +50,10 @@ they are. Written in Rust, it renders as you type.
 - **Wiring in 3D**: the app shows a circuit's parts and its wires in
   their colors, with a legend; a click on a pin highlights its net, and
   the Assembly mode walks through the wires one at a time, saving its
-  progress next to the circuit.
+  progress next to the circuit. Wires are moved, added and removed with
+  the mouse, and a Catalogue panel of the library's parts and your own
+  adds a part by dragging its picture into the view, or makes a new one
+  from a template.
 - **Electronics library**: annotated parts in `library/electronics`
   (XIAO ESP32-S3, ESP32-S3-DevKitC-1, DRV8833, MAX98357A, INMP441,
   capacitors, a speaker, a DC motor, a touch plate); see

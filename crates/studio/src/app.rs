@@ -14,6 +14,7 @@ use c2f_circuit::End;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::catalogue::{self, Catalogue};
 use crate::circuit;
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
@@ -168,6 +169,9 @@ pub struct StudioApp {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    /// The parts catalogue, shown in its panel for a circuit.
+    catalogue: Catalogue,
+    catalogue_open: bool,
     recent: RecentFiles,
     confirm: Option<Pending>,
     allow_close: bool,
@@ -214,6 +218,8 @@ impl StudioApp {
             console_open: true,
             customizer: Customizer::default(),
             customizer_open: None,
+            catalogue: Catalogue::new(&cc.egui_ctx),
+            catalogue_open: false,
             recent: RecentFiles::load(crate::recent::store()),
             confirm: None,
             allow_close: false,
@@ -340,7 +346,9 @@ impl StudioApp {
                     self.set_circuit(Some(circuit));
                     if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()) {
                         let rewire = target.strip_prefix("rewire:").and_then(|t| t.split_once('>'));
-                        if let Some((from, to)) = rewire {
+                        if target == "catalogue" {
+                            self.catalogue_open = true;
+                        } else if let Some((from, to)) = rewire {
                             // A new wire held over a pin, as a drag shows it.
                             let end = |name: &str| match self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, name)) {
                                 Some(Hit::Pin(end)) => Some(end),
@@ -637,6 +645,46 @@ impl StudioApp {
             self.editor.go_to(ctx, &self.text, offset);
         }
         self.update_overlay();
+    }
+
+    // ---- Catalogue ----
+
+    fn catalogue_panel(&mut self, ctx: &egui::Context) {
+        if !self.is_circuit() || !self.catalogue_open {
+            return;
+        }
+        let width = ctx.screen_rect().width();
+        let action = egui::SidePanel::right("catalogue")
+            .frame(customizer::frame())
+            .resizable(true)
+            .default_width(300.0)
+            .width_range(240.0..=(width * 0.4).max(260.0))
+            .show(ctx, |ui| self.catalogue.show(ui))
+            .inner;
+        match action {
+            Some(catalogue::Action::Add(entry)) => {
+                let at = catalogue::free_spot(&self.part_boxes);
+                self.add_part(ctx, &entry, at);
+            }
+            Some(catalogue::Action::Created(path)) => {
+                self.console.log(Level::Info, format!("Made the part {}", path.display()));
+                self.guard(Pending::OpenPath(path));
+            }
+            None => {}
+        }
+    }
+
+    /// Writes a `[parts.NAME]` table for `entry` at `at` into the circuit,
+    /// as one step of the editor's undo history, and renders it.
+    fn add_part(&mut self, ctx: &egui::Context, entry: &catalogue::Entry, at: [f64; 2]) {
+        if !self.is_circuit() {
+            return;
+        }
+        let name = catalogue::part_name(&entry.name, &catalogue::part_names(&self.text));
+        let (text, cursor) = catalogue::insert_part(&self.text, &name, &entry.rel, at);
+        self.editor.replace_text(ctx, &mut self.text, text, cursor);
+        self.console.log(Level::Info, format!("Added the part `{name}` ({})", entry.rel));
+        self.render_now();
     }
 
     // ---- Rewiring ----
@@ -1191,14 +1239,17 @@ impl StudioApp {
                         toolbar_separator(ui);
                     }
                     // A circuit has no parameters: room for its own toggles.
-                    if !self.is_circuit() {
+                    if self.is_circuit() {
+                        let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
+                        toggle.on_hover_text("The parts of the library and your own, to add to the circuit");
+                    } else {
                         let mut shown = self.customizer_shown();
                         let toggle = ui.toggle_value(&mut shown, "Customizer");
                         if toggle.on_hover_text("Show the parameters the file declares").changed() {
                             self.customizer_open = Some(shown);
                         }
-                        toolbar_separator(ui);
                     }
+                    toolbar_separator(ui);
                     ui.toggle_value(&mut self.viewer.show_grid, "Grid").on_hover_text("Show the XY grid");
                     ui.toggle_value(&mut self.viewer.show_axes, "Axes").on_hover_text("Show the axes");
                     ui.toggle_value(&mut self.viewer.layer_view, "Layers")
@@ -1448,6 +1499,13 @@ impl StudioApp {
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
+            // A part dragged from the catalogue lands where it is dropped.
+            if let Some(dragged) = response.dnd_release_payload::<catalogue::Dragged>() {
+                let pointer = ctx.input(|i| i.pointer.interact_pos());
+                let at = pointer.and_then(|pos| catalogue::on_ground(&self.viewer.ray(response.rect, pos)));
+                let at = at.unwrap_or_else(|| catalogue::free_spot(&self.part_boxes));
+                self.add_part(ctx, &dragged.0, at);
+            }
             if let Some(wiring) = &self.wiring {
                 let painter = ui.painter_at(response.rect);
                 let right = if self.viewer.layer_view { 70.0 } else { 12.0 };
@@ -1601,6 +1659,7 @@ impl eframe::App for StudioApp {
         self.console_panel(ctx);
         self.editor_panel(ctx);
         self.customizer_panel(ctx);
+        self.catalogue_panel(ctx);
         self.view_panel(ctx);
         self.confirm_dialog(ctx);
 

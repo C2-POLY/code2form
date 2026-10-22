@@ -3,6 +3,7 @@
 
 mod app;
 mod camera;
+mod catalogue;
 mod circuit;
 mod console;
 mod customizer;
