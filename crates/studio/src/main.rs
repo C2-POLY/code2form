@@ -2,6 +2,7 @@
 //! 3D preview.
 
 mod app;
+mod app_icon;
 mod camera;
 mod catalogue;
 mod circuit;
@@ -10,6 +11,7 @@ mod customizer;
 mod editor;
 mod find;
 mod highlight;
+mod icon_setting;
 mod inspect;
 mod mount;
 mod open_events;
@@ -21,6 +23,7 @@ mod recent;
 mod renderer;
 mod rewire;
 mod screenshot;
+mod settings;
 mod theme;
 mod viewer;
 mod wiring;
@@ -41,7 +44,8 @@ the first render is shown; the window then opens without taking focus.
 
 The Open Recent list is kept in the user's settings folder, or in the
 file CODE2FORM_RECENT_FILES names; screenshot runs without that variable
-neither read nor change it.";
+neither read nor change it. The settings are kept in that folder too;
+screenshot runs leave them aside.";
 
 fn main() -> ExitCode {
     // Old macOS versions add a process serial number to apps the Finder starts.
@@ -53,6 +57,7 @@ fn main() -> ExitCode {
     }
     // Scripted screenshots should not steal the keyboard from the user.
     let background = std::env::var_os("CODE2FORM_SCREENSHOT").is_some();
+    let settings = settings::Settings::load(settings::store().as_deref());
 
     #[allow(unused_mut)]
     let mut options = eframe::NativeOptions {
@@ -61,7 +66,9 @@ fn main() -> ExitCode {
             .with_app_id("code2form")
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([760.0, 480.0])
-            .with_active(!background),
+            .with_active(!background)
+            // Also keeps eframe from showing its own logo in the Dock.
+            .with_icon(icon_setting::icon_data(settings.icon)),
         renderer: eframe::Renderer::Glow,
         multisampling: 4,
         depth_buffer: 24,
@@ -75,8 +82,11 @@ fn main() -> ExitCode {
         }));
     }
     open_events::install();
-    let result =
-        eframe::run_native("Code2Form", options, Box::new(move |cc| Ok(Box::new(app::StudioApp::new(cc, path)))));
+    let result = eframe::run_native(
+        "Code2Form",
+        options,
+        Box::new(move |cc| Ok(Box::new(app::StudioApp::new(cc, path, settings)))),
+    );
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

@@ -19,3 +19,4 @@ pub use collide::{Placement, TOUCHING, collisions};
 pub use image::VIEWS;
 pub use mesh::{Rendered, RenderMesh, Stats};
 pub use primitives::fragments;
+pub use text::set_font_folders;

@@ -68,18 +68,19 @@ pub fn store() -> Option<PathBuf> {
     Some(settings_dir()?.join("recent-files.txt"))
 }
 
+/// The per-user settings folder.
 #[cfg(target_os = "macos")]
-pub fn settings_dir() -> Option<PathBuf> {
+pub(crate) fn settings_dir() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Code2Form"))
 }
 
 #[cfg(windows)]
-pub fn settings_dir() -> Option<PathBuf> {
+pub(crate) fn settings_dir() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("APPDATA")?).join("Code2Form"))
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-pub fn settings_dir() -> Option<PathBuf> {
+pub(crate) fn settings_dir() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())

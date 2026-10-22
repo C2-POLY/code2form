@@ -378,11 +378,28 @@ pub struct Catalogue {
     thumbnails: Thumbnails,
     /// The "New part…" prompt: the name typed, and the last problem.
     prompt: Option<(String, Option<String>)>,
+    /// The library folders set in Settings, searched before the default ones.
+    folders: Vec<PathBuf>,
 }
 
 impl Catalogue {
     pub fn new(ctx: &egui::Context) -> Self {
-        Catalogue { entries: None, query: String::new(), thumbnails: Thumbnails::spawn(ctx.clone()), prompt: None }
+        Catalogue {
+            entries: None,
+            query: String::new(),
+            thumbnails: Thumbnails::spawn(ctx.clone()),
+            prompt: None,
+            folders: Vec::new(),
+        }
+    }
+
+    /// Searches `folders` too, before the default library folders, as the
+    /// renders do.
+    pub fn set_libraries(&mut self, folders: Vec<PathBuf>) {
+        if folders != self.folders {
+            self.folders = folders;
+            self.refresh();
+        }
     }
 
     /// Lists the parts again, as a new part or a changed folder asks.
@@ -392,7 +409,14 @@ impl Catalogue {
 
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<Action> {
         let mut action = None;
-        let entries = self.entries.get_or_insert_with(|| list(&c2f_eval::default_library_paths())).clone();
+        let folders = &self.folders;
+        let entries = self
+            .entries
+            .get_or_insert_with(|| {
+                let libraries: Vec<PathBuf> = folders.iter().cloned().chain(c2f_eval::default_library_paths()).collect();
+                list(&libraries)
+            })
+            .clone();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Parts").strong().color(theme::TEXT));
             ui.label(RichText::new(format!("{}", entries.len())).color(theme::TEXT_DIM));

@@ -95,6 +95,7 @@ pub enum Reply {
 enum Request {
     Render { generation: u64, source: String, path: PathBuf, values: Vec<(String, Literal)> },
     Export { target: PathBuf, format: Format },
+    Libraries(Vec<PathBuf>),
 }
 
 /// The file formats a model exports to: STL and 3MF for a solid, SVG and
@@ -169,6 +170,12 @@ impl Worker {
         generation
     }
 
+    /// Searches `folders` for `include` and `use` before the default
+    /// library folders, from the next render on.
+    pub fn set_libraries(&self, folders: Vec<PathBuf>) {
+        let _ = self.requests.send(Request::Libraries(folders));
+    }
+
     /// Writes the last good model to `target` in `format`.
     pub fn export(&self, target: PathBuf, format: Format) {
         let _ = self.requests.send(Request::Export { target, format });
@@ -184,7 +191,8 @@ impl Worker {
 }
 
 fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64, ctx: &egui::Context) {
-    let library_paths = c2f_eval::default_library_paths();
+    let defaults = c2f_eval::default_library_paths();
+    let mut library_paths = defaults.clone();
     // The geometry of the model on screen, for exports.
     let mut shown: Option<Rendered> = None;
     let mut parts = PartCache::default();
@@ -196,6 +204,9 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
             match request {
                 Request::Render { generation, source, path, values } => render = Some((generation, source, path, values)),
                 Request::Export { target, format } => exports.push((target, format)),
+                Request::Libraries(folders) => {
+                    library_paths = folders.into_iter().chain(defaults.iter().cloned()).collect()
+                }
             }
         }
         if let Some((generation, source, path, values)) = render {
@@ -714,6 +725,29 @@ mod tests {
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!() };
         assert!(outcome.watch.is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn library_folders_are_searched_first() {
+        let dir = std::env::temp_dir().join(format!("code2form-libraries-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("c2f_test_part.scad"), "module part() cube(3);\n").unwrap();
+        let source = "use <c2f_test_part.scad>\npart();\n";
+        let worker = Worker::spawn(egui::Context::default());
+        let generation = worker.render(source.into(), path(), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
+            panic!("no render")
+        };
+        assert!(outcome.result.is_ok_and(|scene| scene.is_empty()), "not found without the folder");
+
+        worker.set_libraries(vec![dir.clone()]);
+        let generation = worker.render(source.into(), path(), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
+            panic!("no render")
+        };
+        let Ok(scene) = outcome.result else { panic!("the render failed") };
+        assert_eq!(scene.bounds().map(|(_, hi)| hi), Some([3.0, 3.0, 3.0]));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
