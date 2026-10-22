@@ -76,6 +76,15 @@ they are. Written in Rust, it renders as you type.
   the object, and *Edges* rounds or chamfers a `cube` or a `cylinder`
   (all, vertical, top or bottom edges; top, bottom or both rims) into a
   call to the library's `shapes/rounded.c2f`, keeping its size.
+- **Move, turn and scale handles** on the selected object, as in Fusion:
+  arrows and squares move it along an axis or in a plane, rings turn it
+  about its centre, and the end squares and the centre dot scale it.
+  The object follows the drag with the amount by the pointer, snapped to
+  1 mm and 15° (steps set in the bar over the view; Shift snaps off), or
+  type an exact value and press Enter. On release the code gets the
+  change as one undo step: the object's `translate`, `rotate` or `scale`
+  is rewritten, or added around it. World or Local picks the world's
+  axes or the object's own once turned.
 - **Electronics**: a part declares its pins, mount holes and ports in
   comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
   the reference implementation ignores. A `.c2fc` circuit file (TOML)

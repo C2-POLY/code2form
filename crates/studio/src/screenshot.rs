@@ -7,7 +7,9 @@
 //! `rewire:xiao.5V>mic.VDD`, a new wire dragged from one pin to another;
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
 //! `mic` mid-drag at x 40, y 10. In a design, `code:cylinder(h = 7`
-//! selects the statement holding the first match of that text.
+//! selects the statement holding the first match of that text, and
+//! `CODE2FORM_SCREENSHOT_HANDLE=turn-z:30` holds its handles mid-drag
+//! (`move-x:12`, `scale-y:1.5`, `scale:2`).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

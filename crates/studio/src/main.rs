@@ -12,6 +12,7 @@ mod customizer;
 mod editor;
 mod fillet;
 mod find;
+mod gizmo;
 mod highlight;
 mod icon_setting;
 mod inspect;

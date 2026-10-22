@@ -136,6 +136,9 @@ pub struct Viewer {
     select_after: Option<(String, Vec<std::ops::Range<usize>>)>,
     /// The highlight as last sent, not to rebuild it every frame.
     shown_highlight: (Vec<Statement>, Vec<Statement>),
+    /// Where a handle's drag has the selection, as a transform of its
+    /// highlight, until the design renders again.
+    preview: Option<Mat4>,
 }
 
 /// How a click picks: Shift adds to the selection, Alt reaches the shapes
@@ -196,6 +199,7 @@ impl Viewer {
             picked: None,
             select_after: None,
             shown_highlight: (Vec::new(), Vec::new()),
+            preview: None,
         };
         viewer.reset();
         viewer
@@ -245,6 +249,7 @@ impl Viewer {
         self.hovered = None;
         self.at_cursor = None;
         self.shown_highlight = (Vec::new(), Vec::new());
+        self.preview = None;
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
         self.menu = None;
@@ -278,7 +283,6 @@ impl Viewer {
     }
 
     /// What picking knows of the scene shown, for a design.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub fn picking(&self) -> Option<&Arc<Picking>> {
         self.picking.as_ref()
     }
@@ -295,7 +299,6 @@ impl Viewer {
     }
 
     /// The box around what is selected.
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub fn selection_bounds(&self) -> Option<(Vec3, Vec3)> {
         self.picking.as_ref()?.bounds(&self.selection)
     }
@@ -367,9 +370,26 @@ impl Viewer {
         }
     }
 
+    /// Shows the selection's highlight moved by `transform` (a handle being
+    /// dragged, before the design renders again), or where it is.
+    pub fn preview_selection(&mut self, transform: Option<Mat4>) {
+        if transform != self.preview {
+            self.preview = transform;
+            self.send_highlight(true);
+        }
+    }
+
     /// Hovering and clicks over a design's model.
     fn select_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
         if self.picking.is_none() {
+            return;
+        }
+        // The pointer is on something drawn over the view (a handle): it
+        // neither hovers nor picks the model under it.
+        if !self.orbit_enabled {
+            if self.hovered.take().is_some() {
+                self.send_highlight(false);
+            }
             return;
         }
         let modifiers = ui.input(|i| i.modifiers);
@@ -411,10 +431,19 @@ impl Viewer {
         if !force && wanted == self.shown_highlight {
             return;
         }
-        let mesh = match &self.picking {
+        let mut mesh = match &self.picking {
             Some(picking) => picking.highlight(&wanted.0, &wanted.1),
             None => RenderMesh::default(),
         };
+        if let Some(m) = self.preview {
+            // Rebuilt triangle by triangle, for their normals to turn too.
+            let mut moved = RenderMesh::default();
+            for (corners, colors) in mesh.positions.chunks_exact(3).zip(mesh.colors.chunks_exact(3)) {
+                let corners = [0, 1, 2].map(|i| m.transform_point3(Vec3::from(corners[i])).to_array());
+                moved.push_triangle(corners, [colors[0], colors[1], colors[2]]);
+            }
+            mesh = moved;
+        }
         self.shown_highlight = wanted;
         if let Ok(renderer) = &self.renderer {
             if let Ok(mut r) = renderer.lock() {
@@ -1491,6 +1520,21 @@ mod tests {
         tap(&ctx, &mut viewer, first, egui::Modifiers::NONE);
         tap(&ctx, &mut viewer, rect.left_top() + Vec2::new(5.0, 5.0), egui::Modifiers::NONE);
         assert!(viewer.selection.is_empty());
+    }
+
+    #[test]
+    fn a_click_the_handles_take_picks_nothing() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design("cube(10);"), true);
+        let rect = frame_with(&ctx, &mut viewer, Vec::new(), egui::Modifiers::NONE);
+        let on_cube = viewer.to_screen(rect, Vec3::new(5.0, 5.0, 10.0)).unwrap();
+        viewer.orbit_enabled = false;
+        tap(&ctx, &mut viewer, on_cube, egui::Modifiers::NONE);
+        assert!(viewer.selection.is_empty() && viewer.hovered.is_none());
+        viewer.orbit_enabled = true;
+        tap(&ctx, &mut viewer, on_cube, egui::Modifiers::NONE);
+        assert_eq!(viewer.selection.len(), 1);
     }
 
     #[test]

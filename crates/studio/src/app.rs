@@ -2116,7 +2116,8 @@ impl StudioApp {
             // A double-click on a part opens it rather than framing the view.
             self.doc.viewer.frame_on_double_click = !matches!(self.doc.hover, Some(Hit::Part(_)));
             self.start_rewire(ctx);
-            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none();
+            let handles = self.handles_before_view(ctx);
+            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none() && !handles;
             let response = self.doc.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
