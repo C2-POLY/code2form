@@ -1,0 +1,163 @@
+// Seeed Studio XIAO ESP32-S3, as it looks in the hand: the black board
+// with its gold castellated pads, the shield over the ESP32-S3, the USB-C
+// receptacle overhanging the top edge, the BOOT and RESET buttons with
+// their LEDs, the U.FL antenna connector and the connector for the Sense
+// expansion board. Seen from above, USB-C towards +y, the board's corner
+// at the origin.
+// https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/
+//
+// From the documentation: the board is 21 x 17.8 mm, with 2 x 7 pins at
+// 2.54 mm pitch on rows 15.24 mm apart, D0 and 5V (VUSB on the board)
+// nearest the USB-C. Measured on photos of the board, scaled to its
+// 17.8 mm width (within about 0.3 mm): the shield, the USB-C's overhang,
+// the buttons, LEDs and connectors. Still estimated: the board's thickness
+// (1.2 mm) and the heights of the shield (2 mm) and the parts on it. The
+// board has no mount holes: hold it by its edges or by its headers.
+//
+// Annotations are plain numbers: the pins are the pads on top of the
+// board, wherever the headers point. The board's bottom is 0.04 mm up,
+// on its pads and print.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// Pin headers soldered to the board.
+headers = false;
+// The side the headers' long pins stick out of.
+header_side = "down"; // [down, up]
+
+// @pin D0  [1.28, 18.12, 1.24]  io 3.3V "GPIO1, A0, touch 1"
+// @pin D1  [1.28, 15.58, 1.24]  io 3.3V "GPIO2, A1, touch 2"
+// @pin D2  [1.28, 13.04, 1.24]  io 3.3V reserved "GPIO3, A2, strapping (JTAG source)"
+// @pin D3  [1.28, 10.5, 1.24]   io 3.3V "GPIO4, A3, touch 4"
+// @pin D4  [1.28, 7.96, 1.24]   io 3.3V "GPIO5, A4, SDA, touch 5"
+// @pin D5  [1.28, 5.42, 1.24]   io 3.3V "GPIO6, A5, SCL, touch 6"
+// @pin D6  [1.28, 2.88, 1.24]   io 3.3V "GPIO43, TX"
+// @pin 5V  [16.52, 18.12, 1.24] power_out 5V "VUSB: USB 5 V; or 5 V in"
+// @pin GND [16.52, 15.58, 1.24] ground
+// @pin 3V3 [16.52, 13.04, 1.24] power_out 3.3V "regulator output"
+// @pin D10 [16.52, 10.5, 1.24]  io 3.3V "GPIO9, A10, MOSI, touch 9"
+// @pin D9  [16.52, 7.96, 1.24]  io 3.3V "GPIO8, A9, MISO, touch 8"
+// @pin D8  [16.52, 5.42, 1.24]  io 3.3V "GPIO7, A8, SCK, touch 7"
+// @pin D7  [16.52, 2.88, 1.24]  io 3.3V "GPIO44, RX"
+// @port usb_c [8.9, 22.5, 2.87] +y [8.94, 3.26] "USB-C"
+
+module xiao_esp32s3(headers = false, header_side = "down") {
+    // The pads and print under the board are 0.04 mm thick: the board
+    // sits on them, so that nothing goes below z = 0.
+    translate([0, 0, 0.04]) board(headers, header_side);
+}
+
+module board(headers, header_side) {
+    $fn = 16;
+    t = 1.2;
+    w = 17.8;
+    l = 21;
+    rows = [1.28, 16.52];
+    pins = [for (i = [0 : 6]) 2.88 + i * 2.54];
+
+    board = [0.07, 0.07, 0.08];
+    gold = [0.85, 0.68, 0.38];
+    metal = [0.80, 0.81, 0.83];
+    dark = [0.16, 0.16, 0.17];
+    print = [0.92, 0.92, 0.90];
+
+    // The board, its corners rounded, its pads' holes through it and cut
+    // in half at its edges.
+    color(board) difference() {
+        rounded(w, l, t, 1.2);
+        for (x = rows, y = pins) {
+            translate([x, y, -1]) cylinder(d = 1.0, h = t + 2);
+            translate([x < w / 2 ? 0 : w, y, -1]) cylinder(d = 1.0, h = t + 2);
+        }
+    }
+    // The gold pads, on both faces: from the edge, rounded past the hole.
+    color(gold) for (x = rows, y = pins, z = [-0.02, t]) difference() {
+        hull() {
+            translate([x < w / 2 ? 0.05 : w - 0.1, y - 0.8, z]) cube([0.05, 1.6, 0.02]);
+            translate([x + (x < w / 2 ? 0.35 : -0.35), y, z]) cylinder(d = 1.6, h = 0.02);
+        }
+        translate([x, y, z - 1]) cylinder(d = 1.0, h = 2);
+        translate([x < w / 2 ? 0 : w, y, z - 1]) cylinder(d = 1.0, h = 2);
+    }
+
+    // The shield over the ESP32-S3, its flash and its PSRAM.
+    color(metal) translate([2.65, 3.6, t]) rounded(12.2, 10.9, 2.0, 0.3);
+    // Printed text is small: coarse curves keep the triangles down.
+    color(dark) translate([8.75, 0, t + 2]) linear_extrude(0.02) let($fn = 6) {
+        translate([0, 12.4]) text("seeed studio", size = 1.25, font = "Liberation Sans:style=Bold", halign = "center");
+        translate([0, 10.9]) text("Model:XIAO-ESP32-S3", size = 0.62, halign = "center");
+        translate([0, 9.9]) text("FCC ID:Z4T-XIAOESP32S3", size = 0.62, halign = "center");
+        translate([-2.6, 6.2]) text("FC", size = 2.0, halign = "center");
+        translate([2.8, 6.2]) text("CE", size = 2.0, halign = "center");
+    }
+
+    // The USB-C receptacle, overhanging the top edge by 1.5 mm.
+    color(metal) translate([8.9 - 8.94 / 2, 22.5 - 7.35, t]) usb_c(8.94, 7.35, 3.26);
+
+    // RESET (R) and BOOT (B): small tactile switches by the USB-C, each
+    // with an LED below it: the charge LED under R, the user LED under B.
+    for (x = [2.2, 14.1]) {
+        color(metal) translate([x, 18.8, t]) cube([1.5, 2.1, 0.55]);
+        color(print) translate([x + 0.45, 19.35, t + 0.55]) cube([0.6, 1.0, 0.15]);
+    }
+    color([1.0, 0.95, 0.85]) translate([2.4, 16.9, t]) cube([1.1, 0.6, 0.35]);
+    color([1.0, 0.55, 0.15]) translate([14.3, 16.9, t]) cube([1.1, 0.6, 0.35]);
+    color(print) {
+        translate([1.15, 20.0, t]) linear_extrude(0.02) text("R", size = 0.9, halign = "center", valign = "center");
+        translate([16.65, 20.0, t]) linear_extrude(0.02) text("B", size = 0.9, halign = "center", valign = "center");
+    }
+
+    // The U.FL antenna connector, bottom left.
+    color(print) translate([2.4, 0.8, t]) cube([2.0, 2.0, 0.6]);
+    color(gold) translate([3.4, 1.8, t]) cylinder(d = 1.2, h = 0.75);
+    // The connector for the Sense expansion board, bottom right.
+    color(dark) translate([7.4, 0.8, t]) cube([7.1, 2.1, 0.8]);
+    color(metal) for (i = [0 : 15]) translate([7.7 + i * 0.42, 0.45, t]) cube([0.2, 2.8, 0.3]);
+
+    // A few passives around the USB-C.
+    color(dark) for (p = [[4.0, 15.6], [4.0, 14.8], [13.2, 15.6], [13.2, 14.8], [2.5, 15.6], [14.7, 15.6]])
+        translate([p[0], p[1], t]) cube([0.5, 0.3, 0.3]);
+
+    // Underneath: the battery pads (BAT + and -), the JTAG and USB test
+    // points, the ground pad, and the silkscreen, readable from below.
+    color(gold) {
+        for (y = [10.5, 12.45]) translate([3.2, y, -0.02]) cube([2.1, 0.65, 0.02]);
+        for (x = [7.6, 10.4], y = [11.5, 14.2, 16.8, 19.4])
+            translate([x, y, -0.02]) cylinder(d = 0.9, h = 0.02);
+        translate([8.6, 6.6, -0.02]) cube([3.0, 2.9, 0.02]);
+    }
+    names = [["D0", "D1", "D2", "D3", "D4", "D5", "D6"], ["VUSB", "GND", "3V3", "D10", "D9", "D8", "D7"]];
+    color(print) translate([0, 0, -0.02]) mirror([0, 0, 1]) mirror([1, 0, 0]) linear_extrude(0.02) let($fn = 6) {
+        for (side = [0, 1], i = [0 : 6])
+            translate([side == 0 ? -2.75 : -15.05, 18.12 - i * 2.54])
+                rotate(-90) text(names[side][i], size = 0.6, halign = "center", valign = "center");
+        translate([-8.9, 3.6]) text("seeed studio", size = 1.0, font = "Liberation Sans:style=Bold", halign = "center");
+        translate([-8.9, 2.2]) text("XIAO ESP32S3", size = 0.85, halign = "center");
+    }
+
+    if (headers)
+        for (x = rows)
+            pin_header(7, [x, 2.88], t, header_side);
+}
+
+// A box with its four vertical edges rounded by `r`.
+module rounded(x, y, h, r) {
+    hull() for (cx = [r, x - r], cy = [r, y - r]) translate([cx, cy, 0]) cylinder(r = r, h = h);
+}
+
+// A USB-C receptacle `w` wide, `d` deep and `h` high, lying along y, its
+// opening at y = d: a stadium shell with its mouth open.
+module usb_c(w, d, h) {
+    module stadium(w, h, d) {
+        hull() for (x = [h / 2, w - h / 2]) translate([x, 0, h / 2]) rotate([-90, 0, 0]) cylinder(d = h, h = d);
+    }
+    difference() {
+        stadium(w, h, d);
+        translate([0.3, d - 3, 0.3]) stadium(w - 0.6, h - 0.6, 3.1);
+    }
+    // The tongue inside the mouth.
+    color([0.12, 0.12, 0.13]) translate([1.4, d - 3, h / 2 - 0.35]) cube([w - 2.8, 2.9, 0.7]);
+}
+
+xiao_esp32s3(headers, header_side);

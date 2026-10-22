@@ -77,6 +77,8 @@ pub struct Interp<'p> {
     /// The one generator behind `rands()`: seeded calls reseed it, unseeded
     /// calls continue its stream.
     pub rng: crate::math::Mt19937,
+    /// The nodes of each part of the circuit `circuit_part()` drew, by name.
+    circuit_parts: std::collections::HashMap<String, Vec<Node>>,
 }
 
 /// What a function body evaluates to in tail position: a value, or a call
@@ -142,7 +144,36 @@ impl<'p> Interp<'p> {
             library_scopes: vec![None; program.files.len()],
             call_names: std::collections::HashMap::new(),
             rng: crate::math::Mt19937::new(seed),
+            circuit_parts: std::collections::HashMap::new(),
         }
+    }
+
+    pub(crate) fn program(&self) -> &'p Program {
+        self.program
+    }
+
+    /// The nodes of a part of the program's circuit, with its parameters,
+    /// in its own coordinates, evaluated once; its warnings and its error
+    /// become this program's warnings.
+    pub(crate) fn circuit_part(&mut self, part: &c2f_circuit::Instance) -> Vec<Node> {
+        if let Some(nodes) = self.circuit_parts.get(&part.name) {
+            return nodes.clone();
+        }
+        let nodes = match Program::load_alone(&part.source_with_params(), &part.path, &self.program.library_paths) {
+            Ok(program) => {
+                let output = crate::evaluate_here(&program);
+                for message in output.warnings.into_iter().chain(output.error) {
+                    self.warn(format!("In circuit part '{}': {message}", part.name));
+                }
+                output.nodes
+            }
+            Err(err) => {
+                self.warn(format!("Can't load circuit part '{}':\n{}", part.name, err.render()));
+                Vec::new()
+            }
+        };
+        self.circuit_parts.insert(part.name.clone(), nodes.clone());
+        nodes
     }
 
     pub fn warn(&mut self, message: impl Into<String>) {

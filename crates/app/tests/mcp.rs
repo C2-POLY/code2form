@@ -14,8 +14,14 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
+        Server::start_with(&[])
+    }
+
+    /// The server with these environment variables set.
+    fn start_with(env: &[(&str, &std::ffi::OsStr)]) -> Server {
         let mut child = Command::new(env!("CARGO_BIN_EXE_c2f"))
             .arg("mcp")
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -84,10 +90,14 @@ fn protocol() {
     let list = server.request("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["render", "parameters", "image", "export"]);
+    assert_eq!(
+        names,
+        ["render", "parameters", "image", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom"]
+    );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
-        assert!(tool["inputSchema"]["properties"]["code"].is_object(), "{tool}");
+        let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
+        assert_eq!(takes_code, tool["name"] != "library_parts", "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);
@@ -240,6 +250,117 @@ fn export_writes_files() {
     let (is_error, _) = server.call("export", json!({ "code": "cube(10);", "output": dir.join("part.obj") }));
     assert!(is_error);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn grogu_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grogu")
+}
+
+/// The value of each `key = "value"` line of a TOML text, with the table
+/// it is in.
+fn toml_strings<'a>(src: &'a str, key: &str) -> Vec<(&'a str, &'a str)> {
+    let mut table = "";
+    let mut values = Vec::new();
+    for line in src.lines().map(str::trim) {
+        if line.starts_with('[') {
+            table = line;
+        } else if let Some(value) = line.strip_prefix(key).and_then(|rest| rest.trim_start().strip_prefix('=')) {
+            values.push((table, value.trim().trim_matches('"')));
+        }
+    }
+    values
+}
+
+#[test]
+fn an_agent_builds_the_grogu_circuit() {
+    // A library of one part, as the agent finds it.
+    let library = temp_dir("library");
+    std::fs::create_dir_all(library.join("electronics/sensors")).unwrap();
+    std::fs::write(library.join("electronics/sensors/probe.c2f"), "// A probe, simplified.\n// @pin S [0, 0, 1] input 3.6V\ncube(1);\n").unwrap();
+    let mut server = Server::start_with(&[("OPENSCADPATH", library.as_os_str())]);
+    let (is_error, report) = server.report("library_parts", json!({}));
+    assert!(!is_error, "{report}");
+    let probe = report["parts"].as_array().unwrap().iter().find(|p| p["part"] == "electronics/sensors/probe.c2f");
+    assert_eq!(probe.expect("the probe is listed")["description"], "A probe, simplified.", "{report}");
+    let (_, report) = server.report("part_pins", json!({ "path": "electronics/sensors/probe.c2f" }));
+    assert_eq!(report["pins"][0]["voltage"], 3.6, "{report}");
+    let _ = std::fs::remove_dir_all(&library);
+
+    // The pins of each part the circuit places, then the wires between them.
+    let dir = grogu_dir();
+    let src = std::fs::read_to_string(dir.join("grogu.c2fc")).unwrap();
+    let mut pins = std::collections::HashMap::new();
+    for (table, part) in toml_strings(&src, "part") {
+        let (is_error, report) = server.report("part_pins", json!({ "path": part, "working_dir": dir }));
+        assert!(!is_error && report["errors"] == json!([]), "{part}: {report}");
+        let names: Vec<String> = report["pins"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().into()).collect();
+        assert!(report["pins"].as_array().unwrap().iter().all(|p| p["type"].is_string() && p["position"].is_array()));
+        let instance = table.trim_matches(['[', ']']).strip_prefix("parts.").expect("a part's table");
+        pins.insert(instance.to_string(), names);
+    }
+    assert_eq!(pins.len(), 8);
+    for (_, end) in toml_strings(&src, "from").into_iter().chain(toml_strings(&src, "to")) {
+        let (part, pin) = end.split_once('.').unwrap();
+        assert!(pins[part].iter().any(|p| p == pin), "{end}");
+    }
+
+    // The circuit's text validates: no errors, the strapping pin's warning.
+    let (is_error, report) = server.report("check_circuit", json!({ "code": src, "working_dir": dir }));
+    assert!(!is_error, "{report}");
+    assert_eq!((&report["ok"], &report["errors"], &report["parts"], &report["wires"]), (&json!(true), &json!([]), &json!(8), &json!(23)));
+    assert!(report["warnings"].as_array().unwrap().iter().all(|w| w["message"].as_str().unwrap().contains("reserved")), "{report}");
+
+    // A mistake is an error on its line.
+    let wrong = src.replace("from = \"xiao.3V3\"", "from = \"xiao.5V\"");
+    let (is_error, report) = server.report("check_circuit", json!({ "code": wrong, "working_dir": dir }));
+    assert!(is_error);
+    let error = &report["errors"][0];
+    assert!(error["message"].as_str().unwrap().contains("supplies 5 V to `mic.VDD`"), "{report}");
+    assert_eq!(error["line"].as_u64().unwrap() as usize, src[..src.find("from = \"xiao.3V3\"").unwrap()].lines().count() + 1);
+    let (is_error, report) = server.report("check_circuit", json!({ "code": "[parts.a]\npart = \"nope.c2f\"\n", "working_dir": dir }));
+    assert!(is_error);
+    assert_eq!(report["errors"][0]["line"], 2, "{report}");
+
+    // The wiring list and the bill of materials.
+    let path = dir.join("grogu.c2fc");
+    let (_, report) = server.report("circuit_wires", json!({ "path": path }));
+    let first = &report["wires"][0];
+    assert_eq!((&first["step"], &first["from"], &first["to"], &first["color"]), (&json!(1), &json!("xiao.5V"), &json!("amp.VIN"), &json!("red")));
+    assert!(first["length_mm"].as_f64().unwrap() > 10.0, "{first}");
+    assert_eq!(report["wires"].as_array().unwrap().len(), 23);
+    let (_, report) = server.report("circuit_bom", json!({ "path": path }));
+    assert_eq!(report["parts"].as_array().unwrap().len(), 8);
+    assert!(report["parts"].as_array().unwrap().iter().any(|p| p["params"] == "headers=true" && p["instances"] == "amp"), "{report}");
+}
+
+#[test]
+fn circuit_image_is_a_png_with_its_wires() {
+    let mut server = Server::start();
+    let path = grogu_dir().join("grogu.c2fc");
+    let picture = |server: &mut Server, args: Value| {
+        let (is_error, content) = server.call("circuit_image", args);
+        assert!(!is_error, "{content:?}");
+        assert_eq!(content[0]["mimeType"], "image/png");
+        let report: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+        (decode_png(&base64_decode(content[0]["data"].as_str().unwrap())), report)
+    };
+    let ((width, height, plain), report) = picture(&mut server, json!({ "path": path, "view": "top", "width": 160, "height": 120 }));
+    assert_eq!((width, height, &report["wires"]), (160, 120, &json!(23)));
+    // The ground net lit, the other wires greyed: another picture.
+    let ((_, _, lit), report) = picture(&mut server, json!({ "path": path, "view": "top", "width": 160, "height": 120, "net": "amp.GND" }));
+    let net: Vec<&str> = report["net"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+    assert!(net.contains(&"xiao.GND") && net.contains(&"mic.L/R") && !net.contains(&"xiao.5V"), "{net:?}");
+    assert_ne!(plain, lit);
+    // Wires are drawn: the picture differs from the parts alone.
+    let src = std::fs::read_to_string(&path).unwrap();
+    let parts_only = &src[..src.find("[[wires]]").unwrap()];
+    let ((_, _, bare), _) = picture(&mut server, json!({ "code": parts_only, "working_dir": grogu_dir(), "view": "top", "width": 160, "height": 120 }));
+    assert_ne!(plain, bare);
+
+    let (is_error, _) = server.call("circuit_image", json!({ "path": path, "net": "amp.NOPE" }));
+    assert!(is_error);
+    let (is_error, _) = server.call("circuit_image", json!({ "path": path, "view": "under" }));
+    assert!(is_error);
 }
 
 fn base64_decode(text: &str) -> Vec<u8> {

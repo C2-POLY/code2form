@@ -1,0 +1,55 @@
+// Small 8 ohm speaker, 28 mm across and 5 mm deep, in a round metal frame,
+// cone up: the frame's rim around the cone and its dust cap, and behind
+// it the black felt and the magnet's cap, its two wires leaving from a
+// blob of glue at the edge. The center of its back at the origin.
+// https://www.adafruit.com/product/1890
+//
+// A generic part (sold by QUARKZMAN and others as 2 W, 8 ohm, with a
+// 60 mm lead and a JST PH 2-pin plug): 28 x 5 mm from the seller. Measured
+// on photos (within about 0.5 mm): the felt and the magnet's cap. Still
+// estimated: the cone's shape and the wires' exact place. It has no
+// mount holes: glue it, or hold its rim in a ring.
+
+// @pin + [-1.4, 11, 0.4] down passive "red wire"
+// @pin - [1.4, 11, 0.4]  down passive "black wire"
+// @port cone [0, 0, 5] up d=24 "the cone: leave it open"
+
+module speaker() {
+    $fn = 48;
+    metal = [0.80, 0.81, 0.83];
+    felt = [0.10, 0.10, 0.11];
+    cone = [0.42, 0.42, 0.44];
+
+    // The frame: a can with a rim around the cone.
+    color(metal) difference() {
+        union() {
+            translate([0, 0, 0.9]) cylinder(d = 28, h = 3.5);
+            translate([0, 0, 4.4]) cylinder(d = 28, h = 0.6);
+        }
+        translate([0, 0, 0.5]) cylinder(d = 26.6, h = 3.95);
+        translate([0, 0, 4.3]) cylinder(d = 24, h = 1);
+    }
+    // The back: the felt over the frame's bottom, and the magnet's cap.
+    color(felt) translate([0, 0, 0.9]) cylinder(d = 26.6, h = 0.6);
+    color(metal) translate([0, 0, 0.02]) cylinder(d = 15, h = 0.98);
+    // Printed to read with the speaker turned over about x, cone down.
+    color([0.20, 0.20, 0.21]) translate([0, 0, 0.02]) mirror([0, 0, 1]) mirror([0, 1, 0]) linear_extrude(0.02) let($fn = 6) {
+        translate([0, 1.2]) text("8Ω 2W", size = 1.5, halign = "center");
+        translate([0, -1.6]) text("+  -", size = 1.5, halign = "center");
+    }
+    // The cone, from the rim down to its dust cap.
+    color(cone) translate([0, 0, 2.6]) difference() {
+        cylinder(d1 = 10, d2 = 24, h = 1.8);
+        translate([0, 0, 0.3]) cylinder(d1 = 10, d2 = 24, h = 1.8);
+    }
+    color([0.07, 0.07, 0.08]) translate([0, 0, 2.6]) scale([1, 1, 0.3]) sphere(d = 9);
+    // The surround holding the cone in the rim.
+    color([0.12, 0.12, 0.13]) translate([0, 0, 4.1]) difference() {
+        cylinder(d = 25, h = 0.3);
+        translate([0, 0, -1]) cylinder(d = 21.5, h = 2);
+    }
+    // The glue holding the wires' solder points, at the back's edge.
+    color([0.05, 0.05, 0.05]) hull() for (x = [-2.2, 2.2]) translate([x, 11, 0.9]) scale([1, 1, 0.6]) sphere(d = 2.6, $fn = 16);
+}
+
+speaker();

@@ -80,3 +80,20 @@ fn projection_keeps_through_holes_open() {
         assert!((area - case.area).abs() <= 5e-6 * case.area, "{}: area {area} vs {}", case.src, case.area);
     }
 }
+
+#[test]
+fn the_same_projection_twice_is_one_outline_used_twice() {
+    // A fence: the outline grown by 2, less the outline grown by 1. The
+    // second projection reuses the first, which a `difference` builds in
+    // another context; a marked solid is still drawn highlighted.
+    let render = |src: &str| {
+        let program = c2f_eval::Program::load(src, Path::new("fence.scad"), &[]).expect("parses");
+        c2f_geom::render(&c2f_eval::evaluate(&program).nodes)
+    };
+    let fence = "difference() { offset(delta = 2) projection() cube([10, 10, 5]); \
+                 offset(delta = 1) projection() cube([10, 10, 5]); }";
+    let Model::Flat(section) = render(fence).model else { panic!("not 2D") };
+    assert!((section.area() - (14.0 * 14.0 - 12.0 * 12.0)).abs() < 1e-9, "{}", section.area());
+    let marked = "projection() #cube(4); translate([10, 0]) projection() #cube(4);";
+    assert!(!render(marked).highlights.is_empty());
+}

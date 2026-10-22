@@ -112,7 +112,14 @@ const FUNCTIONS: &[&str] = &[
 
 /// Splits `src` into runs of one kind. The runs cover the whole text, in
 /// order, and adjacent runs of the same kind are merged.
+#[cfg(test)]
 pub fn tokenize(src: &str) -> Vec<(Range<usize>, Kind)> {
+    tokenize_as(src, false)
+}
+
+/// As [`tokenize`]; `hash_comments` reads `#` to the end of the line as a
+/// comment, as in circuit files (TOML).
+pub fn tokenize_as(src: &str, hash_comments: bool) -> Vec<(Range<usize>, Kind)> {
     let bytes = src.as_bytes();
     let len = bytes.len();
     let mut out: Vec<(Range<usize>, Kind)> = Vec::new();
@@ -126,7 +133,7 @@ pub fn tokenize(src: &str) -> Vec<(Range<usize>, Kind)> {
         let start = i;
         let b = bytes[i];
         let next = bytes.get(i + 1).copied().unwrap_or(0);
-        let kind = if b == b'/' && next == b'/' {
+        let kind = if (b == b'/' && next == b'/') || (hash_comments && b == b'#') {
             i = src[i..].find('\n').map_or(len, |n| i + n);
             Kind::Comment
         } else if b == b'/' && next == b'*' {
@@ -256,15 +263,19 @@ pub struct Highlighter {
     source: String,
     font: Option<FontId>,
     job: LayoutJob,
+    /// `#` starts a comment: the text is a circuit file.
+    pub hash_comments: bool,
+    highlighted_as: bool,
 }
 
 impl Highlighter {
     pub fn layout_job(&mut self, src: &str, font: &FontId, wrap_width: f32) -> LayoutJob {
-        if self.source != src || self.font.as_ref() != Some(font) {
+        if self.source != src || self.font.as_ref() != Some(font) || self.highlighted_as != self.hash_comments {
             self.source.clear();
             self.source.push_str(src);
             self.font = Some(font.clone());
-            self.job = build_job(src, font);
+            self.highlighted_as = self.hash_comments;
+            self.job = build_job(src, font, self.hash_comments);
         }
         let mut job = self.job.clone();
         job.wrap.max_width = wrap_width;
@@ -272,9 +283,9 @@ impl Highlighter {
     }
 }
 
-fn build_job(src: &str, font: &FontId) -> LayoutJob {
+fn build_job(src: &str, font: &FontId, hash_comments: bool) -> LayoutJob {
     let mut job = LayoutJob::default();
-    for (range, kind) in tokenize(src) {
+    for (range, kind) in tokenize_as(src, hash_comments) {
         let format = TextFormat {
             font_id: font.clone(),
             color: color(kind),
@@ -299,6 +310,18 @@ mod tests {
             .filter(|(r, _)| !src[r.clone()].trim().is_empty())
             .map(|(r, k)| (src[r].trim(), k))
             .collect()
+    }
+
+    #[test]
+    fn circuit_comments_start_with_a_hash() {
+        let src = "# 5 V\ncolor = \"#ff0000\" # red\n";
+        let comments: Vec<&str> = tokenize_as(src, true)
+            .into_iter()
+            .filter(|(_, kind)| *kind == Kind::Comment)
+            .map(|(r, _)| src[r].trim())
+            .collect();
+        assert_eq!(comments, ["# 5 V", "# red"]);
+        assert!(tokenize(src).iter().all(|(r, kind)| *kind != Kind::Comment || src[r.clone()].starts_with("//")));
     }
 
     #[test]

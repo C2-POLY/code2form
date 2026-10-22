@@ -1,0 +1,1 @@
+56572 triangles, 28408 vertices, volume 11065.832392460468

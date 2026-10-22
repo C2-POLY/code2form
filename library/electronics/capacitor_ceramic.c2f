@@ -1,0 +1,69 @@
+// 100 nF multilayer ceramic capacitor, through-hole (radial, dipped), as
+// it looks in the hand: the yellow epoxy blob with "104" printed on its
+// face, the epoxy running a little down the two tinned leads, which kink
+// out to 5.08 mm when bought at that pitch. The decoupling capacitor
+// placed next to a chip's supply pins. The lead ends at z = 0.
+// https://www.kemet.com (the C315 to C330 Goldmax datasheet)
+//
+// Dipped radial ceramics such as KEMET's C315 to C330 Goldmax series come
+// with a 2.54 or 5.08 mm lead pitch and 0.5 mm leads; the body drawn here
+// (about 4 x 2.5 x 3.8 mm) is typical of 100 nF, 50 V parts, not one
+// series' exact size. "104" is the value's code (10 x 10^4 pF). Estimated:
+// the epoxy's run down the leads (0.8 mm) and, at 5.08 mm, where the
+// leads kink. Not polarized: the pins are 1 and 2.
+//
+// Annotations are plain numbers: the pins are the lead ends at the 2.54 mm
+// pitch, and stay there for 5.08 mm.
+
+/* [Size] */
+// Lead pitch: 2.54 or 5.08 mm, as bought.
+pitch = 2.54; // [2.54, 5.08]
+// Length of lead between the body and the board.
+lead = 2; // [0:0.5:10]
+
+// @pin 1 [-1.27, 0, 0] down passive 50V
+// @pin 2 [1.27, 0, 0]  down passive 50V
+
+module capacitor_ceramic(pitch = 2.54, lead = 2) {
+    $fn = 16;
+    epoxy = [0.86, 0.66, 0.16];
+    tin = [0.82, 0.83, 0.85];
+    ink = [0.10, 0.09, 0.08];
+
+    w = 4.0;
+    thick = 2.5;
+    tall = 3.8;
+    r = 0.9;
+    drip = 0.8;
+    bottom = lead + drip;
+
+    // The body: a rounded block of epoxy, its faces a little domed.
+    color(epoxy) {
+        hull() for (x = [-1, 1], z = [r, tall - r])
+            translate([x * (w / 2 - r), 0, bottom + z]) scale([1, thick / 2 / r, 1]) sphere(r = r);
+        // The epoxy run down each lead, thinning out.
+        for (x = [-1.27, 1.27])
+            translate([x, 0, lead]) cylinder(d1 = 0.7, d2 = 1.3, h = drip + 0.5);
+    }
+    // "104" on its face, towards -y.
+    color(ink) translate([0, -thick / 2, bottom + tall / 2]) rotate([90, 0, 0]) linear_extrude(0.02) let($fn = 6)
+        text("104", size = 0.75, halign = "center", valign = "center");
+
+    // The tinned leads: straight at 2.54 mm; at 5.08 mm, kinked out
+    // halfway down.
+    color(tin) for (s = [-1, 1]) {
+        if (pitch > 2.54) {
+            kink = lead / 2;
+            translate([s * pitch / 2, 0, 0]) cylinder(d = 0.5, h = kink, $fn = 8);
+            hull() {
+                translate([s * pitch / 2, 0, kink]) sphere(d = 0.5, $fn = 8);
+                translate([s * 1.27, 0, min(kink + 0.9, lead)]) sphere(d = 0.5, $fn = 8);
+            }
+            translate([s * 1.27, 0, min(kink + 0.9, lead)]) cylinder(d = 0.5, h = lead - min(kink + 0.9, lead) + 0.3, $fn = 8);
+        } else {
+            translate([s * pitch / 2, 0, 0]) cylinder(d = 0.5, h = lead + 0.3, $fn = 8);
+        }
+    }
+}
+
+capacitor_ceramic(pitch, lead);

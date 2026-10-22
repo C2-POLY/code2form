@@ -8,10 +8,13 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Key, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
 use eframe::{egui_glow, glow};
+use c2f_geom::RenderMesh;
 use glam::{Mat4, Vec2 as GVec2, Vec3, Vec4};
 
 use crate::camera::Camera;
 use crate::pause_edit;
+use crate::pick::Ray;
+use crate::wiring::{Emphasis, shade};
 use crate::renderer::{self, Grid, Renderer};
 use crate::theme;
 use crate::worker::Scene;
@@ -84,7 +87,28 @@ pub struct Viewer {
     /// The camera turns around the model by itself until a drag in the
     /// view or the toggle stops it.
     pub turntable: bool,
+    /// Where the camera is flying to, smoothly, until a drag stops it.
+    goal: Option<Camera>,
     bounds: Option<(Vec3, Vec3)>,
+    /// The box around a circuit's wires and pins, framed with the model.
+    overlay_bounds: Option<(Vec3, Vec3)>,
+    /// A circuit's parts: the vertices of each in the solid, and the
+    /// solid's colors as rendered.
+    part_ranges: Vec<std::ops::Range<usize>>,
+    solid_colors: Vec<[f32; 4]>,
+    solid_positions: Vec<[f32; 3]>,
+    /// How each part shows, as the app last said.
+    part_emphasis: Vec<Emphasis>,
+    /// A circuit's enclosure: its vertices in the solid, and whether it
+    /// shows.
+    enclosure: std::ops::Range<usize>,
+    show_enclosure: bool,
+    /// A double-click frames the view; the app turns it off while the
+    /// pointer is over something a double-click opens.
+    pub frame_on_double_click: bool,
+    /// A drag turns or pans the camera; the app turns it off while a drag
+    /// rewires a circuit.
+    pub orbit_enabled: bool,
     pauses: Vec<PauseMark>,
     /// The text the scene was rendered from.
     scene_source: String,
@@ -120,7 +144,17 @@ impl Viewer {
             layer: None,
             heights: None,
             turntable: false,
+            goal: None,
             bounds: None,
+            overlay_bounds: None,
+            part_ranges: Vec::new(),
+            solid_colors: Vec::new(),
+            solid_positions: Vec::new(),
+            part_emphasis: Vec::new(),
+            enclosure: 0..0,
+            show_enclosure: true,
+            frame_on_double_click: true,
+            orbit_enabled: true,
             pauses: Vec::new(),
             scene_source: String::new(),
             dragging: None,
@@ -152,6 +186,10 @@ impl Viewer {
             None => Vec::new(),
         };
         self.scene_source = scene.source.clone();
+        self.part_ranges = scene.parts.clone();
+        self.enclosure = scene.enclosure.clone();
+        self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
+        self.solid_positions = if scene.parts.is_empty() { Vec::new() } else { scene.solid.positions.clone() };
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
         self.menu = None;
@@ -161,15 +199,128 @@ impl Viewer {
                 r.set_grid(self.grid);
             }
         }
+        // The new solid comes in its own colors.
+        self.recolor();
         if frame {
             self.view_all();
+        }
+    }
+
+    /// Shows a circuit's wires and pin dots, or nothing; `bounds` is the
+    /// box around them.
+    pub fn set_overlay(&mut self, wires: RenderMesh, pins: RenderMesh, bounds: Option<([f32; 3], [f32; 3])>) {
+        self.overlay_bounds = bounds.map(|(lo, hi)| (Vec3::from(lo), Vec3::from(hi)));
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_overlay(wires, pins);
+            }
+        }
+    }
+
+    /// Shows each part of a circuit as `emphasis` says, by part index;
+    /// parts left out show as rendered.
+    pub fn set_part_emphasis(&mut self, emphasis: &[Emphasis]) {
+        self.part_emphasis = emphasis.to_vec();
+        self.recolor();
+    }
+
+    /// Shows part `part` of a circuit moved by `delta`, until the next
+    /// scene: a part dragged, before the circuit renders again.
+    pub fn preview_part_move(&mut self, part: usize, delta: Vec3) {
+        let Some(range) = self.part_ranges.get(part).cloned() else { return };
+        let mut positions = self.solid_positions.clone();
+        for p in positions.get_mut(range).unwrap_or_default() {
+            *p = (Vec3::from(*p) + delta).into();
+        }
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_solid_positions(positions);
+            }
+        }
+    }
+
+    /// Whether a circuit's enclosure shows.
+    pub fn shows_enclosure(&self) -> bool {
+        self.show_enclosure
+    }
+
+    /// Shows or hides a circuit's enclosure.
+    pub fn set_show_enclosure(&mut self, show: bool) {
+        if show != self.show_enclosure {
+            self.show_enclosure = show;
+            self.recolor();
+        }
+    }
+
+    /// Whether the scene has an enclosure.
+    pub fn has_enclosure(&self) -> bool {
+        !self.enclosure.is_empty()
+    }
+
+    /// Sends the solid's colors, as the parts' emphasis and the
+    /// enclosure's toggle make them, when they differ from the scene's.
+    fn recolor(&self) {
+        let plain = self.part_emphasis.iter().all(|&e| e == Emphasis::Normal) && self.show_enclosure;
+        if self.solid_colors.is_empty() || (plain && self.part_emphasis.is_empty()) {
+            return;
+        }
+        let mut colors = self.solid_colors.clone();
+        for (range, &e) in self.part_ranges.iter().zip(&self.part_emphasis) {
+            if e != Emphasis::Normal {
+                for color in &mut colors[range.clone()] {
+                    *color = shade(*color, e);
+                }
+            }
+        }
+        if !self.show_enclosure {
+            // Fully see-through: the translucent pass draws nothing of it.
+            for color in colors.get_mut(self.enclosure.clone()).unwrap_or_default() {
+                color[3] = 0.0;
+            }
+        }
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_solid_colors(colors);
+            }
+        }
+    }
+
+    /// Where a point shows in the view's `rect`, when in front of the eye.
+    pub fn to_screen(&self, rect: Rect, p: Vec3) -> Option<Pos2> {
+        let view_projection = self.camera.projection(self.aspect, self.scene_radius()) * self.camera.view();
+        let clip = view_projection * p.extend(1.0);
+        (clip.w > 1e-6).then(|| {
+            let ndc = clip.truncate() / clip.w;
+            Pos2::new(rect.left() + (ndc.x + 1.0) * 0.5 * rect.width(), rect.top() + (1.0 - ndc.y) * 0.5 * rect.height())
+        })
+    }
+
+    /// The ray from the eye through `pos` in the view's `rect`.
+    pub fn ray(&self, rect: Rect, pos: Pos2) -> Ray {
+        let ndc = GVec2::new(
+            (pos.x - rect.left()) / rect.width() * 2.0 - 1.0,
+            1.0 - (pos.y - rect.top()) / rect.height() * 2.0,
+        );
+        let origin = self.camera.eye();
+        let aspect = rect.width() / rect.height().max(1.0);
+        let direction = (self.camera.point_at(ndc, aspect) - origin).normalize_or(Vec3::Z);
+        // Five points either way, at a distance of one.
+        let slack = 5.0 * 2.0 * (self.camera.fov_y * 0.5).tan() / rect.height().max(1.0);
+        Ray { origin, direction, slack }
+    }
+
+    /// The model's box and the overlay's, together.
+    fn drawn_bounds(&self) -> Option<(Vec3, Vec3)> {
+        match (self.bounds, self.overlay_bounds) {
+            (Some((l1, h1)), Some((l2, h2))) => Some((l1.min(l2), h1.max(h2))),
+            (a, b) => a.or(b),
         }
     }
 
     /// The box to frame: the model, or a default 20-unit cube around the
     /// origin when there is none.
     fn frame_box(&self) -> (Vec3, Vec3) {
-        self.bounds.unwrap_or((Vec3::splat(-10.0), Vec3::splat(10.0)))
+        self.drawn_bounds().unwrap_or((Vec3::splat(-10.0), Vec3::splat(10.0)))
     }
 
     /// The number of layers the solid prints in, if there is one.
@@ -221,6 +372,17 @@ impl Viewer {
         !self.pauses.is_empty()
     }
 
+    /// Turns the camera smoothly to `goal`.
+    pub fn fly_to(&mut self, goal: Camera) {
+        self.turntable = false;
+        self.goal = Some(goal);
+    }
+
+    /// Width over height of the view, as last shown.
+    pub fn aspect(&self) -> f32 {
+        self.aspect
+    }
+
     pub fn view_all(&mut self) {
         let (lo, hi) = self.frame_box();
         self.camera.frame(lo, hi, self.aspect);
@@ -248,7 +410,7 @@ impl Viewer {
     fn scene_radius(&self) -> f32 {
         let half = self.grid.half_size();
         let (mut lo, mut hi) = (Vec3::new(-half, -half, 0.0), Vec3::new(half, half, 0.0));
-        if let Some((l, h)) = self.bounds {
+        if let Some((l, h)) = self.drawn_bounds() {
             lo = lo.min(l);
             hi = hi.max(h);
         }
@@ -265,10 +427,12 @@ impl Viewer {
         radius.max(1e-3)
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, status: &Status) {
+    /// Draws the view; returns its response, for what the app draws over
+    /// it.
+    pub fn show(&mut self, ui: &mut egui::Ui, status: &Status) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if rect.width() < 1.0 || rect.height() < 1.0 {
-            return;
+            return response;
         }
         self.aspect = rect.width() / rect.height();
         self.handle_input(ui, rect, &response);
@@ -277,6 +441,13 @@ impl Viewer {
             // so a stalled frame does not jump.
             let dt = ui.input(|i| i.stable_dt).min(0.1);
             self.camera.spin(dt);
+            ui.ctx().request_repaint();
+        }
+        if let Some(goal) = self.goal {
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            if self.camera.approach(&goal, dt) {
+                self.goal = None;
+            }
             ui.ctx().request_repaint();
         }
 
@@ -321,15 +492,17 @@ impl Viewer {
         }
         self.paint_gizmo(&painter, rect);
         paint_overlays(ui, &painter, rect, status);
+        response
     }
 
     fn handle_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
         if response.drag_started() {
             // Hand the camera back to the mouse.
             self.turntable = false;
+            self.goal = None;
         }
         let delta = response.drag_delta();
-        if response.dragged() && delta != Vec2::ZERO {
+        if response.dragged() && delta != Vec2::ZERO && self.orbit_enabled {
             let shift = ui.input(|i| i.modifiers.shift);
             let delta = GVec2::new(delta.x, delta.y);
             if response.dragged_by(PointerButton::Secondary)
@@ -341,10 +514,10 @@ impl Viewer {
                 self.camera.orbit(delta);
             }
         }
-        if response.dragged() {
+        if response.dragged() && self.orbit_enabled {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
-        if response.double_clicked() {
+        if response.double_clicked() && self.frame_on_double_click {
             self.view_all();
         }
         if response.hovered() {
@@ -764,6 +937,8 @@ mod tests {
             formats: &[],
             pauses: Vec::new(),
             source: String::new(),
+            parts: Vec::new(),
+            enclosure: 0..0,
         }
     }
 
@@ -945,5 +1120,33 @@ mod tests {
         let yaw = viewer.camera.yaw;
         frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
         assert_ne!(viewer.camera.yaw, yaw);
+    }
+
+    #[test]
+    fn a_drag_does_not_orbit_while_rewiring() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        let at = Pos2::new(400.0, 300.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        viewer.orbit_enabled = false;
+        frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at), press(true)], 1.0 / 60.0);
+        let before = viewer.camera;
+        for step in 1..=5 {
+            frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at + Vec2::new(step as f32 * 10.0, 0.0))], 1.0 / 60.0);
+        }
+        assert_eq!((viewer.camera.yaw, viewer.camera.pitch), (before.yaw, before.pitch));
+        frame(&ctx, &mut viewer, vec![press(false)], 1.0 / 60.0);
+        // Rewiring done, a drag turns the camera again.
+        viewer.orbit_enabled = true;
+        frame(&ctx, &mut viewer, vec![press(true)], 1.0 / 60.0);
+        for step in 1..=5 {
+            frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at + Vec2::new(step as f32 * 10.0, 0.0))], 1.0 / 60.0);
+        }
+        assert_ne!(viewer.camera.yaw, before.yaw);
     }
 }

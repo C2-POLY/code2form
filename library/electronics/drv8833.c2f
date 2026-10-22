@@ -1,0 +1,145 @@
+// DRV8833 dual H-bridge motor driver module, the common black 18.5 x 16 mm
+// board (sold by GERUI and others) whose pins read IN1 to IN4, EEP and
+// ULT: the board with its octagonal pads, the driver and the parts around
+// it, its print on both faces, the J1 sleep jumper underneath, and its two
+// 6-pin headers when soldered. Seen from the parts' side, the outputs'
+// column on the left, the inputs' column on the right.
+// https://www.ti.com/product/DRV8833
+//
+// From the driver's datasheet: VM (VCC here) 2.7 to 10.8 V, the logic
+// inputs up to 5.75 V, nSLEEP (EEP) high to run, nFAULT (ULT) an open
+// drain output, low on a fault. From the seller: the board is 18.5 x
+// 16 mm. Measured on photos of the board, scaled to its size (within
+// about 0.3 mm): two columns of six pins at 2.54 mm pitch, 15.24 mm apart,
+// the parts and the print. Underneath, J1 ties EEP high ("en") when
+// bridged. Still estimated: the board's thickness (1.6 mm). It has no
+// mount holes.
+//
+// Annotations are plain numbers. The board sits 0.04 mm up, on its pads
+// and the print underneath.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// The headers soldered to the board.
+headers = false;
+// The side the headers' long pins stick out of.
+header_side = "down"; // [down, up]
+
+// @pin EEP  [1.63, 14.35, 1.64] input 5.75V "nSLEEP: high to run"
+// @pin OUT1 [1.63, 11.81, 1.64] output 10.8V "bridge A, output 1"
+// @pin OUT2 [1.63, 9.27, 1.64]  output 10.8V "bridge A, output 2"
+// @pin OUT3 [1.63, 6.73, 1.64]  output 10.8V "bridge B, output 1"
+// @pin OUT4 [1.63, 4.19, 1.64]  output 10.8V "bridge B, output 2"
+// @pin ULT  [1.63, 1.65, 1.64]  output 5.75V "nFAULT: low on a fault, open drain"
+// @pin IN4  [16.87, 14.35, 1.64] input 5.75V "bridge B, input 2"
+// @pin IN3  [16.87, 11.81, 1.64] input 5.75V "bridge B, input 1"
+// @pin GND  [16.87, 9.27, 1.64]  ground
+// @pin VCC  [16.87, 6.73, 1.64]  power_in 10.8V "motor supply, 2.7 to 10.8 V"
+// @pin IN2  [16.87, 4.19, 1.64]  input 5.75V "bridge A, input 2"
+// @pin IN1  [16.87, 1.65, 1.64]  input 5.75V "bridge A, input 1"
+
+module drv8833(headers = false, header_side = "down") {
+    translate([0, 0, 0.04]) board(headers, header_side);
+}
+
+module board(headers, header_side) {
+    $fn = 16;
+    t = 1.6;
+    w = 18.5;
+    l = 16;
+    columns = [1.63, 16.87];
+    rows = [for (i = [0 : 5]) 1.65 + i * 2.54];
+
+    black = [0.06, 0.06, 0.07];
+    tin = [0.82, 0.83, 0.85];
+    print = [0.95, 0.95, 0.95];
+    body = [0.12, 0.12, 0.13];
+    ceramic = [0.78, 0.66, 0.50];
+    tantalum = [0.88, 0.62, 0.22];
+
+    color(black) difference() {
+        cube([w, l, t]);
+        for (x = columns, y = rows) translate([x, y, -1]) cylinder(d = 1.0, h = t + 2);
+    }
+    // Octagonal tinned pads, on both faces.
+    color(tin) for (x = columns, y = rows, z = [-0.02, t]) translate([x, y, z]) difference() {
+        rotate(22.5) cylinder(d = 2.0, h = 0.02, $fn = 8);
+        translate([0, 0, -1]) cylinder(d = 1.0, h = 2);
+    }
+
+    // The driver, an HTSSOP-16, its legs on its long sides.
+    color(body) translate([5.3, 6.0, t + 0.1]) cube([4.4, 5.1, 1.0]);
+    color(tin) for (i = [0 : 7], x = [4.75, 9.7])
+        translate([x, 6.3 + i * 0.65, t]) cube([0.55, 0.3, 0.25]);
+    color([0.3, 0.3, 0.32]) translate([5.8, 10.5, t + 1.1]) cylinder(d = 0.5, h = 0.01);
+
+    // The parts around it: resistors 472 and 473, an LED, two ceramic
+    // capacitors and the 10 µF tantalum capacitor.
+    smd([4.25, 13.4], [1.3, 2.4], body, tin, t);
+    smd([11.1, 3.75], [3.0, 1.3], body, tin, t);
+    smd([8.55, 14.0], [3.2, 1.3], [0.95, 0.93, 0.85], tin, t);
+    smd([13.35, 13.25], [1.3, 2.6], ceramic, tin, t);
+    smd([13.55, 7.4], [1.3, 2.6], ceramic, tin, t);
+    color(tantalum) translate([4.6, 1.6, t]) cube([3.5, 1.9, 1.6]);
+    color(tin) for (x = [4.1, 8.1]) translate([x, 1.9, t]) cube([0.5, 1.3, 0.9]);
+
+    // The print on top: the pads' outlines, the parts' values, the board's
+    // name and a serial number along the inputs.
+    color(print) translate([0, 0, t]) linear_extrude(0.02) let($fn = 6) {
+        for (x = columns, y = rows) translate([x, y]) rotate(22.5) difference() {
+            circle(d = 2.6, $fn = 8);
+            circle(d = 2.3, $fn = 8);
+        }
+        translate([4.25, 13.4]) rotate(90) text("472", size = 0.55, halign = "center", valign = "center");
+        translate([11.1, 3.75]) text("473", size = 0.55, halign = "center", valign = "center");
+        translate([7.5, 5.0]) text("DRV8833", size = 0.75, font = "Liberation Sans:style=Bold", halign = "center");
+        translate([14.9, 8.0]) rotate(-90) text("10123W103752", size = 0.85, halign = "center", valign = "center");
+        difference() {
+            translate([3.7, 1.2]) square([5.0, 2.7]);
+            translate([3.85, 1.35]) square([4.7, 2.4]);
+        }
+    }
+    color([0.25, 0.18, 0.08]) translate([6.35, 2.55, t + 1.6]) linear_extrude(0.01)
+        text("106C", size = 0.6, halign = "center", valign = "center", $fn = 6);
+
+    // Underneath: the J1 jumper's two pads, and the print, readable from
+    // below: each pin's name, the jumper's "en" and "sleep", the board's name.
+    color(tin) for (x = [6.6, 7.6]) translate([x, 13.9, -0.02]) cube([0.8, 0.9, 0.02]);
+    color(print) translate([0, 0, -0.02]) mirror([0, 0, 1]) mirror([1, 0, 0]) linear_extrude(0.02) let($fn = 6) {
+        outputs = ["EEP", "OUT1", "OUT2", "OUT3", "OUT4", "ULT"];
+        inputs = ["IN4", "IN3", "GND", "VCC", "IN2", "IN1"];
+        for (i = [0 : 5]) {
+            translate([-3.2, rows[5 - i]]) text(outputs[i], size = 0.95, font = "Liberation Sans:style=Bold", halign = "right", valign = "center");
+            translate([-15.3, rows[5 - i]]) text(inputs[i], size = 0.95, font = "Liberation Sans:style=Bold", valign = "center");
+        }
+        translate([-9.1, 14.35]) text("J1", size = 0.85, font = "Liberation Sans:style=Bold", halign = "right", valign = "center");
+        translate([-11.0, 12.8]) text("en", size = 0.85, font = "Liberation Sans:style=Bold", halign = "center", valign = "center");
+        translate([-10.7, 11.4]) text("sleep", size = 0.85, font = "Liberation Sans:style=Bold", halign = "center", valign = "center");
+        translate([-9.25, 1.1]) text("DRV8833", size = 1.1, font = "Liberation Sans:style=Bold", halign = "center");
+        difference() {
+            translate([-8.8, 13.6]) square([2.6, 1.5]);
+            translate([-8.65, 13.75]) square([2.3, 1.2]);
+        }
+    }
+
+    if (headers)
+        for (x = columns)
+            pin_header(6, [x, rows[0]], t, header_side);
+}
+
+// A surface-mount part `size` long and wide, centered `at`, its tinned
+// ends along its length.
+module smd(at, size, body, ends, t) {
+    along_x = size[0] > size[1];
+    end = 0.4;
+    translate([at[0] - size[0] / 2, at[1] - size[1] / 2, t]) {
+        color(body) translate(along_x ? [end, 0, 0] : [0, end, 0])
+            cube(along_x ? [size[0] - 2 * end, size[1], 0.6] : [size[0], size[1] - 2 * end, 0.6]);
+        color(ends) for (k = [0, 1])
+            translate(along_x ? [k * (size[0] - end), 0, 0] : [0, k * (size[1] - end), 0])
+                cube(along_x ? [end, size[1], 0.6] : [size[0], end, 0.6]);
+    }
+}
+
+drv8833(headers, header_side);

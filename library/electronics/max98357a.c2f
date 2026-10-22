@@ -1,0 +1,166 @@
+// MAX98357A I2S class-D mono amplifier breakout, the common blue 18 x 19 mm
+// board (sold by GERUI and others): the board with its two mount holes,
+// the amplifier and the parts around it, its print, its 7-pin header when
+// soldered and its blue screw terminal for the speaker when soldered.
+// Seen from above, the header along the edge at y = 0, the speaker
+// terminal on the far edge.
+// https://www.analog.com/en/products/max98357a.html
+//
+// From the seller's drawing: the board is 18 x 19 mm. From the datasheet:
+// Vin takes 2.5 to 5.5 V, the amplifier is a 3 x 3 mm TQFN. Measured on
+// photos of the board, scaled to its size (within about 0.3 mm): the
+// pins' row (2.54 mm pitch, in the order LRC, BCLK, DIN, GAIN, SD, GND,
+// Vin), the two 2.2 mm mount holes, the speaker pads at 3.5 mm pitch with
+// - on the left, the parts and the print. Still estimated: the board's
+// thickness (1.6 mm) and the terminal block's size. Adafruit's own board
+// (product 3006) has the same pins but no mount holes.
+//
+// Annotations are plain numbers. The board sits 0.04 mm up, on its pads
+// and the print underneath.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// The 7-pin header soldered to the board.
+headers = false;
+// The side the header's long pins stick out of.
+header_side = "down"; // [down, up]
+// The speaker terminal block soldered to the board.
+terminal = true;
+
+// @pin LRC  [1.38, 2.4, 1.64]  input 5.5V "LRCLK: I2S word select"
+// @pin BCLK [3.92, 2.4, 1.64]  input 5.5V "I2S bit clock"
+// @pin DIN  [6.46, 2.4, 1.64]  input 5.5V "I2S data"
+// @pin GAIN [9.0, 2.4, 1.64]   input 5.5V "gain: 9 dB unconnected"
+// @pin SD   [11.54, 2.4, 1.64] input 5.5V "shutdown and channel select"
+// @pin GND  [14.08, 2.4, 1.64] ground
+// @pin VIN  [16.62, 2.4, 1.64] power_in 5.5V "Vin: 2.5 to 5.5 V"
+// @pin -    [7.0, 15.8, 1.64]  output 5.5V "speaker -"
+// @pin +    [10.5, 15.8, 1.64] output 5.5V "speaker +"
+// @mount_hole [1.7, 17.1] d=2.2
+// @mount_hole [16.3, 17.1] d=2.2
+
+module max98357a(headers = false, header_side = "down", terminal = true) {
+    translate([0, 0, 0.04]) board(headers, header_side, terminal);
+}
+
+module board(headers, header_side, terminal) {
+    $fn = 16;
+    t = 1.6;
+    w = 18;
+    l = 19;
+    pins = [for (i = [0 : 6]) 1.38 + i * 2.54];
+    holes = [[1.7, 17.1], [16.3, 17.1]];
+    speaker = [[7.0, 15.8], [10.5, 15.8]];
+
+    blue = [0.09, 0.33, 0.78];
+    tin = [0.82, 0.83, 0.85];
+    print = [0.95, 0.96, 0.98];
+    dark = [0.10, 0.10, 0.11];
+    ceramic = [0.80, 0.70, 0.55];
+
+    // The board, its holes through it.
+    color(blue) difference() {
+        rounded(w, l, t, 0.6);
+        for (x = pins) translate([x, 2.4, -1]) cylinder(d = 1.0, h = t + 2);
+        for (p = speaker) translate([p[0], p[1], -1]) cylinder(d = 1.3, h = t + 2);
+        for (p = holes) translate([p[0], p[1], -1]) cylinder(d = 2.2, h = t + 2);
+    }
+    // Tinned rings round the holes, on both faces.
+    color(tin) for (z = [-0.02, t]) {
+        for (x = pins) ring([x, 2.4], 1.0, 1.75, z);
+        for (p = speaker) ring(p, 1.3, 2.0, z);
+        for (p = holes) ring(p, 2.2, 3.0, z);
+    }
+
+    // The amplifier, a 3 x 3 mm TQFN, and the parts around it: two
+    // capacitors and two ferrite beads in a row, two more capacitors and a
+    // resistor to its right.
+    color(dark) translate([7.05, 6.15, t]) cube([2.9, 2.9, 0.75]);
+    color(tin) translate([7.4, 6.5, t + 0.75]) cylinder(d = 0.3, h = 0.01);
+    for (p = [[2.7, 0], [6.0, 1], [11.2, 1], [15.1, 0]])
+        smd([p[0], 11.1], [2.0, 1.25], p[1] == 1 ? dark : ceramic, tin, t);
+    for (x = [12.6, 15.0]) smd([x, 8.4], [1.25, 2.0], ceramic, tin, t);
+    smd([13.95, 5.3], [2.0, 1.25], dark, tin, t);
+
+    // The print on top: the name, the pins' names alternately above and
+    // below them, the speaker's - and +, the terminal block's outline.
+    color(print) translate([0, 0, t]) linear_extrude(0.02) let($fn = 6) {
+        translate([1.0, 9.0]) text("MAX", size = 1.05);
+        translate([1.0, 7.5]) text("98357A", size = 1.05);
+        translate([1.0, 6.0]) text("I2S Amp", size = 1.05);
+        names = ["LRC", "BCLK", "DIN", "GAIN", "SD", "GND", "Vin"];
+        for (i = [0 : 6])
+            translate([pins[i], i % 2 == 0 ? 3.85 : 0.35])
+                text(names[i], size = 0.8, halign = "center");
+        for (p = [[5.4, "-"], [12.6, "+"]]) translate([p[0], 13.0]) {
+            let($fn = 24) difference() { circle(d = 1.7); circle(d = 1.4); }
+            text(p[1], size = 1.1, halign = "center", valign = "center");
+        }
+        difference() {
+            translate([5.1, 14.8]) square([7.5, 4.2]);
+            translate([5.25, 14.95]) square([7.2, 4.2]);
+        }
+    }
+    // The print underneath, readable from below.
+    color(print) translate([0, 0, -0.02]) mirror([0, 0, 1]) mirror([1, 0, 0]) linear_extrude(0.02) let($fn = 6) {
+        translate([-12.5, 14.6]) text("4-8Ω 3W", size = 1.0, halign = "center");
+        lines = ["MAX98357A", "I2S Mono Amp.", "Vin: 2.5-5.5V", "Default 9db Gain", "& (L+R)/2 out"];
+        for (i = [0 : 4]) translate([-9, 12.6 - i * 1.75]) text(lines[i], size = 1.0, halign = "center");
+    }
+
+    if (terminal) terminal_block(speaker, t);
+    if (headers) pin_header(7, [pins[0], 2.4], t, header_side, along = "x");
+}
+
+// A box with its four vertical edges rounded by `r`.
+module rounded(x, y, h, r) {
+    hull() for (cx = [r, x - r], cy = [r, y - r]) translate([cx, cy, 0]) cylinder(r = r, h = h);
+}
+
+// A flat ring round a hole, 0.02 mm thick, at height `z`.
+module ring(at, hole, outer, z) {
+    translate([at[0], at[1], z]) difference() {
+        cylinder(d = outer, h = 0.02);
+        translate([0, 0, -1]) cylinder(d = hole, h = 2);
+    }
+}
+
+// A surface-mount part `size` long and wide, centered `at`, its tinned
+// ends along its length.
+module smd(at, size, body, ends, t) {
+    along_x = size[0] > size[1];
+    end = 0.4;
+    translate([at[0] - size[0] / 2, at[1] - size[1] / 2, t]) {
+        color(body) translate(along_x ? [end, 0, 0] : [0, end, 0])
+            cube(along_x ? [size[0] - 2 * end, size[1], 0.6] : [size[0], size[1] - 2 * end, 0.6]);
+        color(ends) for (k = [0, 1])
+            translate(along_x ? [k * (size[0] - end), 0, 0] : [0, k * (size[1] - end), 0])
+                cube(along_x ? [end, size[1], 0.6] : [size[0], end, 0.6]);
+    }
+}
+
+// A blue 2-way screw terminal block at 3.5 mm pitch over the speaker
+// pads, the wires going in from the board's far edge.
+module terminal_block(pads, t) {
+    x0 = (pads[0][0] + pads[1][0]) / 2 - 3.5;
+    y0 = 13.0;
+    color([0.10, 0.35, 0.85]) difference() {
+        translate([x0, y0, t]) cube([7.0, 7.0, 8.0]);
+        // The screws' wells on top and the wires' openings in front.
+        for (p = pads) {
+            translate([p[0], y0 + 3.0, t + 5.5]) cylinder(d = 2.8, h = 3);
+            translate([p[0] - 1.3, y0 + 4.5, t + 1.2]) cube([2.6, 3, 2.8]);
+        }
+    }
+    // The screws, slotted, and the clamps behind the openings.
+    for (p = pads) {
+        color([0.75, 0.76, 0.78]) difference() {
+            translate([p[0], y0 + 3.0, t + 6.2]) cylinder(d = 2.6, h = 0.8);
+            translate([p[0] - 1.4, y0 + 2.8, t + 6.7]) cube([2.8, 0.4, 1]);
+        }
+        color([0.75, 0.76, 0.78]) translate([p[0] - 1.2, y0 + 4.4, t + 1.1]) cube([2.4, 0.1, 3.0]);
+    }
+}
+
+max98357a(headers, header_side, terminal);

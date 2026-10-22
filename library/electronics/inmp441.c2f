@@ -1,0 +1,100 @@
+// INMP441 I2S MEMS microphone module, the common round black board: the
+// board with its two notches and gold edge, the microphone's metal can
+// between its two rows of three pins, a capacitor and a resistor, and its
+// 2 x 3 header when soldered. The board's center at the origin, the parts
+// on top. The microphone takes the sound from below, through a hole in
+// the board under it.
+// https://invensense.tdk.com/products/digital/inmp441/
+//
+// From the microphone's datasheet: a 4.72 x 3.76 x 1 mm package, bottom
+// port; VDD 1.62 to 3.63 V; L/R to GND puts the data on the left channel.
+// From the seller: the board is 14 mm across. Measured on photos of the
+// board (within about 0.5 mm): the notches, the rows 7.6 mm apart at
+// 2.54 mm pitch, the parts. Still estimated: the board's thickness
+// (1.2 mm) and which row carries which pins. It has no mount holes.
+//
+// Annotations are plain numbers. The board sits 0.04 mm up, on its pads.
+
+use <lib/pin_header.c2f>
+
+/* [Build] */
+// The header soldered to the board.
+headers = false;
+// The side the header's long pins stick out of.
+header_side = "up"; // [down, up]
+
+// @pin SD  [-2.54, -3.8, 1.24] output 3.6V "I2S data"
+// @pin VDD [0, -3.8, 1.24]     power_in 3.6V "1.62 to 3.63 V"
+// @pin GND [2.54, -3.8, 1.24]  ground
+// @pin L/R [-2.54, 3.8, 1.24]  input 3.6V "channel: GND for left"
+// @pin WS  [0, 3.8, 1.24]      input 3.6V "I2S word select"
+// @pin SCK [2.54, 3.8, 1.24]   input 3.6V "I2S bit clock"
+// @port sound [0.8, 0, 0] down d=1 "sound hole, under the microphone"
+
+module inmp441(headers = false, header_side = "up") {
+    translate([0, 0, 0.04]) board(headers, header_side);
+}
+
+module board(headers, header_side) {
+    $fn = 32;
+    t = 1.2;
+    rows = [-3.8, 3.8];
+    columns = [-2.54, 0, 2.54];
+    notches = [200, 20];
+
+    black = [0.06, 0.06, 0.07];
+    gold = [0.85, 0.68, 0.38];
+    metal = [0.86, 0.87, 0.89];
+    dark = [0.15, 0.15, 0.16];
+    ceramic = [0.78, 0.66, 0.50];
+
+    // The gold-plated edge, then the board over it.
+    color(gold) difference() {
+        cylinder(d = 14, h = t);
+        translate([0, 0, -1]) cylinder(d = 13.8, h = t + 2);
+        notched();
+    }
+    color(black) difference() {
+        cylinder(d = 13.8, h = t);
+        notched();
+        for (x = columns, y = rows) translate([x, y, -1]) cylinder(d = 1.0, h = t + 2, $fn = 12);
+        translate([0.8, 0, -1]) cylinder(d = 1.0, h = t + 2, $fn = 12);
+    }
+    // Gold rings round the pins' holes, on both faces.
+    color(gold) for (x = columns, y = rows, z = [-0.02, t]) translate([x, y, z]) difference() {
+        cylinder(d = 1.7, h = 0.02, $fn = 16);
+        translate([0, 0, -1]) cylinder(d = 1.0, h = 2, $fn = 12);
+    }
+
+    // The microphone: a metal can on its laminate, printed.
+    color([0.55, 0.50, 0.42]) translate([0.8 - 2.36, -1.88, t]) cube([4.72, 3.76, 0.25]);
+    color(metal) translate([0.8 - 2.2, -1.72, t + 0.25]) cube([4.4, 3.44, 0.75]);
+    color(dark) translate([0.8, 0, t + 1]) linear_extrude(0.01) let($fn = 6) {
+        translate([0, 0.35]) text("441", size = 0.6, halign = "center");
+        translate([0, -0.6]) text("LIT4889", size = 0.6, halign = "center");
+    }
+    // A decoupling capacitor and a resistor beside it.
+    smd([-3.3, 1.1], [1.6, 0.8], ceramic, metal, t);
+    smd([-3.3, -0.4], [1.6, 0.8], dark, metal, t);
+
+    if (headers)
+        for (y = rows)
+            pin_header(3, [columns[0], y], t, header_side, along = "x");
+
+    // Two half-round notches in the edge.
+    module notched() {
+        for (a = notches) rotate(a) translate([7, 0, -1]) cylinder(d = 2.2, h = t + 2, $fn = 16);
+    }
+}
+
+// A surface-mount part `size` long and wide, centered `at`, its tinned
+// ends along its length.
+module smd(at, size, body, ends, t) {
+    end = 0.3;
+    translate([at[0] - size[0] / 2, at[1] - size[1] / 2, t]) {
+        color(body) translate([end, 0, 0]) cube([size[0] - 2 * end, size[1], 0.45]);
+        color(ends) for (k = [0, 1]) translate([k * (size[0] - end), 0, 0]) cube([end, size[1], 0.45]);
+    }
+}
+
+inmp441(headers, header_side);

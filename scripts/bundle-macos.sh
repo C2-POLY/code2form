@@ -8,7 +8,7 @@
 #   scripts/bundle-macos.sh --install   also put it in ~/Applications, where
 #                                       Launchpad, Spotlight and the Finder see it
 #   scripts/bundle-macos.sh --install --default
-#                                       and make it the app that opens .c2f and .scad files
+#                                       and make it the app that opens .c2f, .c2fc and .scad files
 #
 # The icon comes from crates/studio/assets/AppIcon.icns; redraw it with
 # `scripts/make-icon.sh`. The
@@ -95,6 +95,12 @@ cp "$assets/AppIcon.icns" "$app/Contents/Resources/"
 sed "s/@VERSION@/$version/g" "$assets/Info.plist" > "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
+# The repository's own library (MIT OR Apache-2.0, as the rest of it),
+# with its licences, found by `use <electronics/...>` as MCAD is.
+mkdir -p "$app/Contents/Resources/libraries"
+ditto "$root/library" "$app/Contents/Resources/libraries"
+cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$app/Contents/Resources/libraries/"
+
 # The fonts text() defaults to (Liberation, SIL Open Font License) and the
 # MCAD library (LGPL 2.1), with their licences, copied from the reference
 # app so that this one works on its own.
@@ -144,7 +150,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 let app = URL(fileURLWithPath: CommandLine.arguments[1])
-for ext in ["c2f", "scad"] {
+for ext in ["c2f", "c2fc", "scad"] {
     guard let type = UTType(filenameExtension: ext) else {
         FileHandle.standardError.write("no file type for .\(ext)\n".data(using: .utf8)!)
         exit(1)

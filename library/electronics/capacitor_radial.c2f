@@ -1,0 +1,91 @@
+// Radial aluminium electrolytic capacitor standing on its two leads, as it
+// looks in the hand: the can in its black sleeve, rolled over at the top
+// and crimped near the bottom, the light stripe of "-" marks on the - side,
+// the bare aluminium top with its scored vent cross, the rubber bung
+// under it and the two tinned leads. The can's axis on z, the lead ends at
+// z = 0.
+// https://en.wikipedia.org/wiki/Aluminum_electrolytic_capacitor
+// (and the datasheet of the capacitor's series, which has the final word)
+//
+// From the manufacturers' tables for radial cans (Nichicon, Panasonic): the
+// lead pitch is 2 mm for a 5 mm can, 2.5 mm for 6.3 mm, 3.5 mm for 8 mm,
+// 5 mm for 10 to 12.5 mm and 7.5 mm for 16 to 18 mm; the leads are 0.5 to
+// 0.8 mm thick; cans of 6.3 mm and up have a vent scored in their top.
+// Estimated: the sleeve's roll at the top and its crimp groove (0.3 and
+// 0.6 mm), the bung's height (0.4 mm), the stripe's width (a quarter of
+// the can's round) and the sleeve's colours, which change from one maker
+// and series to the next. The can is drawn at its nominal height; a real
+// one is a few tenths taller once its sleeve and bung are counted.
+//
+// Annotations are plain numbers: the pins are the lead ends of an 8 mm can
+// (3.5 mm pitch), and stay there for other diameters. They take 16 V, a
+// common rating for the 5 V rail: edit them for another capacitor.
+
+/* [Size] */
+// Diameter of the can.
+d = 8; // [4:0.5:18]
+// Height of the can.
+h = 12; // [5:0.5:40]
+// Length of lead between the can and the board.
+lead = 2; // [0:0.5:10]
+
+// @pin + [-1.75, 0, 0] down passive 16V "longer lead"
+// @pin - [1.75, 0, 0]  down passive 16V "striped side"
+
+module capacitor_radial(d = 8, h = 12, lead = 2) {
+    $fn = 32;
+    pitch = d <= 5 ? 2 : d <= 6.3 ? 2.5 : d <= 8 ? 3.5 : d <= 12.5 ? 5 : 7.5;
+    wire = d <= 6.3 ? 0.5 : d <= 10 ? 0.6 : 0.8;
+
+    sleeve = [0.10, 0.10, 0.11];
+    stripe = [0.72, 0.73, 0.75];
+    aluminium = [0.80, 0.81, 0.83];
+    rubber = [0.20, 0.20, 0.21];
+    tin = [0.82, 0.83, 0.85];
+
+    bung = 0.4;
+    roll = 0.3;
+    groove = min(1.5, h / 5);
+
+    translate([0, 0, lead]) {
+        // The rubber bung, sealing the can's bottom between the leads.
+        color(rubber) cylinder(d = d - 1.2, h = bung);
+        // The sleeve: shrunk under the can's bottom edge, crimped into
+        // the groove that holds the bung, rolled over the top edge.
+        color(sleeve) {
+            translate([0, 0, bung]) cylinder(d1 = d - 0.8, d2 = d, h = 0.3);
+            translate([0, 0, bung + 0.3]) cylinder(d = d, h = groove - 0.3);
+            translate([0, 0, bung + groove]) cylinder(d = d - 0.5, h = 0.6);
+            translate([0, 0, bung + groove + 0.6]) cylinder(d = d, h = h - bung - groove - 0.6 - roll);
+            translate([0, 0, h - roll]) cylinder(d1 = d, d2 = d - 0.6, h = roll);
+        }
+        // The stripe on the - side, its "-" marks printed dark on it, from
+        // the groove up to the roll.
+        z0 = bung + groove + 0.6;
+        z1 = h - roll;
+        color(stripe) intersection() {
+            translate([0, 0, z0]) cylinder(d = d + 0.04, h = z1 - z0);
+            translate([0, -d * 0.35, z0]) cube([d, d * 0.7, z1 - z0]);
+        }
+        marks = max(1, floor((z1 - z0 - 1) / 2.2));
+        color(sleeve) for (i = [0 : marks - 1])
+            translate([0, 0, z0 + (z1 - z0) * (i + 0.5) / marks]) intersection() {
+                difference() {
+                    cylinder(d = d + 0.08, h = 0.35, center = true);
+                    cylinder(d = d, h = 1, center = true);
+                }
+                translate([d / 4, -d * 0.12, -0.5]) cube([d, d * 0.24, 1]);
+            }
+        // The bare aluminium top, inside the roll, its vent scored in a
+        // cross ("+") on cans of 6.3 mm and up.
+        color(aluminium) translate([0, 0, h - roll]) cylinder(d = d - 0.6, h = roll - 0.02);
+        if (d >= 6.3)
+            color([0.55, 0.56, 0.58]) for (a = [0, 90]) rotate(a)
+                translate([-(d - 2) / 2, -0.1, h - 0.02]) cube([d - 2, 0.2, 0.02]);
+    }
+    // The tinned leads, from the board into the bung.
+    for (x = [-pitch / 2, pitch / 2])
+        color(tin) translate([x, 0, 0]) cylinder(d = wire, h = lead + 0.2, $fn = 12);
+}
+
+capacitor_radial(d, h, lead);

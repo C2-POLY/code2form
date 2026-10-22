@@ -2,6 +2,7 @@
 //! and the document they work on.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
@@ -9,9 +10,12 @@ use eframe::egui::{
     RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use eframe::glow;
+use c2f_circuit::End;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::catalogue::{self, Catalogue};
+use crate::circuit;
 use crate::app_icon::{self, Tint};
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
@@ -19,16 +23,24 @@ use crate::editor::{Editor, FindRequest};
 use crate::icon_setting;
 use crate::open_events;
 use crate::pause_edit;
+use crate::part_edit::{self, Grab};
 use crate::recent::RecentFiles;
+use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
 use crate::settings::{self, Settings};
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
+use crate::inspect;
+use crate::mount::{self, Mount};
+use crate::pick::{self, Hit};
+use crate::prefs::WireMargin;
+use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
+const CIRCUIT_FILES: (&str, &str) = ("Code2Form circuit", "c2fc");
 
 /// How long a customizer control must rest before a re-render.
 const PARAMETER_DEBOUNCE: Duration = Duration::from_millis(120);
@@ -41,6 +53,8 @@ const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S)
 const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::S);
 const RENDER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F5);
 const EXPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F7);
+const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::Z);
 const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
 const FIND_REPLACE: KeyboardShortcut = KeyboardShortcut::new(Modifiers { alt: true, ..Modifiers::COMMAND }, Key::F);
 const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
@@ -98,6 +112,33 @@ impl Pending {
     }
 }
 
+/// A drag in the view that rewires the circuit.
+struct Rewire {
+    /// The wire end grabbed; `None` for a new wire from `anchor`.
+    grabbed: Option<(usize, Side)>,
+    /// The pin the wire keeps: its other end, or where a new one starts.
+    anchor: End,
+    /// Where the press was, to tell a drag from a click.
+    origin: egui::Pos2,
+    moved: bool,
+    /// The pin under the pointer, and the check error dropping there
+    /// would bring.
+    target: Option<End>,
+    error: Option<String>,
+}
+
+impl Rewire {
+    /// What dropping now does.
+    fn edit(&self) -> Option<Edit> {
+        match (self.grabbed, self.target) {
+            (Some((wire, side)), Some(to)) => Some(Edit::Move { wire, side, to }),
+            (Some((wire, _)), None) => Some(Edit::Remove { wire }),
+            (None, Some(to)) => Some(Edit::Add { from: self.anchor, to }),
+            (None, None) => None,
+        }
+    }
+}
+
 /// What the status bar and toolbar know about the model on screen.
 struct ModelInfo {
     stats: Stats,
@@ -105,6 +146,8 @@ struct ModelInfo {
     /// The formats it exports to.
     formats: &'static [Format],
     empty: bool,
+    /// The parts of a circuit; 0 for a design.
+    parts: usize,
 }
 
 pub struct StudioApp {
@@ -129,6 +172,34 @@ pub struct StudioApp {
     model: Option<ModelInfo>,
     /// Frame the next model that arrives (after opening a file).
     frame_next: bool,
+    /// The wires of the circuit on screen, when the file is one, as last
+    /// read.
+    wiring: Option<Wiring>,
+    /// What is under the pointer in the view, and what was clicked.
+    hover: Option<Hit>,
+    selection: Option<Hit>,
+    /// The box around each part of the circuit, as last rendered.
+    part_boxes: Vec<Option<(glam::Vec3, glam::Vec3)>>,
+    /// How the parts were last shown, not to recolor them every frame.
+    shown_parts: Vec<Emphasis>,
+    /// The assembly mode, and its progress.
+    mount: Mount,
+    /// Added to each wire's routed length.
+    wire_margin: WireMargin,
+    /// When the app started, for the pins that pulse.
+    started: Instant,
+    /// Where the 3D view is, as last shown.
+    view_rect: egui::Rect,
+    /// A drag rewiring the circuit, from a pin or a wire's end.
+    rewire: Option<Rewire>,
+    /// A part being dragged: the drag, where the press was, whether it
+    /// moved, and the circuit as read before it.
+    part_drag: Option<(part_edit::Drag, egui::Pos2, bool, Arc<c2f_circuit::Circuit>)>,
+    /// The generation it was read for.
+    circuit_generation: u64,
+    /// The circuit's part files and their modification times, to render
+    /// again when one changes on disk.
+    part_files: Vec<(PathBuf, Option<SystemTime>)>,
 
     editor: Editor,
     viewer: Viewer,
@@ -138,6 +209,9 @@ pub struct StudioApp {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    /// The parts catalogue, shown in its panel for a circuit.
+    catalogue: Catalogue,
+    catalogue_open: bool,
     recent: RecentFiles,
     /// The settings, as last saved, and where they are kept.
     settings: Settings,
@@ -176,12 +250,27 @@ impl StudioApp {
             failed: false,
             model: None,
             frame_next: true,
+            wiring: None,
+            hover: None,
+            selection: None,
+            part_boxes: Vec::new(),
+            shown_parts: Vec::new(),
+            mount: Mount::default(),
+            wire_margin: WireMargin::load(crate::prefs::wire_margin_store()),
+            started: Instant::now(),
+            view_rect: egui::Rect::NOTHING,
+            rewire: None,
+            part_drag: None,
+            circuit_generation: 0,
+            part_files: Vec::new(),
             editor: Editor::new(),
             viewer: Viewer::new(cc.gl.as_ref()),
             console: Console::default(),
             console_open: true,
             customizer: Customizer::default(),
             customizer_open: None,
+            catalogue: Catalogue::new(&cc.egui_ctx),
+            catalogue_open: false,
             recent: RecentFiles::load(crate::recent::store()),
             logo: logo_texture(&cc.egui_ctx, settings.icon),
             saved_settings: settings.clone(),
@@ -234,6 +323,10 @@ impl StudioApp {
         self.path.as_deref().and_then(Path::parent).map(Path::to_path_buf).or_else(working_directory)
     }
 
+    fn is_circuit(&self) -> bool {
+        self.path.as_deref().is_some_and(circuit::is_circuit)
+    }
+
     fn busy(&self) -> bool {
         self.worker.latest() > self.finished
     }
@@ -242,6 +335,7 @@ impl StudioApp {
 
     fn render_now(&mut self) {
         self.render_deadline = None;
+        self.editor.set_circuit(self.is_circuit());
         self.sent_source = Some(self.text.clone());
         self.sent_values = self.customizer.values();
         self.worker.render(self.text.clone(), self.source_path(), self.sent_values.clone());
@@ -283,7 +377,7 @@ impl StudioApp {
                     match outcome.result {
                         Ok(scene) => {
                             self.failed = false;
-                            self.editor.error_line = None;
+                            self.editor.error_line = outcome.annotation_error;
                             let empty = scene.is_empty();
                             let had_model = self.model.as_ref().is_some_and(|m| !m.empty);
                             let frame = !empty && (self.frame_next || !had_model);
@@ -295,12 +389,70 @@ impl StudioApp {
                                 is_2d: scene.is_2d,
                                 formats: scene.formats,
                                 empty,
+                                parts: scene.parts.len(),
                             });
+                            if !self.is_circuit() && current {
+                                // A design's @circuit and its parts.
+                                self.watch(outcome.watch.clone());
+                            }
+                            self.part_boxes = part_boxes(&scene);
                             self.viewer.set_scene(scene, frame);
+                            // The new solid comes in its own colors.
+                            self.update_overlay();
+                            // A part still being dragged stays where the drag has it.
+                            if let Some((drag, _, true, original)) = self.part_drag.clone() {
+                                self.preview_part(&drag, &original);
+                            }
                         }
                         Err(line) => {
                             self.failed = true;
-                            self.editor.error_line = line;
+                            self.editor.error_line = line.or(outcome.annotation_error);
+                        }
+                    }
+                }
+                Reply::Circuit { generation, circuit } => {
+                    if generation < self.circuit_generation || generation < self.worker.latest() {
+                        continue;
+                    }
+                    self.circuit_generation = generation;
+                    self.set_circuit(Some(circuit));
+                    if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()) {
+                        let rewire = target.strip_prefix("rewire:").and_then(|t| t.split_once('>'));
+                        let moved = target.strip_prefix("move:").and_then(|t| t.split_once(':'));
+                        if target == "catalogue" {
+                            self.catalogue_open = true;
+                        } else if let Some((name, to)) = moved {
+                            // A part held mid-drag, as `move:mic:40,10` asks.
+                            let xy: Vec<f64> = to.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                            let circuit = self.wiring.as_ref().map(|w| w.circuit.clone());
+                            let part = circuit.as_ref().and_then(|c| c.parts.iter().position(|p| p.name == name));
+                            if let (Some(circuit), Some(part), &[x, y]) = (circuit, part, xy.as_slice()) {
+                                let from = circuit.parts[part].at;
+                                let drag = part_edit::Drag { part, offset: [0.0; 2], from, at: [x, y, from[2]], turns: 0 };
+                                self.part_drag = Some((drag.clone(), egui::Pos2::ZERO, true, circuit.clone()));
+                                self.preview_part(&drag, &circuit);
+                            }
+                        } else if let Some((from, to)) = rewire {
+                            // A new wire held over a pin, as a drag shows it.
+                            let end = |name: &str| match self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, name)) {
+                                Some(Hit::Pin(end)) => Some(end),
+                                _ => None,
+                            };
+                            if let (Some(anchor), Some(to), Some(wiring)) = (end(from), end(to), &self.wiring) {
+                                let error = rewire::new_error(&wiring.circuit, Edit::Add { from: anchor, to });
+                                let origin = egui::Pos2::ZERO;
+                                let held = Rewire { grabbed: None, anchor, origin, moved: true, target: Some(to), error };
+                                self.rewire = Some(held);
+                                self.update_overlay();
+                            }
+                        } else if let Some(step) = target.strip_prefix("assembly:").and_then(|n| n.parse::<usize>().ok()) {
+                            // Set before turning the mode on: a screenshot
+                            // leaves the saved progress as it is.
+                            self.mount.step = step.saturating_sub(1);
+                            self.set_mount(true);
+                        } else {
+                            self.selection = self.wiring.as_ref().and_then(|w| find_hit(&w.circuit, &target));
+                            self.update_overlay();
                         }
                     }
                 }
@@ -311,6 +463,633 @@ impl StudioApp {
                     }
                 },
             }
+        }
+    }
+
+    /// Shows a circuit just read, or none, and watches its part files.
+    fn set_circuit(&mut self, found: Option<Arc<c2f_circuit::Circuit>>) {
+        // The parts' files and the enclosure's: an edit to one renders again.
+        let files: Vec<PathBuf> = found
+            .iter()
+            .flat_map(|c| c.parts.iter().map(|p| p.path.clone()).chain(c.enclosure.clone()))
+            .collect();
+        self.watch(files);
+        self.wiring = found.map(Wiring::new);
+        // The boxes are the last render's, of the circuit before: the
+        // render of this one brings its own.
+        self.part_boxes.clear();
+        // A selection outlives an edit when what it names is still there.
+        let valid = |hit: Option<Hit>| match (hit, &self.wiring) {
+            (Some(Hit::Pin(end)), Some(w)) => {
+                w.circuit.parts.get(end.part).is_some_and(|p| end.pin < p.annotations.pins.len())
+            }
+            (Some(Hit::Wire(i)), Some(w)) => i < w.circuit.wires.len(),
+            (Some(Hit::Part(i)), Some(w)) => i < w.circuit.parts.len(),
+            _ => false,
+        };
+        if !valid(self.selection) {
+            self.selection = None;
+        }
+        self.hover = self.hover.filter(|&h| valid(Some(h)));
+        self.update_overlay();
+    }
+
+    /// Watches `files` for changes on disk, besides the open file.
+    fn watch(&mut self, mut files: Vec<PathBuf>) {
+        files.sort();
+        files.dedup();
+        let known = std::mem::take(&mut self.part_files);
+        self.part_files = files
+            .into_iter()
+            .map(|file| {
+                // A file already watched keeps its time, so that a change
+                // made since it was read is not missed.
+                let mtime = known.iter().find(|(f, _)| *f == file).map_or_else(|| modified(&file), |(_, m)| *m);
+                (file, mtime)
+            })
+            .collect();
+    }
+
+    /// How the wires, pins and parts show: what a selection picks out
+    /// stands out, the rest is greyed out.
+    fn look(&self) -> Look {
+        if let Some(look) = self.mount_look() {
+            return look;
+        }
+        if let (Some(wiring), Some(rewire)) = (&self.wiring, &self.rewire) {
+            // The wire being moved fades; the pins at stake stand out.
+            let wires = (0..wiring.circuit.wires.len())
+                .map(|i| if rewire.grabbed.is_some_and(|(w, _)| w == i) { Emphasis::Dim } else { Emphasis::Normal })
+                .collect();
+            let strong_pins = std::iter::once(rewire.anchor).chain(rewire.target).collect();
+            let error_pins = rewire.target.filter(|_| rewire.error.is_some()).into_iter().collect();
+            return Look { wires, strong_pins, error_pins, ..Look::default() };
+        }
+        let (Some(wiring), Some(selection)) = (&self.wiring, self.selection) else { return Look::default() };
+        let circuit = &wiring.circuit;
+        let pick_out = |on: bool| if on { Emphasis::Strong } else { Emphasis::Dim };
+        let shown = |on: bool| if on { Emphasis::Normal } else { Emphasis::Dim };
+        let (wires, strong_pins, parts): (Vec<Emphasis>, _, Vec<Emphasis>) = match selection {
+            Hit::Pin(end) => {
+                let (pins, wires) = pick::net(circuit, end);
+                let parts = (0..circuit.parts.len()).map(|p| shown(pins.iter().any(|e| e.part == p))).collect();
+                ((0..circuit.wires.len()).map(|i| pick_out(wires.contains(&i))).collect(), pins, parts)
+            }
+            Hit::Wire(index) => {
+                let wire = &circuit.wires[index];
+                let parts = (0..circuit.parts.len()).map(|p| shown(p == wire.from.part || p == wire.to.part)).collect();
+                ((0..circuit.wires.len()).map(|i| pick_out(i == index)).collect(), [wire.from, wire.to].into(), parts)
+            }
+            Hit::Part(part) => {
+                let touches = |i: usize| circuit.wires[i].from.part == part || circuit.wires[i].to.part == part;
+                let pins = circuit.wires.iter().flat_map(|w| [w.from, w.to]).filter(|e| e.part == part).collect();
+                let parts = (0..circuit.parts.len()).map(|p| pick_out(p == part)).collect();
+                ((0..circuit.wires.len()).map(|i| shown(touches(i))).collect(), pins, parts)
+            }
+        };
+        Look { wires, strong_pins, dim_pins: true, pulse: None, parts, error_pins: Default::default() }
+    }
+
+    /// Sends the wires and pins, as they now look, to the view.
+    fn update_overlay(&mut self) {
+        let look = self.look();
+        match &self.wiring {
+            Some(wiring) => {
+                let (wires, pins) = wiring.meshes(&look);
+                self.viewer.set_overlay(wires, pins, wiring.bounds());
+            }
+            None => self.viewer.set_overlay(Default::default(), Default::default(), None),
+        }
+        if look.parts != self.shown_parts {
+            self.viewer.set_part_emphasis(&look.parts);
+            self.shown_parts = look.parts;
+        }
+    }
+
+    // ---- Assembly ----
+
+    /// The wires of the circuit, by name, when there are any and the
+    /// assembly's progress is this circuit's.
+    fn mount_names(&self) -> Option<Vec<String>> {
+        self.mount_wiring().map(|w| w.names.clone())
+    }
+
+    /// The circuit's wiring, when the assembly's progress is its own.
+    fn mount_wiring(&self) -> Option<&Wiring> {
+        self.path.as_deref().filter(|p| self.mount.is_for(p))?;
+        self.wiring.as_ref().filter(|w| !w.names.is_empty())
+    }
+
+    /// The assembly mode's look: the wire on screen picked out, its pins
+    /// pulsing, the wires done as they are, the others greyed out.
+    fn mount_look(&self) -> Option<Look> {
+        if !self.mount.active {
+            return None;
+        }
+        let wiring = self.mount_wiring()?;
+        let names = &wiring.names;
+        let circuit = &wiring.circuit;
+        let step = self.mount.step.min(names.len() - 1);
+        let current = &circuit.wires[step];
+        let wires = (0..names.len())
+            .map(|i| match i {
+                _ if i == step => Emphasis::Strong,
+                _ if self.mount.is_done(names, i) => Emphasis::Normal,
+                _ => Emphasis::Dim,
+            })
+            .collect();
+        let parts = (0..circuit.parts.len())
+            .map(|p| if p == current.from.part || p == current.to.part { Emphasis::Normal } else { Emphasis::Dim })
+            .collect();
+        // Two pulses a second.
+        let time = self.started.elapsed().as_secs_f32();
+        let pulse = 0.5 + 0.5 * (time * std::f32::consts::TAU * 2.0).sin();
+        let strong_pins = [current.from, current.to].into();
+        Some(Look { wires, strong_pins, dim_pins: true, pulse: Some(pulse), parts, error_pins: Default::default() })
+    }
+
+    /// Turns the assembly mode on or off.
+    fn set_mount(&mut self, active: bool) {
+        self.mount.active = active && self.mount_names().is_some();
+        if self.mount.active {
+            self.selection = None;
+            self.go_to_wire(self.mount.step);
+        }
+        self.update_overlay();
+    }
+
+    /// Shows wire `step` of the assembly, the camera turning to its pins.
+    fn go_to_wire(&mut self, step: usize) {
+        let Some(count) = self.mount_names().map(|n| n.len()) else { return };
+        self.mount.go(step, count);
+        self.report_mount_problem();
+        let Some(wiring) = &self.wiring else { return };
+        let wire = &wiring.circuit.wires[self.mount.step];
+        let place = |end| glam::Vec3::from(wiring.circuit.place(end).position.map(|c| c as f32));
+        let goal = mount::framing(place(wire.from), place(wire.to), &self.viewer.camera, self.viewer.aspect());
+        self.viewer.fly_to(goal);
+        self.update_overlay();
+    }
+
+    fn mount_next(&mut self) {
+        if let Some(names) = self.mount_names() {
+            self.mount.next(&names);
+            self.go_to_wire(self.mount.step);
+        }
+    }
+
+    fn mount_previous(&mut self) {
+        if let Some(names) = self.mount_names() {
+            self.mount.previous(names.len());
+            self.go_to_wire(self.mount.step);
+        }
+    }
+
+    fn report_mount_problem(&mut self) {
+        if let Some(problem) = self.mount.problem.take() {
+            self.console.log(Level::Warning, problem);
+        }
+    }
+
+    /// The assembly bar, over the top of the view: the instruction, the
+    /// wire's place in the order, and the buttons that step through.
+    fn mount_bar(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let (Some(wiring), Some(names)) = (&self.wiring, self.mount_names()) else { return };
+        let step = self.mount.step.min(names.len() - 1);
+        let instruction = mount::instruction(&wiring.circuit, step);
+        let label = wiring.circuit.wires[step].label.clone();
+        let mut done = self.mount.is_done(&names, step);
+        let done_count = self.mount.done_count(&names);
+        let (mut previous, mut next, mut restart, mut toggled) = (false, false, false, false);
+        egui::Area::new(Id::new("assembly-bar"))
+            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.top() + 12.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(Color32::from_black_alpha(200))
+                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_max_width(rect.width() - 48.0);
+                        ui.horizontal(|ui| {
+                            toggled = ui.checkbox(&mut done, "").on_hover_text("Done").changed();
+                            ui.label(RichText::new(&instruction).strong().size(14.0).color(wiring::TEXT));
+                            if let Some(label) = &label {
+                                ui.label(RichText::new(format!("· {label}")).size(13.0).color(wiring::TEXT_DIM));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let count = names.len();
+                            ui.label(RichText::new(format!("{} / {count}", step + 1)).strong().color(wiring::TEXT));
+                            ui.label(RichText::new(format!("· {done_count} done")).color(wiring::TEXT_DIM));
+                            ui.add_space(8.0);
+                            previous = ui
+                                .add_enabled(step > 0, Button::new("◀ Previous"))
+                                .on_hover_text("The previous wire (Left arrow)")
+                                .clicked();
+                            next = ui
+                                .button("Next ▶")
+                                .on_hover_text("Check this wire off and go to the next (Right arrow)")
+                                .clicked();
+                            restart = ui
+                                .button("Start over")
+                                .on_hover_text("Uncheck every wire and go back to the first")
+                                .clicked();
+                        });
+                    });
+            });
+        if toggled {
+            self.mount.set_done(&names, step, done);
+            self.report_mount_problem();
+            self.update_overlay();
+        }
+        let typing = ctx.memory(|m| m.focused().is_some());
+        let (left, right) = ctx.input(|i| (i.key_pressed(Key::ArrowLeft), i.key_pressed(Key::ArrowRight)));
+        if next || (right && !typing) {
+            self.mount_next();
+        } else if previous || (left && !typing) {
+            self.mount_previous();
+        } else if restart {
+            self.mount.restart();
+            self.report_mount_problem();
+            self.go_to_wire(0);
+        }
+    }
+
+    /// Selects something of the circuit, or nothing; a wire also puts the
+    /// editor on its line.
+    fn select(&mut self, ctx: &egui::Context, hit: Option<Hit>) {
+        if hit == self.selection {
+            return;
+        }
+        self.selection = hit;
+        if let (Some(Hit::Wire(index)), Some(wiring)) = (hit, &self.wiring) {
+            let offset = wiring.circuit.wires[index].span.start as usize;
+            self.editor.go_to(ctx, &self.text, offset);
+        }
+        self.update_overlay();
+    }
+
+    // ---- Catalogue ----
+
+    fn catalogue_panel(&mut self, ctx: &egui::Context) {
+        if !self.is_circuit() || !self.catalogue_open {
+            return;
+        }
+        let width = ctx.screen_rect().width();
+        let action = egui::SidePanel::right("catalogue")
+            .frame(customizer::frame())
+            .resizable(true)
+            .default_width(300.0)
+            .width_range(240.0..=(width * 0.4).max(260.0))
+            .show(ctx, |ui| self.catalogue.show(ui))
+            .inner;
+        match action {
+            Some(catalogue::Action::Add(entry)) => {
+                let at = catalogue::free_spot(&self.part_boxes);
+                self.add_part(ctx, &entry, at);
+            }
+            Some(catalogue::Action::Created(path)) => {
+                self.console.log(Level::Info, format!("Made the part {}", path.display()));
+                self.guard(Pending::OpenPath(path));
+            }
+            None => {}
+        }
+    }
+
+    /// Writes a `[parts.NAME]` table for `entry` at `at` into the circuit,
+    /// as one step of the editor's undo history, and renders it.
+    fn add_part(&mut self, ctx: &egui::Context, entry: &catalogue::Entry, at: [f64; 2]) {
+        if !self.is_circuit() {
+            return;
+        }
+        let name = catalogue::part_name(&entry.name, &catalogue::part_names(&self.text));
+        let (text, cursor) = catalogue::insert_part(&self.text, &name, &entry.rel, at);
+        self.editor.replace_text(ctx, &mut self.text, text, cursor);
+        self.console.log(Level::Info, format!("Added the part `{name}` ({})", entry.rel));
+        self.render_now();
+    }
+
+    // ---- Rewiring ----
+
+    /// A press in the view on a pin, or on a wire near one of its ends,
+    /// starts rewiring: before the view handles the press, so that it does
+    /// not turn the camera. Not while assembling.
+    fn start_rewire(&mut self, ctx: &egui::Context) {
+        let (pressed, origin, shift) =
+            ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin(), i.modifiers.shift));
+        let (Some(wiring), Some(origin)) = (&self.wiring, origin.filter(|_| pressed)) else { return };
+        let slider = self.viewer.layer_view && origin.x > self.view_rect.right() - 60.0;
+        // Not through a menu, a popup or the assembly bar.
+        let covered = ctx.layer_id_at(origin).is_some_and(|layer| layer.order != egui::Order::Background);
+        if shift || self.mount.active || !self.view_rect.contains(origin) || slider || covered {
+            return;
+        }
+        let ray = self.viewer.ray(self.view_rect, origin);
+        let grabbed = match part_edit::grab(wiring, &self.part_boxes, &ray) {
+            Some(Grab::Pin(end)) => Some((None, end)),
+            Some(Grab::WireEnd(index, side)) => {
+                let wire = &wiring.circuit.wires[index];
+                Some((Some((index, side)), if side == Side::From { wire.to } else { wire.from }))
+            }
+            Some(Grab::Part(part)) => {
+                // A part moves flat, at its own height.
+                let circuit = wiring.circuit.clone();
+                self.part_drag = part_edit::Drag::start(&circuit, part, &ray).map(|drag| (drag, origin, false, circuit));
+                None
+            }
+            None => None,
+        };
+        if let Some((grabbed, anchor)) = grabbed {
+            self.rewire = Some(Rewire { grabbed, anchor, origin, moved: false, target: None, error: None });
+        }
+    }
+
+    /// Follows a rewiring drag: the pin under the pointer and what a drop
+    /// there would break; on release, the edit. Returns false when the
+    /// press turned out to be a click, for the view to handle.
+    fn follow_rewire(&mut self, ctx: &egui::Context, response: &egui::Response) -> bool {
+        let (Some(wiring), Some(rewire)) = (&self.wiring, &mut self.rewire) else {
+            self.rewire = None;
+            return false;
+        };
+        let (pointer, released) = ctx.input(|i| (i.pointer.interact_pos(), i.pointer.primary_released()));
+        let mut changed = false;
+        if let Some(pos) = pointer {
+            rewire.moved |= pos.distance(rewire.origin) > 4.0;
+            let ray = self.viewer.ray(response.rect, pos);
+            let target = match pick::pick(wiring, &[], &ray) {
+                Some(Hit::Pin(end)) if end != rewire.anchor => Some(end),
+                _ => None,
+            };
+            if target != rewire.target {
+                rewire.target = target;
+                rewire.error = rewire.edit().and_then(|edit| rewire::new_error(&wiring.circuit, edit));
+                changed = true;
+            }
+        }
+        if !released {
+            if changed {
+                self.update_overlay();
+            }
+            ctx.request_repaint();
+            return true;
+        }
+        let Some(rewire) = self.rewire.take() else { return false };
+        self.update_overlay();
+        // A press and release in place is a click.
+        if !rewire.moved {
+            return false;
+        }
+        // Back onto the pin it came from: nothing to do.
+        let unchanged = match (&self.wiring, rewire.grabbed) {
+            (Some(wiring), Some((wire, side))) => {
+                let w = &wiring.circuit.wires[wire];
+                rewire.target == Some(if side == Side::From { w.from } else { w.to })
+            }
+            _ => false,
+        };
+        if let Some(edit) = rewire.edit().filter(|_| !unchanged) {
+            self.apply_rewire(ctx, edit);
+        }
+        true
+    }
+
+    /// The rubber band from the pin kept to the pointer, and what a drop
+    /// does, in red when it would break a check.
+    fn paint_rewire(&self, painter: &egui::Painter, rect: egui::Rect, pointer: Option<egui::Pos2>) {
+        let (Some(wiring), Some(rewire)) = (&self.wiring, &self.rewire) else { return };
+        if !rewire.moved {
+            return;
+        }
+        let circuit = &wiring.circuit;
+        let place = |end: End| glam::Vec3::from(circuit.place(end).position.map(|c| c as f32));
+        // Without a pointer (a scripted screenshot), at the pin targeted.
+        let held = rewire.target.and_then(|t| self.viewer.to_screen(rect, place(t)));
+        let Some(pointer) = pointer.or(held) else { return };
+        let color = if rewire.error.is_some() { theme::ERROR } else { theme::ACCENT_STRONG };
+        if let Some(anchor) = self.viewer.to_screen(rect, place(rewire.anchor)) {
+            let to = rewire.target.and_then(|t| self.viewer.to_screen(rect, place(t))).unwrap_or(pointer);
+            painter.line_segment([anchor, to], Stroke::new(2.0, color));
+        }
+        let text = match (&rewire.error, rewire.grabbed, rewire.target) {
+            (Some(error), _, _) => format!("{error} (drop anyway to wire it)"),
+            (None, Some(_), Some(to)) => format!("Move this end to {}", circuit.end_name(to)),
+            (None, Some(_), None) => "Drop away from a pin to remove this wire".to_string(),
+            (None, None, Some(to)) => {
+                format!("New wire: {} ➡ {}", circuit.end_name(rewire.anchor), circuit.end_name(to))
+            }
+            (None, None, None) => "Drop on a pin to wire it".to_string(),
+        };
+        let color = if rewire.error.is_some() { theme::ERROR } else { wiring::TEXT };
+        inspect::paint_bubble_in(painter, rect, pointer, &text, color);
+    }
+
+    /// Writes a rewiring into the circuit's text, as one step of the
+    /// editor's undo history, and renders it.
+    fn apply_rewire(&mut self, ctx: &egui::Context, edit: Edit) {
+        let Some(wiring) = &self.wiring else { return };
+        let circuit = &wiring.circuit;
+        let done = match edit {
+            Edit::Move { to, .. } => format!("Moved a wire's end to {}", circuit.end_name(to)),
+            Edit::Add { from, to } => format!("Added a wire: {} ➡ {}", circuit.end_name(from), circuit.end_name(to)),
+            Edit::Remove { wire } => {
+                let w = &circuit.wires[wire];
+                format!("Removed the wire {} ➡ {}", circuit.end_name(w.from), circuit.end_name(w.to))
+            }
+        };
+        let fresh = self.sent_source.as_deref() == Some(self.text.as_str());
+        let result = if fresh {
+            rewire::apply(&self.text, circuit, edit)
+        } else {
+            Err("the code changed since the last render: try again once it is rendered".to_string())
+        };
+        match result {
+            Ok((text, cursor)) => {
+                if matches!(edit, Edit::Remove { .. }) {
+                    self.selection = None;
+                }
+                self.editor.replace_text(ctx, &mut self.text, text, cursor);
+                self.console.log(Level::Info, done);
+                self.render_now();
+            }
+            Err(why) => self.console.log(Level::Warning, format!("Cannot rewire: {why}")),
+        }
+    }
+
+    // ---- Moving parts ----
+
+    /// Follows a part's drag: the part and its wires where the pointer
+    /// puts it, R turning it; on release, the edit. Returns false when the
+    /// press turned out to be a click.
+    fn follow_part_drag(&mut self, ctx: &egui::Context, response: &egui::Response) -> bool {
+        let Some((drag, origin, moved, original)) = &mut self.part_drag else { return false };
+        let (pointer, released, fine, turn) = ctx.input(|i| {
+            (i.pointer.interact_pos(), i.pointer.primary_released(), i.modifiers.shift, i.key_pressed(Key::R))
+        });
+        if turn {
+            drag.turns += 1;
+        }
+        let mut changed = false;
+        if let Some(pos) = pointer {
+            *moved |= pos.distance(*origin) > 4.0;
+            let step = if fine { part_edit::FINE_SNAP } else { part_edit::SNAP };
+            changed = *moved && drag.follow(&self.viewer.ray(response.rect, pos), step);
+        }
+        if changed {
+            let (drag, original) = (drag.clone(), original.clone());
+            self.preview_part(&drag, &original);
+        }
+        if !released {
+            ctx.request_repaint();
+            return true;
+        }
+        let Some((drag, _, moved, original)) = self.part_drag.take() else { return false };
+        if !moved && drag.turns == 0 {
+            return false;
+        }
+        let at = drag.moved().then_some(drag.at);
+        if !self.place_part(ctx, &original, drag.part, at, drag.turns) {
+            // Back where it was.
+            self.preview_part(&part_edit::Drag { at: drag.from, ..drag }, &original);
+        }
+        true
+    }
+
+    /// Shows a dragged part, and its wires, where the drag has it.
+    fn preview_part(&mut self, drag: &part_edit::Drag, original: &Arc<c2f_circuit::Circuit>) {
+        let delta = std::array::from_fn::<f32, 3, _>(|i| (drag.at[i] - drag.from[i]) as f32);
+        self.viewer.preview_part_move(drag.part, glam::Vec3::from(delta));
+        let mut moved = (**original).clone();
+        moved.parts[drag.part].at = drag.at;
+        self.wiring = Some(Wiring::new(Arc::new(moved)));
+        self.update_overlay();
+    }
+
+    /// Writes part `part`'s new place and turns into the circuit's text, as
+    /// one step of the editor's undo history, and renders it.
+    fn place_part(
+        &mut self,
+        ctx: &egui::Context,
+        circuit: &c2f_circuit::Circuit,
+        part: usize,
+        at: Option<[f64; 3]>,
+        turns: u32,
+    ) -> bool {
+        let Some(instance) = circuit.parts.get(part) else { return false };
+        let fresh = self.sent_source.as_deref() == Some(self.text.as_str());
+        let result = if fresh {
+            part_edit::place(&self.text, instance, at, turns)
+        } else {
+            Err("the code changed since the last render: try again once it is rendered".to_string())
+        };
+        match result {
+            Ok((text, cursor)) => {
+                self.editor.replace_text(ctx, &mut self.text, text, cursor);
+                let mut done = Vec::new();
+                if let Some(at) = at {
+                    done.push(format!("moved `{}` to [{}, {}]", instance.name, at[0], at[1]));
+                }
+                if turns > 0 {
+                    done.push(format!("turned `{}` by {}°", instance.name, 90 * turns));
+                }
+                let done = done.join(", ");
+                let mut chars = done.chars();
+                let done: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
+                self.console.log(Level::Info, done);
+                self.render_now();
+                true
+            }
+            Err(why) => {
+                self.console.log(Level::Warning, format!("Cannot move the part: {why}"));
+                false
+            }
+        }
+    }
+
+    /// Removes part `part` and the wires to it, as one step of the
+    /// editor's undo history.
+    fn remove_part(&mut self, ctx: &egui::Context, part: usize) {
+        let Some(wiring) = &self.wiring else { return };
+        let circuit = wiring.circuit.clone();
+        let fresh = self.sent_source.as_deref() == Some(self.text.as_str());
+        let result = if fresh {
+            part_edit::remove(&self.text, &circuit, part)
+        } else {
+            Err("the code changed since the last render: try again once it is rendered".to_string())
+        };
+        match result {
+            Ok((text, cursor, wires)) => {
+                self.selection = None;
+                self.editor.replace_text(ctx, &mut self.text, text, cursor);
+                let name = &circuit.parts[part].name;
+                let what = match wires {
+                    0 => format!("Removed `{name}`"),
+                    1 => format!("Removed `{name}` and its wire"),
+                    n => format!("Removed `{name}` and its {n} wires"),
+                };
+                self.console.log(Level::Info, what);
+                self.render_now();
+            }
+            Err(why) => self.console.log(Level::Warning, format!("Cannot remove the part: {why}")),
+        }
+    }
+
+    /// Hovering, clicks and Escape over the view of a circuit.
+    fn circuit_input(&mut self, ctx: &egui::Context, response: &egui::Response) {
+        if self.rewire.is_some() && self.follow_rewire(ctx, response) {
+            self.hover = None;
+            return;
+        }
+        if self.part_drag.is_some() && self.follow_part_drag(ctx, response) {
+            self.hover = None;
+            return;
+        }
+        // Delete or Backspace removes the wire or the part selected, and R
+        // turns the part selected.
+        let idle = !self.mount.active && ctx.memory(|m| m.focused().is_none());
+        let (delete, turn) =
+            ctx.input(|i| (i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace), i.key_pressed(Key::R)));
+        if delete && idle {
+            match self.selection {
+                Some(Hit::Wire(wire)) => self.apply_rewire(ctx, Edit::Remove { wire }),
+                Some(Hit::Part(part)) => self.remove_part(ctx, part),
+                _ => {}
+            }
+        }
+        if turn && idle {
+            if let (Some(Hit::Part(part)), Some(wiring)) = (self.selection, &self.wiring) {
+                let circuit = wiring.circuit.clone();
+                self.place_part(ctx, &circuit, part, None, 1);
+            }
+        }
+        let Some(wiring) = &self.wiring else { return };
+        if !response.dragged() {
+            self.hover = response.hover_pos().and_then(|pos| {
+                pick::pick(wiring, &self.part_boxes, &self.viewer.ray(response.rect, pos))
+            });
+        }
+        if response.double_clicked() {
+            if let Some(Hit::Part(index)) = self.hover {
+                let path = wiring.circuit.parts[index].path.clone();
+                self.guard(Pending::OpenPath(path));
+                return;
+            }
+        }
+        if response.clicked() {
+            if self.mount.active {
+                // Assembling, a click on a wire goes to its step.
+                if let Some(Hit::Wire(index)) = self.hover {
+                    self.go_to_wire(index);
+                }
+            } else {
+                self.select(ctx, self.hover);
+            }
+        }
+        let escape = ctx.input(|i| i.key_pressed(Key::Escape)) && ctx.memory(|m| m.focused().is_none());
+        if escape && self.selection.is_some() {
+            self.select(ctx, None);
         }
     }
 
@@ -325,7 +1104,13 @@ impl StudioApp {
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Opened {}", path.display()));
                 self.remember(&path);
-                self.customizer.open(Some(&path));
+                // A circuit has no parameters, nor presets next to it.
+                self.customizer.open(Some(path.as_path()).filter(|p| !circuit::is_circuit(p)));
+                self.mount.open(Some(path.as_path()).filter(|p| circuit::is_circuit(p)));
+                self.report_mount_problem();
+                // Nothing of the file before carries over, even when this
+                // one does not read.
+                self.set_circuit(None);
                 self.path = Some(path);
                 self.frame_next = true;
                 self.editor.error_line = None;
@@ -343,6 +1128,8 @@ impl StudioApp {
         self.frame_next = true;
         self.editor.error_line = None;
         self.customizer.open(None);
+        self.mount.open(None);
+        self.set_circuit(None);
         self.console.log(Level::Info, "New file");
         self.render_now();
     }
@@ -350,7 +1137,7 @@ impl StudioApp {
     fn open_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open a design")
-            .add_filter("Code2Form or SCAD", &["c2f", "scad"])
+            .add_filter("Code2Form, SCAD or circuit", &["c2f", "scad", "c2fc"])
             .add_filter("All files", &["*"]);
         if let Some(dir) = self.directory() {
             dialog = dialog.set_directory(dir);
@@ -394,12 +1181,18 @@ impl StudioApp {
     fn save_as(&mut self) -> bool {
         // Designs are .c2f files; a .scad file keeps its extension by default.
         let scad = self.path.as_deref().and_then(Path::extension).is_some_and(|e| e == "scad");
-        let (first, second) = if scad { (SCAD_FILES, DESIGN_FILES) } else { (DESIGN_FILES, SCAD_FILES) };
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Save as")
-            .add_filter(first.0, &[first.1])
-            .add_filter(second.0, &[second.1])
-            .set_file_name(if self.path.is_some() { self.file_name() } else { "untitled.c2f".to_string() });
+        let filters = if self.is_circuit() {
+            [CIRCUIT_FILES, DESIGN_FILES, SCAD_FILES]
+        } else if scad {
+            [SCAD_FILES, DESIGN_FILES, CIRCUIT_FILES]
+        } else {
+            [DESIGN_FILES, SCAD_FILES, CIRCUIT_FILES]
+        };
+        let mut dialog = rfd::FileDialog::new().set_title("Save as");
+        for (name, extension) in filters {
+            dialog = dialog.add_filter(name, &[extension]);
+        }
+        dialog = dialog.set_file_name(if self.path.is_some() { self.file_name() } else { "untitled.c2f".to_string() });
         if let Some(dir) = self.directory() {
             dialog = dialog.set_directory(dir);
         }
@@ -417,7 +1210,17 @@ impl StudioApp {
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Saved {}", path.display()));
                 self.remember(&path);
-                self.customizer.moved(&path);
+                if circuit::is_circuit(&path) {
+                    self.customizer.open(None);
+                    if self.path.as_deref() != Some(path.as_path()) {
+                        self.mount.moved(&path);
+                        self.report_mount_problem();
+                    }
+                } else {
+                    self.mount.open(None);
+                    self.customizer.moved(&path);
+                    self.set_circuit(None);
+                }
                 self.path = Some(path);
                 self.render_now();
                 true
@@ -458,7 +1261,8 @@ impl StudioApp {
         }
     }
 
-    /// Reloads the file when it changed on disk and has no unsaved edits.
+    /// Reloads the file when it changed on disk and has no unsaved edits,
+    /// and renders a circuit again when one of its part files changed.
     fn poll_disk(&mut self, ctx: &egui::Context) {
         let Some(path) = self.path.clone() else { return };
         ctx.request_repaint_after(POLL);
@@ -466,6 +1270,20 @@ impl StudioApp {
             return;
         }
         self.last_poll = Instant::now();
+        let mut changed_parts = Vec::new();
+        for (file, mtime) in &mut self.part_files {
+            let now = modified(file);
+            if now != *mtime {
+                *mtime = now;
+                changed_parts.push(file.clone());
+            }
+        }
+        if !changed_parts.is_empty() {
+            for file in &changed_parts {
+                self.console.log(Level::Info, format!("Rendering again: {} changed on disk", file.display()));
+            }
+            self.render_now();
+        }
         let Some(mtime) = modified(&path) else { return };
         if self.disk_mtime == Some(mtime) {
             return;
@@ -543,6 +1361,16 @@ impl StudioApp {
         }
         if previous || next {
             self.editor.find(FindRequest::Step { forward: next });
+        }
+
+        // Cmd+Z in the editor or a text field is theirs. Elsewhere, as after
+        // an edit made in the 3D view, it undoes the file's last edit.
+        if ctx.memory(|m| m.focused().is_none()) {
+            // Shift+Cmd+Z first: Cmd+Z also matches it.
+            let [redo, undo] = ctx.input_mut(|i| [REDO, UNDO].map(|s| i.consume_shortcut(&s)));
+            if (undo || redo) && self.editor.undo_step(ctx, &mut self.text, undo) {
+                self.render_now();
+            }
         }
 
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
@@ -634,10 +1462,25 @@ impl StudioApp {
                         self.settings_open = true;
                     }
                     toolbar_separator(ui);
-                    let mut shown = self.customizer_shown();
-                    let toggle = ui.toggle_value(&mut shown, "Customizer");
-                    if toggle.on_hover_text("Show the parameters the file declares").changed() {
-                        self.customizer_open = Some(shown);
+                    if self.is_circuit() {
+                        let button = egui::Button::selectable(self.mount.active, "Assembly");
+                        let toggle = ui.add_enabled(self.mount_names().is_some(), button);
+                        let hint = "Wire the circuit one wire at a time, in the file's order";
+                        if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
+                            self.set_mount(!self.mount.active);
+                        }
+                        toolbar_separator(ui);
+                    }
+                    // A circuit has no parameters: room for its own toggles.
+                    if self.is_circuit() {
+                        let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
+                        toggle.on_hover_text("The parts of the library and your own, to add to the circuit");
+                    } else {
+                        let mut shown = self.customizer_shown();
+                        let toggle = ui.toggle_value(&mut shown, "Customizer");
+                        if toggle.on_hover_text("Show the parameters the file declares").changed() {
+                            self.customizer_open = Some(shown);
+                        }
                     }
                     toolbar_separator(ui);
                     ui.toggle_value(&mut self.viewer.show_grid, "Grid").on_hover_text("Show the XY grid");
@@ -656,6 +1499,19 @@ impl StudioApp {
                                 ui.close();
                             }
                         }
+                        ui.separator();
+                        ui.checkbox(&mut self.viewer.turntable, "Turntable")
+                            .on_hover_text("Turn the view around the model (a drag in the view stops it)");
+                        // A circuit's enclosure: a view setting, kept off the
+                        // toolbar, which a circuit fills.
+                        if self.is_circuit() && self.viewer.has_enclosure() {
+                            ui.separator();
+                            let mut shown = self.viewer.shows_enclosure();
+                            let toggle = ui.checkbox(&mut shown, "Enclosure");
+                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
+                                self.viewer.set_show_enclosure(shown);
+                            }
+                        }
                     });
                     if ui
                         .button("Reset view")
@@ -664,8 +1520,6 @@ impl StudioApp {
                     {
                         self.viewer.reset();
                     }
-                    ui.toggle_value(&mut self.viewer.turntable, "Turntable")
-                        .on_hover_text("Turn the view around the model (a drag in the view stops it)");
                 });
             });
         });
@@ -729,7 +1583,10 @@ impl StudioApp {
                 if let Some(model) = &self.model {
                     if !model.empty {
                         let s = model.stats;
-                        if model.is_2d {
+                        if model.parts > 0 {
+                            ui.label(small(format!("· {} part{}", model.parts, plural(model.parts))));
+                            ui.label(small(format!("· {} triangles", group_digits(s.triangles))));
+                        } else if model.is_2d {
                             ui.label(small(format!("· 2D · {} vertices", group_digits(s.vertices))));
                             ui.label(small(format!("· area {}", format_quantity(s.volume))));
                         } else {
@@ -871,6 +1728,7 @@ impl StudioApp {
     }
 
     fn view_panel(&mut self, ctx: &egui::Context) {
+        let mut remove_part = None;
         egui::CentralPanel::default().frame(Frame::new().fill(theme::BG)).show(ctx, |ui| {
             let has_model = self.model.as_ref().is_some_and(|m| !m.empty);
             let status = viewer::Status {
@@ -878,10 +1736,90 @@ impl StudioApp {
                 failed: self.failed,
                 has_model,
                 is_2d: self.model.as_ref().is_some_and(|m| m.is_2d),
-                empty_hint: viewer::empty_hint(!self.text.trim().is_empty()),
+                empty_hint: if self.is_circuit() {
+                    "The circuit places no parts yet. Add a [parts.name] table with the part's file."
+                } else {
+                    viewer::empty_hint(!self.text.trim().is_empty())
+                },
             };
-            self.viewer.show(ui, &status);
+            // A double-click on a part opens it rather than framing the view.
+            self.viewer.frame_on_double_click = !matches!(self.hover, Some(Hit::Part(_)));
+            self.start_rewire(ctx);
+            self.viewer.orbit_enabled = self.rewire.is_none() && self.part_drag.is_none();
+            let response = self.viewer.show(ui, &status);
+            self.view_rect = response.rect;
+            self.circuit_input(ctx, &response);
+            self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
+            if let (Some((drag, _, true, original)), Some(pointer)) = (&self.part_drag, response.hover_pos()) {
+                let name = &original.parts[drag.part].name;
+                let turned = if drag.turns > 0 { format!(", turned {}°", 90 * drag.turns) } else { String::new() };
+                let text = format!("`{name}` at [{}, {}]{turned} · Shift: 0.1 mm · R: turn", drag.at[0], drag.at[1]);
+                inspect::paint_bubble(&ui.painter_at(response.rect), response.rect, pointer, &text);
+            }
+            // A part dragged from the catalogue lands where it is dropped.
+            if let Some(dragged) = response.dnd_release_payload::<catalogue::Dragged>() {
+                let pointer = ctx.input(|i| i.pointer.interact_pos());
+                let at = pointer.and_then(|pos| catalogue::on_ground(&self.viewer.ray(response.rect, pos)));
+                let at = at.unwrap_or_else(|| catalogue::free_spot(&self.part_boxes));
+                self.add_part(ctx, &dragged.0, at);
+            }
+            if let Some(wiring) = &self.wiring {
+                let painter = ui.painter_at(response.rect);
+                let right = if self.viewer.layer_view { 70.0 } else { 12.0 };
+                // Below the assembly bar, when it is shown.
+                let top = if self.mount.active { 110.0 } else { 12.0 };
+                let legend = wiring::paint_legend(&painter, response.rect, right, top, &wiring.legend());
+                let lengths = inspect::Lengths { routed: &wiring.lengths, margin: self.wire_margin.mm };
+                if let Some(selection) = self.selection.filter(|_| !self.mount.active) {
+                    let (title, lines) = inspect::card(&wiring.circuit, selection, &self.text, lengths);
+                    let card = inspect::paint_card(&painter, response.rect, &title, &lines);
+                    if let Hit::Part(part) = selection {
+                        let button = egui::Rect::from_min_size(card.left_bottom() + Vec2::new(0.0, 6.0), Vec2::new(150.0, 22.0));
+                        let remove = ui.put(button, Button::new("Remove with its wires"));
+                        if remove.on_hover_text("Remove the part and every wire to it (Delete)").clicked() {
+                            remove_part = Some(part);
+                        }
+                    }
+                }
+                if let (Some(hover), Some(pos)) = (self.hover, response.hover_pos()) {
+                    if !response.dragged() {
+                        let text = inspect::bubble(&wiring.circuit, hover, lengths);
+                        inspect::paint_bubble(&painter, response.rect, pos, &text);
+                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                }
+                // The margin added to each wire's length, under the legend.
+                if !wiring.circuit.wires.is_empty() {
+                    let field = egui::Rect::from_min_size(
+                        legend.left_bottom() + Vec2::new(0.0, 6.0),
+                        Vec2::new(legend.width().max(190.0), 22.0),
+                    );
+                    let mut mm = self.wire_margin.mm;
+                    let value = egui::DragValue::new(&mut mm)
+                        .range(0.0..=500.0)
+                        .speed(0.5)
+                        .max_decimals(1)
+                        .prefix("Wire margin: ")
+                        .suffix(" mm");
+                    let hint = "Added to each wire's routed length, for its stripped ends and some slack";
+                    if ui.put(field, value).on_hover_text(hint).changed() {
+                        self.wire_margin.mm = mm;
+                        if let Err(err) = self.wire_margin.save() {
+                            self.console.log(Level::Warning, format!("Cannot save the wire margin: {err}"));
+                        }
+                    }
+                }
+            }
         });
+        if self.mount.active {
+            self.mount_bar(ctx, self.view_rect);
+            // The pins of the wire on screen pulse.
+            self.update_overlay();
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
+        if let Some(part) = remove_part {
+            self.remove_part(ctx, part);
+        }
         if let Some(edit) = self.viewer.take_pause_edit() {
             self.apply_pause_edit(ctx, edit);
         }
@@ -922,6 +1860,7 @@ impl StudioApp {
         self.viewer.layer_height = settings.layer_height;
         theme::set_code_size(ctx, settings.code_size);
         self.worker.set_libraries(settings.library_folders.clone());
+        self.catalogue.set_libraries(settings.library_folders.clone());
         c2f_geom::set_font_folders(settings.font_folders.clone());
     }
 
@@ -1007,6 +1946,7 @@ impl StudioApp {
         if let Some(edit) = libraries {
             if edit_folders(&mut self.settings.library_folders, edit, "Add a library folder") {
                 self.worker.set_libraries(self.settings.library_folders.clone());
+                self.catalogue.set_libraries(self.settings.library_folders.clone());
                 self.render_now();
             }
         }
@@ -1130,6 +2070,7 @@ impl eframe::App for StudioApp {
         self.console_panel(ctx);
         self.editor_panel(ctx);
         self.customizer_panel(ctx);
+        self.catalogue_panel(ctx);
         self.view_panel(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
@@ -1389,6 +2330,35 @@ fn display_folder(dir: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
     }
+}
+
+/// Something of a circuit named as `part.pin`, `part` or `wire:7` (from 1).
+fn find_hit(circuit: &c2f_circuit::Circuit, name: &str) -> Option<Hit> {
+    if let Some(number) = name.strip_prefix("wire:") {
+        let index = number.parse::<usize>().ok()?.checked_sub(1)?;
+        return (index < circuit.wires.len()).then_some(Hit::Wire(index));
+    }
+    let part_named = |n: &str| circuit.parts.iter().position(|p| p.name == n);
+    match name.split_once('.') {
+        Some((part, pin)) => {
+            let part = part_named(part)?;
+            Some(Hit::Pin(c2f_circuit::End { part, pin: circuit.parts[part].pin(pin)? }))
+        }
+        None => part_named(name).map(Hit::Part),
+    }
+}
+
+/// The box around each part of a circuit's scene.
+fn part_boxes(scene: &crate::worker::Scene) -> Vec<Option<(glam::Vec3, glam::Vec3)>> {
+    scene
+        .parts
+        .iter()
+        .map(|range| {
+            let points = &scene.solid.positions[range.clone()];
+            let first = glam::Vec3::from(*points.first()?);
+            Some(points.iter().fold((first, first), |(lo, hi), &p| (lo.min(p.into()), hi.max(p.into()))))
+        })
+        .collect()
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {

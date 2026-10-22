@@ -369,7 +369,7 @@ fn lex_value(text: &str) -> Option<Vec<Token>> {
 }
 
 /// `-?` then a number in .scad syntax: `1`, `1.`, `.5`, `1e3`, `2.5E-2`.
-fn parse_number(word: &str) -> Option<f64> {
+pub(crate) fn parse_number(word: &str) -> Option<f64> {
     let digits = word.strip_prefix('-').unwrap_or(word);
     let (mantissa, exponent) = match digits.find(['e', 'E']) {
         Some(i) => (&digits[..i], Some(&digits[i + 1..])),

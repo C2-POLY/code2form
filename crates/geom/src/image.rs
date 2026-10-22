@@ -38,6 +38,13 @@ impl Rendered {
     /// Parts marked `#` and `%` are drawn translucent, and a 2D model as
     /// the slab the app shows. `None` when there is nothing to draw.
     pub fn png(&self, yaw: f32, pitch: f32, width: usize, height: usize) -> Option<Vec<u8>> {
+        let (width, height) = (width.max(1), height.max(1));
+        Some(encode_png(width, height, &self.rgb(yaw, pitch, width, height)?))
+    }
+
+    /// The same picture as [`Rendered::png`], as RGB bytes, row by row from
+    /// the top: for a window to show without decoding.
+    pub fn rgb(&self, yaw: f32, pitch: f32, width: usize, height: usize) -> Option<Vec<u8>> {
         let meshes = [&self.solid, &self.highlights, &self.backgrounds];
         let (lo, hi) = meshes.iter().filter_map(|m| m.bounds()).reduce(|(lo, hi), (l, h)| {
             ([lo[0].min(l[0]), lo[1].min(l[1]), lo[2].min(l[2])], [hi[0].max(h[0]), hi[1].max(h[1]), hi[2].max(h[2])])
@@ -49,7 +56,7 @@ impl Rendered {
         canvas.outline();
         canvas.draw(&camera, &self.highlights);
         canvas.draw(&camera, &self.backgrounds);
-        Some(encode_png(width, height, &canvas.downsample()))
+        Some(canvas.downsample())
     }
 }
 
