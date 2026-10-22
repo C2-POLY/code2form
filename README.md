@@ -45,6 +45,13 @@ they are. Written in Rust, it renders as you type.
   app writes the change into the code, as one step to undo. A height
   computed in the code moves there, and pauses from a library or an
   included file stay as they are.
+- **Selection** in the 3D view: a click on an object lights it up and
+  puts the editor on the line of the statement that made it, and the
+  editor's cursor lights up the geometry of the statement it is in. A
+  module written in the file is one object, which a double-click goes
+  inside; Shift-click adds to the selection, Alt-click reaches the shape
+  a `difference()` subtracts (shown see-through), and Escape clears it.
+  Shapes from a library or an included file are read-only.
 - **Electronics**: a part declares its pins, mount holes and ports in
   comments (`// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`), which
   the reference implementation ignores. A `.c2fc` circuit file (TOML)

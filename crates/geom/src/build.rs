@@ -1,6 +1,7 @@
 //! From CSG nodes to geometry. Solids are Manifold meshes whose vertices
-//! carry their color (four extra properties), so colors survive booleans;
-//! 2D shapes are Manifold cross-sections.
+//! carry their color (four extra properties) and the origin of the node
+//! that made them (a fifth), so both survive booleans; 2D shapes are
+//! Manifold cross-sections.
 
 use std::path::{Path, PathBuf};
 
@@ -24,8 +25,12 @@ const CUT_COLOR: [f32; 4] = [0.616, 0.796, 0.318, 1.0];
 #[allow(clippy::approx_constant)]
 const HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.318, 0.318, 0.5];
 const BACKGROUND_COLOR: [f32; 4] = [0.706, 0.706, 0.706, 0.3];
-/// Extra vertex properties: the color.
+/// Extra vertex properties: the color, then the origin.
 const COLOR_PROPS: usize = 4;
+const EXTRA_PROPS: usize = COLOR_PROPS + 1;
+/// Where the origin is among a vertex's properties: one more than the
+/// node's [`Node::origin`], 0 when it has none.
+const ORIGIN_PROP: usize = 3 + COLOR_PROPS;
 
 /// The geometry of a whole program, or of one node.
 #[derive(Clone, Default)]
@@ -59,7 +64,7 @@ pub fn render(nodes: &[Node]) -> Rendered {
 /// Absolute names are read as they are.
 pub fn render_in(nodes: &[Node], base_dir: &Path) -> Rendered {
     let mut builder = Builder { base_dir: base_dir.to_path_buf(), ..Builder::default() };
-    let ctx = Ctx { color: None, cut: false };
+    let ctx = Ctx { color: None, cut: false, origin: 0 };
     let parts: Vec<Model> = nodes.iter().map(|n| builder.node(n, ctx)).collect();
     let model = builder.union(parts);
     let is_2d = matches!(model, Model::Flat(_));
@@ -77,7 +82,21 @@ pub fn render_in(nodes: &[Node], base_dir: &Path) -> Rendered {
     for part in &builder.backgrounds {
         backgrounds.append(display(part, Some(BACKGROUND_COLOR)));
     }
-    Rendered { solid, highlights, backgrounds, is_2d, stats, warnings: builder.warnings, model, pauses: Vec::new() }
+    let mut cutters = RenderMesh::default();
+    for part in &builder.cutters {
+        cutters.append(display(part, Some(BACKGROUND_COLOR)));
+    }
+    Rendered {
+        solid,
+        highlights,
+        backgrounds,
+        cutters,
+        is_2d,
+        stats,
+        warnings: builder.warnings,
+        model,
+        pauses: Vec::new(),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -88,6 +107,9 @@ struct Ctx {
     color: Option<[f32; 4]>,
     /// Inside the subtracted children of a `difference`.
     cut: bool,
+    /// The innermost node with an origin around this one, as
+    /// [`ORIGIN_PROP`] stores it.
+    origin: u32,
 }
 
 /// Whether neither `node` nor any node under it is marked `#` or `%`.
@@ -99,6 +121,12 @@ impl Ctx {
     fn paint(&self) -> [f32; 4] {
         self.color.unwrap_or(if self.cut { CUT_COLOR } else { DEFAULT_COLOR })
     }
+
+    /// The extra properties of a vertex made here: its color and origin.
+    fn props(&self) -> [f64; EXTRA_PROPS] {
+        let [r, g, b, a] = self.paint().map(f64::from);
+        [r, g, b, a, f64::from(self.origin)]
+    }
 }
 
 #[derive(Default)]
@@ -106,6 +134,9 @@ struct Builder {
     warnings: Vec<String>,
     highlights: Vec<Model>,
     backgrounds: Vec<Model>,
+    /// The subtracted children of every `difference`, which a viewer can
+    /// show and pick although they are not part of the model.
+    cutters: Vec<Model>,
     /// Where data files named by relative paths are.
     base_dir: PathBuf,
     /// The `projection()`s built so far: a design that outlines the same
@@ -124,6 +155,10 @@ impl Builder {
     }
 
     fn node(&mut self, node: &Node, ctx: Ctx) -> Model {
+        let ctx = match node.origin {
+            Some(origin) => Ctx { origin: origin.saturating_add(1), ..ctx },
+            None => ctx,
+        };
         let model = self.node_inner(node, ctx);
         if node.background {
             // Shown, but not part of the model.
@@ -239,7 +274,7 @@ impl Builder {
                 let mesh = primitives::linear_extrude(&contours, &cap, *height, *center, *twist, divisions, *scale);
                 match mesh {
                     Some(mesh) => {
-                        let mesh = mesh_gl(&mesh, ctx.paint());
+                        let mesh = mesh_gl(&mesh, ctx.props());
                         let strict = Manifold::from_mesh_gl64(&mesh);
                         // A top scaled to a point leaves degenerate faces.
                         Model::Solid(if strict.is_empty() { Manifold::from_mesh_gl64_robust(&mesh) } else { strict })
@@ -381,6 +416,7 @@ impl Builder {
         let Some(first) = children.next() else { return Model::Empty };
         let base = self.node(first, ctx);
         let cutters: Vec<Model> = children.map(|c| self.node(c, Ctx { cut: true, ..ctx })).collect();
+        self.cutters.extend(cutters.iter().filter(|c| matches!(c, Model::Solid(_))).cloned());
         let mut parts = vec![base];
         parts.extend(cutters);
         let mut parts = self.same_dimension(parts).into_iter();
@@ -460,7 +496,7 @@ impl Builder {
                 t.swap(1, 2);
             }
         }
-        let mesh = mesh_gl(&TriMesh { positions, triangles }, ctx.paint());
+        let mesh = mesh_gl(&TriMesh { positions, triangles }, ctx.props());
         let manifold = Manifold::from_mesh_gl64_robust(&mesh);
         if manifold.is_empty() {
             self.warn("polyhedron() is not a closed solid");
@@ -508,7 +544,7 @@ impl Builder {
     fn meshes(&mut self, meshes: Vec<TriMesh>, ctx: Ctx, what: &str) -> Model {
         let mut solids = Vec::new();
         for mesh in &meshes {
-            let mesh = mesh_gl(mesh, ctx.paint());
+            let mesh = mesh_gl(mesh, ctx.props());
             let strict = Manifold::from_mesh_gl64(&mesh);
             let solid = if strict.is_empty() { Manifold::from_mesh_gl64_robust(&mesh) } else { strict };
             if solid.is_empty() {
@@ -560,12 +596,12 @@ fn combine(parts: Vec<Model>, op: OpType) -> Model {
     }
 }
 
-/// A mesh with every vertex painted `color`.
-fn mesh_gl(mesh: &TriMesh, color: [f32; 4]) -> MeshGL64 {
-    let mut mesh_gl = MeshGL64 { num_prop: 3 + COLOR_PROPS as u64, ..Default::default() };
+/// A mesh whose every vertex carries `props`: a color and an origin.
+fn mesh_gl(mesh: &TriMesh, props: [f64; EXTRA_PROPS]) -> MeshGL64 {
+    let mut mesh_gl = MeshGL64 { num_prop: (3 + EXTRA_PROPS) as u64, ..Default::default() };
     for p in &mesh.positions {
         mesh_gl.vert_properties.extend(p);
-        mesh_gl.vert_properties.extend(color.map(f64::from));
+        mesh_gl.vert_properties.extend(props);
     }
     mesh_gl.tri_verts = mesh.triangles.iter().flatten().map(|&i| i as u64).collect();
     mesh_gl
@@ -573,19 +609,19 @@ fn mesh_gl(mesh: &TriMesh, color: [f32; 4]) -> MeshGL64 {
 
 fn solid(mesh: Option<TriMesh>, ctx: Ctx) -> Model {
     match mesh {
-        Some(mesh) => Model::Solid(Manifold::from_mesh_gl64(&mesh_gl(&mesh, ctx.paint()))),
+        Some(mesh) => Model::Solid(Manifold::from_mesh_gl64(&mesh_gl(&mesh, ctx.props()))),
         None => Model::Empty,
     }
 }
 
-/// Paints a whole solid one color (for shapes made by extrusion or hull,
-/// which come without colors).
+/// Paints a whole solid one color, with one origin (for shapes made by
+/// extrusion or hull, which come without properties).
 fn colored(m: Manifold, ctx: Ctx) -> Model {
     if m.is_empty() {
         return Model::Empty;
     }
-    let color = ctx.paint().map(f64::from);
-    Model::Solid(m.set_properties(COLOR_PROPS, move |props, _, _| props.copy_from_slice(&color)))
+    let values = ctx.props();
+    Model::Solid(m.set_properties(EXTRA_PROPS, move |props, _, _| props.copy_from_slice(&values)))
 }
 
 fn transform(model: Model, m: &Matrix) -> Model {
@@ -654,7 +690,7 @@ fn display(model: &Model, paint: Option<[f32; 4]>) -> RenderMesh {
         // 2D shapes show as a 1-unit slab, as in the reference's preview.
         Model::Flat(c) => {
             let slab = Manifold::extrude(&c.to_polygons(), 1.0, 0, 0.0, Vec2::new(1.0, 1.0));
-            match colored(slab, Ctx { color: None, cut: false }) {
+            match colored(slab, Ctx { color: None, cut: false, origin: 0 }) {
                 Model::Solid(m) => m,
                 _ => return RenderMesh::default(),
             }
@@ -675,7 +711,13 @@ fn display(model: &Model, paint: Option<[f32; 4]>) -> RenderMesh {
             ([p[0] as f32, p[1] as f32, p[2] as f32], color)
         };
         let [(a, ca), (b, cb), (c, cc)] = [corner(tri[0]), corner(tri[1]), corner(tri[2])];
-        out.push_triangle([a, b, c], [ca, cb, cc]);
+        // Constant over each source mesh, so any corner tells; rounded, as
+        // it went through floating-point interpolation.
+        let origin = match stride > ORIGIN_PROP {
+            true => mesh.vert_properties[tri[0] as usize * stride + ORIGIN_PROP].round().max(0.0) as u32,
+            false => 0,
+        };
+        out.push_triangle_from([a, b, c], [ca, cb, cc], origin.checked_sub(1));
     }
     out
 }

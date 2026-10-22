@@ -6,7 +6,8 @@
 //! `assembly:7` shows the assembly mode at its seventh wire; and
 //! `rewire:xiao.5V>mic.VDD`, a new wire dragged from one pin to another;
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
-//! `mic` mid-drag at x 40, y 10.
+//! `mic` mid-drag at x 40, y 10. In a design, `code:cylinder(h = 7`
+//! selects the statement holding the first match of that text.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

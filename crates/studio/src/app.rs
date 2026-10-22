@@ -670,6 +670,12 @@ impl StudioApp {
                         }
                         self.doc.part_boxes = part_boxes(&scene);
                         self.doc.viewer.set_scene(scene, frame);
+                        // A screenshot of a design's selection, as `code:cube(` asks.
+                        let target = self.screenshot.as_ref().and_then(|s| s.select.clone()).filter(|_| shown);
+                        if let Some(offset) = target.and_then(|t| self.doc.text.find(t.strip_prefix("code:")?)) {
+                            self.doc.viewer.select_at(offset);
+                            self.doc.viewer.take_picked();
+                        }
                         // The new solid comes in its own colors.
                         self.update_overlay();
                         // A part still being dragged stays where the drag has it.
@@ -1363,6 +1369,26 @@ impl StudioApp {
         if escape && self.doc.selection.is_some() {
             self.select(ctx, None);
         }
+    }
+
+    /// Links the objects selected in a design's view and the code: a click
+    /// puts the editor on the statement's line, and the editor's cursor
+    /// lights up the statement it is in. Both only while the code is the
+    /// one on screen, whose bytes the statements point into.
+    fn design_selection(&mut self, ctx: &egui::Context) {
+        let current = self.doc.viewer.scene_source() == self.doc.text;
+        if let Some(key) = self.doc.viewer.take_picked() {
+            match key.range() {
+                Some(range) if current => self.doc.editor.go_to(ctx, &self.doc.text, range.start),
+                Some(_) => {}
+                None => {
+                    let message = "This shape comes from a library or an included file: it is read-only here";
+                    self.doc.console.log(Level::Info, message);
+                }
+            }
+        }
+        let offset = self.doc.editor.focused_offset.filter(|_| current);
+        self.doc.viewer.set_cursor(offset);
     }
 
     // ---- Files ----
@@ -2075,6 +2101,7 @@ impl StudioApp {
             let response = self.doc.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
+            self.design_selection(ctx);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
             if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
                 let name = &original.parts[drag.part].name;

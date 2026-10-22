@@ -130,6 +130,8 @@ pub struct Renderer {
     solid: Option<GpuBuffer>,
     highlights: Option<GpuBuffer>,
     backgrounds: Option<GpuBuffer>,
+    /// The objects selected or hovered in a design, drawn over the model.
+    selection: Option<GpuBuffer>,
     pause_planes: Option<GpuBuffer>,
     pause_outlines: Option<GpuBuffer>,
     /// A circuit's wires and pins, drawn over its parts.
@@ -142,6 +144,7 @@ pub struct Renderer {
     pending_scene: Option<Scene>,
     pending_grid: Option<Grid>,
     pending_overlay: Option<(RenderMesh, RenderMesh)>,
+    pending_selection: Option<RenderMesh>,
     /// The solid as uploaded, to upload again in other colors.
     solid_mesh: RenderMesh,
     pending_colors: Option<Vec<[f32; 4]>>,
@@ -202,6 +205,7 @@ impl Renderer {
                 solid: None,
                 highlights: None,
                 backgrounds: None,
+                selection: None,
                 pause_planes: None,
                 pause_outlines: None,
                 wires: None,
@@ -212,6 +216,7 @@ impl Renderer {
                 pending_scene: None,
                 pending_grid: None,
                 pending_overlay: None,
+                pending_selection: None,
                 solid_mesh: RenderMesh::default(),
                 pending_colors: None,
                 pending_positions: None,
@@ -234,6 +239,11 @@ impl Renderer {
     /// a circuit moves before it renders again.
     pub fn set_solid_positions(&mut self, positions: Vec<[f32; 3]>) {
         self.pending_positions = Some(positions);
+    }
+
+    /// Replaces the highlight of the selected objects on the next paint.
+    pub fn set_selection(&mut self, mesh: RenderMesh) {
+        self.pending_selection = Some(mesh);
     }
 
     /// Replaces a circuit's wires and pin dots on the next paint.
@@ -289,6 +299,14 @@ impl Renderer {
                     delete(gl, buffer);
                 }
                 self.solid = upload_mesh(gl, &self.solid_mesh);
+            }
+        }
+        if let Some(mesh) = self.pending_selection.take() {
+            unsafe {
+                if let Some(buffer) = self.selection.take() {
+                    delete(gl, buffer);
+                }
+                self.selection = upload_mesh(gl, &mesh);
             }
         }
         if let Some((wires, pins)) = self.pending_overlay.take() {
@@ -388,6 +406,11 @@ impl Renderer {
                 if let Some(highlights) = &self.highlights {
                     self.draw_mesh(gl, frame, highlights, Pass::All, false);
                 }
+                if let Some(selection) = &self.selection {
+                    gl.polygon_offset(-2.0, -8.0);
+                    self.draw_mesh(gl, frame, selection, Pass::All, false);
+                    gl.polygon_offset(-1.0, -4.0);
+                }
                 gl.disable(glow::POLYGON_OFFSET_FILL);
                 if frame.show_pauses {
                     if let Some(planes) = &self.pause_planes {
@@ -442,6 +465,7 @@ impl Renderer {
                 self.solid.take(),
                 self.highlights.take(),
                 self.backgrounds.take(),
+                self.selection.take(),
                 self.pause_planes.take(),
                 self.pause_outlines.take(),
                 self.wires.take(),

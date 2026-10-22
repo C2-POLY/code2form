@@ -23,6 +23,7 @@ mod recent;
 mod renderer;
 mod rewire;
 mod screenshot;
+mod select;
 mod settings;
 mod tabs;
 mod theme;
