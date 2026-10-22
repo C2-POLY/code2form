@@ -269,7 +269,10 @@ pub fn from_code(src: &str, module_name: &str) -> Result<Sketch, SketchError> {
     let file = c2f_lang::parse(src).map_err(|d| SketchError(format!("the code does not parse: {}", d.message)))?;
     let stmt = module_stmt(&file, module_name).ok_or_else(|| SketchError(format!("no module `{module_name}`")))?;
     let mut sketch = read_block(tagged_lines(&src[stmt.span.range()]))?;
-    for (name, value) in variables(&file) {
+    // A value that is not a finite number would make every dimension
+    // bound to it fail its check, and the sketch unreadable once written
+    // back: the sketch keeps its own value then.
+    for (name, value) in variables(&file).into_iter().filter(|(_, v)| v.is_finite()) {
         sketch.set_variable(&name, value);
     }
     Ok(sketch)

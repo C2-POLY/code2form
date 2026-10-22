@@ -321,7 +321,8 @@ impl Sketch {
             Constraint::PointOnLine(p, e) | Constraint::Midpoint(p, e) => {
                 point(p) && line(e) && !self.entity_points(*e).contains(p)
             }
-            Constraint::PointOnCircle(p, e) => point(p) && round(e),
+            // On its own center, a circle could only shrink to nothing.
+            Constraint::PointOnCircle(p, e) => point(p) && round(e) && self.entity_points(*e)[0] != *p,
         };
         if !ok {
             return bad("its arguments do not fit it");
@@ -355,12 +356,20 @@ impl Kind {
     }
 }
 
-/// Whether `name` can be a variable of the .scad language.
+/// Whether `name` can be a variable of the .scad language: plain ASCII
+/// letters, digits and `_`, not starting with a digit, and read by the
+/// language's own lexer as one identifier. Asking the lexer rather than
+/// listing the keywords here keeps the two from drifting apart: a
+/// dimension named `for` would write `for = 30;`, which does not parse.
 pub fn is_identifier(name: &str) -> bool {
+    use c2f_lang::lexer::{Tok, tokenize};
     let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !matches!(name, "true" | "false" | "undef" | "module" | "function" | "if" | "else" | "let" | "each")
+    let shape = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    shape
+        && tokenize(name).is_ok_and(|tokens| {
+            matches!(tokens.as_slice(), [first, last] if first.tok == Tok::Ident(name.to_string()) && last.tok == Tok::Eof)
+        })
 }
 
 /// A sketch that cannot be used as it is, and why.

@@ -5,8 +5,9 @@
 use std::path::Path;
 
 use c2f_sketch::{
-    Constraint, Dimension, EntityId, ExtrudeMode, Plane, Point, PointId, Sketch, SnapKind, extrude_code, from_code,
-    profile, revolve_code, sketches_in, snap, solve, to_code, update_source,
+    Constraint, Dimension, EntityId, ExtrudeMode, Parameter, Plane, Point, PointId, Sketch, SnapKind, extrude_code,
+    from_code, insert_parameters, is_identifier, profile, revolve_code, sketches_in, snap, solve, to_code,
+    update_source,
 };
 
 /// Renders a design: its area in 2D or volume in 3D, and its bounds.
@@ -331,4 +332,91 @@ fn snapping_prefers_ends_then_centers_then_midpoints() {
     let hit = at(5.0, -0.3, 0.4).unwrap();
     assert_eq!((hit.kind, hit.entity, hit.at), (SnapKind::Midpoint, Some(line), Point::new(5.0, 0.0)));
     assert_eq!(at(2.5, 3.0, 1.0), None);
+}
+
+#[test]
+fn a_partial_revolution_turns_counterclockwise_on_either_side_of_the_axis() {
+    // A rectangle 3 to 5 from an axis along y, on its right then on its
+    // left, turned 90° counterclockwise seen from the axis's end (+y):
+    // +x goes toward -z, -x toward +z. Mirroring the profile to the
+    // axis's right side must not turn the revolution around.
+    for (side, x0, x1, want_lo, want_hi) in
+        [("right", 3.0, 5.0, [0.0, 0.0, -5.0], [5.0, 10.0, 0.0]), ("left", -5.0, -3.0, [-5.0, 0.0, 0.0], [0.0, 10.0, 5.0])]
+    {
+        let mut sketch = Sketch::new(Plane::Xy);
+        let (a, b) = (sketch.add_point(0.0, 0.0), sketch.add_point(0.0, 10.0));
+        let axis = sketch.add_line(a, b);
+        sketch.set_construction(axis, true);
+        sketch.add_rectangle(Point::new(x0, 0.0), Point::new(x1, 10.0));
+        let code = to_code(&sketch, "quarter");
+        let turn = revolve_code(&sketch, "quarter", axis, &Dimension::new(90.0), &ExtrudeMode::Add).unwrap();
+        let (volume, lo, hi) = render(&format!("$fn = 96;\n{code}{}", turn.body));
+        let exact = std::f64::consts::PI * (25.0 - 9.0) * 10.0 / 4.0;
+        assert!(near(volume, exact, 0.01 * exact), "{side}: {volume} {exact}\n{}", turn.body);
+        for (got, want) in lo.iter().chain(&hi).zip(want_lo.iter().chain(&want_hi)) {
+            assert!(near(*got, *want, 0.1), "{side}: bounds {lo:?} {hi:?}\n{}", turn.body);
+        }
+    }
+}
+
+#[test]
+fn parameters_are_not_written_over_computed_variables() {
+    let param = |name: &str, value: f64| Parameter { name: name.into(), value, description: "d".into() };
+    // A plain number takes the new value; an expression is refused.
+    let design = "thickness = 2;\nwall = thickness * 2;\ncube(wall);\n";
+    let written = insert_parameters(design, &[param("thickness", 3.0)]).unwrap();
+    assert!(written.starts_with("thickness = 3;\n"), "{written}");
+    let refused = insert_parameters(design, &[param("wall", 4.0)]).unwrap_err();
+    assert!(refused.0.contains("`wall`"), "{refused}");
+    let negative = "wall = -(2);\ncube(wall);\n";
+    assert!(insert_parameters(negative, &[param("wall", 4.0)]).unwrap().starts_with("wall = 4;"));
+}
+
+#[test]
+fn parameters_go_after_a_comment_ending_on_the_first_statement_line() {
+    let param = Parameter { name: "w".into(), value: 4.0, description: "width".into() };
+    let design = "/* a block\n   comment */ cube(w);\n";
+    let written = insert_parameters(design, &[param.clone()]).unwrap();
+    assert_eq!(written, "/* a block\n   comment */ \n// width\nw = 4; // 0.1\n\ncube(w);\n");
+    assert!(c2f_lang_parses(&written));
+    // A statement alone on its line, indented or not: above the line.
+    let written = insert_parameters("  cube(w);\n", &[param]).unwrap();
+    assert_eq!(written, "// width\nw = 4; // 0.1\n\n  cube(w);\n");
+}
+
+fn c2f_lang_parses(src: &str) -> bool {
+    c2f_eval::Program::load(src, Path::new("t.c2f"), &[]).is_ok()
+}
+
+#[test]
+fn keywords_cannot_name_a_dimension() {
+    for keyword in ["for", "assert", "echo", "let", "each", "if", "module", "true", "undef"] {
+        assert!(!is_identifier(keyword), "{keyword}");
+    }
+    for bad in ["", "2wide", "a b", "$fn", "wall-2", "é"] {
+        assert!(!is_identifier(bad), "{bad:?}");
+    }
+    for good in ["width", "_w2", "for_each", "format"] {
+        assert!(is_identifier(good), "{good}");
+    }
+    // A sketch file naming a dimension `for` is refused, not half read.
+    let mut sketch = Sketch::new(Plane::Xy);
+    let line = sketch.add_polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)], false)[0];
+    let id = sketch.add_constraint(Constraint::Length(line, Dimension::named("for", 10.0)));
+    assert!(sketch.check(id).is_err());
+}
+
+#[test]
+fn a_point_cannot_hold_a_circle_through_its_own_center() {
+    let mut sketch = Sketch::new(Plane::Xy);
+    let center = sketch.add_point(0.0, 0.0);
+    let circle = sketch.add_circle(center, 5.0);
+    let other = sketch.add_point(5.0, 0.0);
+    let on_center = sketch.add_constraint(Constraint::PointOnCircle(center, circle));
+    let on_rim = sketch.add_constraint(Constraint::PointOnCircle(other, circle));
+    assert!(sketch.check(on_center).is_err());
+    assert!(sketch.check(on_rim).is_ok());
+    // The solver skips it: the circle keeps its radius.
+    assert!(solve(&mut sketch).converged());
+    assert!(near(sketch.radius(circle).unwrap(), 5.0, 1e-9));
 }

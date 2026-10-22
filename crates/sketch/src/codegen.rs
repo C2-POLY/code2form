@@ -54,7 +54,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use c2f_lang::ast::StmtKind;
+use c2f_lang::ast::{ExprKind, StmtKind, UnaryOp};
 use c2f_lang::scope::Scope;
 
 use crate::format::{module_stmt, num, write_block};
@@ -414,7 +414,12 @@ pub fn revolve_code(
     let moved = a.x != 0.0 || a.y != 0.0;
     let mirror = if left && !right { "mirror([1, 0, 0]) " } else { "" };
     let (degrees, parameter) = dimension_code(angle, format!("Revolution of sketch {}: angle in degrees", &module[7..]));
-    let sign = if angle.value < 0.0 { "-" } else { "" };
+    // The two mirrors (of the profile before, of the solid after) bring
+    // the profile back where it was but turn the revolution around: a
+    // mirror reverses the sense of rotation. A partial turn then goes the
+    // other way, so the angle is negated to keep it counterclockwise.
+    let mirrored = !mirror.is_empty();
+    let sign = if (angle.value < 0.0) != mirrored { "-" } else { "" };
     // Outside in: back into place after the revolution, and the profile
     // brought onto the axis before it.
     let mut back = placement(&sketch.plane);
@@ -451,10 +456,25 @@ fn combine(solid: String, mode: &ExtrudeMode) -> String {
     }
 }
 
+/// Whether an expression is a plain number: `4`, `-4`, `(4)`.
+fn is_number(kind: &ExprKind) -> bool {
+    match kind {
+        ExprKind::Number(_) => true,
+        ExprKind::Paren(inner) => is_number(&inner.kind),
+        ExprKind::Unary { op: UnaryOp::Neg | UnaryOp::Plus, operand } => is_number(&operand.kind),
+        _ => false,
+    }
+}
+
 /// Writes `parameters` into a design: a top-level assignment of the same
 /// name gets the new value, keeping its comments; the others are added
 /// above the file's first module, function or instance, where the
 /// Customizer still reads them.
+///
+/// An assignment whose value is not a plain number (`wall = thickness *
+/// 2;`) is someone else's variable: writing a number over it would
+/// silently break what it computes, so that is an error, which names the
+/// variable for the user to rename the dimension.
 pub fn insert_parameters(src: &str, parameters: &[Parameter]) -> Result<String, SketchError> {
     let file = c2f_lang::parse(src).map_err(|d| SketchError(format!("the code does not parse: {}", d.message)))?;
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
@@ -462,6 +482,12 @@ pub fn insert_parameters(src: &str, parameters: &[Parameter]) -> Result<String, 
     let mut added = String::new();
     for parameter in parameters {
         match assignments.iter().find(|(_, a)| a.name.name == parameter.name) {
+            Some((_, a)) if !is_number(&a.value.kind) => {
+                return Err(SketchError(format!(
+                    "`{}` is already a variable of the code, computed by an expression: give the dimension another name",
+                    parameter.name
+                )));
+            }
             Some((_, a)) => edits.push((a.value.span.range(), num(parameter.value))),
             None => added.push_str(&parameter.text()),
         }
@@ -470,8 +496,21 @@ pub fn insert_parameters(src: &str, parameters: &[Parameter]) -> Result<String, 
         let first = file.stmts.iter().find(|s| {
             !matches!(s.kind, StmtKind::Assign(_) | StmtKind::Include(_) | StmtKind::Use(_) | StmtKind::Empty)
         });
+        // At the start of the statement's line when only blanks come
+        // before it there; otherwise at the statement itself, after a line
+        // break: the line may start inside a `/* */` comment closing just
+        // before the statement.
         let at = match first {
-            Some(stmt) => src[..stmt.span.start as usize].rfind('\n').map_or(0, |i| i + 1),
+            Some(stmt) => {
+                let start = stmt.span.start as usize;
+                let line = src[..start].rfind('\n').map_or(0, |i| i + 1);
+                if src[line..start].trim().is_empty() {
+                    line
+                } else {
+                    added.insert(0, '\n');
+                    start
+                }
+            }
             None => src.len(),
         };
         if at == src.len() && !src.is_empty() && !src.ends_with('\n') {

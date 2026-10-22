@@ -640,7 +640,10 @@ pub fn constraints_for(rule: Rule, sketch: &Sketch, selection: &[Item]) -> Resul
             (&[p], &[e]) if is_line(sketch, e) && !sketch.entity_points(e).contains(&p) => {
                 vec![Constraint::PointOnLine(p, e)]
             }
-            (&[p], &[e]) if !is_line(sketch, e) => vec![Constraint::PointOnCircle(p, e)],
+            // Not its own center: the radius would shrink to nothing.
+            (&[p], &[e]) if !is_line(sketch, e) && sketch.entity_points(e)[0] != p => {
+                vec![Constraint::PointOnCircle(p, e)]
+            }
             _ => return Err(rule.help()),
         },
         Rule::Tangent if points.is_empty() && entities.len() == 2 && !rounds.is_empty() => match lines.as_slice() {
@@ -703,6 +706,24 @@ pub fn angle_between(sketch: &Sketch, a: EntityId, b: EntityId) -> f64 {
 /// A measured value as a dimension starts: to a hundredth.
 fn round(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
+}
+
+/// The points dragging `item` moves: a point, or an entity's points, but
+/// not those a [`Constraint::Fixed`] holds. The constraint keeps no
+/// position, only "where it is when the solver starts", so a fixed point
+/// dragged would be fixed again wherever the pointer left it.
+pub fn drag_points(sketch: &Sketch, item: Item) -> Vec<PointId> {
+    let points = match item {
+        Item::Point(p) if p.0 < sketch.points.len() => vec![p],
+        Item::Entity(e) if e.0 < sketch.entities.len() => sketch.entity_points(e),
+        _ => Vec::new(),
+    };
+    let fixed: Vec<PointId> = sketch
+        .constraints
+        .iter()
+        .filter_map(|c| if let Constraint::Fixed(p) = c { Some(*p) } else { None })
+        .collect();
+    points.into_iter().filter(|p| !fixed.contains(p)).collect()
 }
 
 // ---- removing ----
@@ -843,6 +864,24 @@ pub fn sketch_called(statement: &str) -> Option<String> {
     None
 }
 
+/// Whether the design `src` already has a module that writing the sketch
+/// module `module` would replace: `module` itself, or `sketch_<module>`,
+/// which `c2f_sketch::update_source` also takes for it. Any module, not
+/// only the ones holding a sketch: a hand-written `module sketch_logo()`
+/// must not be overwritten by a new sketch named `logo`.
+pub fn module_taken(src: &str, module: &str) -> bool {
+    use c2f_lang::ast::{Stmt, StmtKind};
+    fn walk(stmts: &[Stmt], names: &[&str]) -> bool {
+        stmts.iter().any(|stmt| match &stmt.kind {
+            StmtKind::Module(m) => names.contains(&m.name.name.as_str()),
+            StmtKind::Block(inner) => walk(inner, names),
+            _ => false,
+        })
+    }
+    let Ok(file) = c2f_lang::parse(src) else { return false };
+    walk(&file.stmts, &[module, &format!("sketch_{module}")])
+}
+
 /// The text, cursor (a char index) and selection of an edit, as
 /// `StudioApp::apply_code_edits` takes them.
 pub type Written = (String, usize, Vec<Range<usize>>);
@@ -875,9 +914,27 @@ pub fn write(src: &str, sketch: &Sketch, name: &str, feature: Option<Feature>) -
         None => (src.to_string(), None),
     };
     let failed = |e: c2f_sketch::SketchError| format!("Cannot write the sketch: {e}");
+    // A height or angle bound to one of the sketch's own variables would
+    // overwrite that dimension's value with its own.
+    if let Some(Feature { code, .. }) = &feature {
+        let variables = sketch.variables();
+        if let Some(clash) = code.parameters.iter().find(|p| variables.iter().any(|(name, _)| *name == p.name)) {
+            return Err(format!(
+                "Cannot write the sketch: `{}` already names a dimension of the sketch; give the {} another name",
+                clash.name,
+                if code.body.contains("rotate_extrude") { "angle" } else { "height" }
+            ));
+        }
+    }
     let mut new = update_source(&text, sketch, name).map_err(failed)?;
     if let Some(Feature { code, .. }) = &feature {
         new = insert_parameters(&new, &code.parameters).map_err(failed)?;
+    }
+    // The last word: whatever went wrong above (a name the language reads
+    // otherwise, an edit landing in a comment), a text that does not parse
+    // is not written over the design.
+    if let Err(d) = c2f_lang::parse(&new) {
+        return Err(format!("Cannot write the sketch: the code it makes does not parse ({})", d.message));
     }
     let selection = match selected {
         Some(range) => vec![follow(&text, range, &new).ok_or("Cannot find the new statement in the code.")?],
@@ -1108,6 +1165,67 @@ mod tests {
         let fewer = remove(&sketch, &[Item::Point(PointId(0)), Item::Point(c)]);
         assert_eq!((fewer.entities.len(), fewer.points.len()), (2, 3));
         assert!(solve(&mut fewer.clone()).converged());
+    }
+
+    #[test]
+    fn a_point_is_not_put_on_the_circle_it_centers() {
+        let mut sketch = Sketch::new(Plane::Xy);
+        let c = sketch.add_point(0.0, 0.0);
+        let circle = sketch.add_circle(c, 3.0);
+        let p = sketch.add_point(3.0, 0.0);
+        assert!(constraints_for(Rule::Coincident, &sketch, &[Item::Point(c), Item::Entity(circle)]).is_err());
+        assert_eq!(
+            constraints_for(Rule::Coincident, &sketch, &[Item::Point(p), Item::Entity(circle)]).unwrap(),
+            [Constraint::PointOnCircle(p, circle)]
+        );
+    }
+
+    #[test]
+    fn dragging_leaves_fixed_points_where_they_are() {
+        let mut sketch = Sketch::new(Plane::Xy);
+        let line = sketch.add_polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)], false)[0];
+        sketch.add_constraint(Constraint::Fixed(PointId(0)));
+        assert_eq!(drag_points(&sketch, Item::Entity(line)), [PointId(1)]);
+        assert_eq!(drag_points(&sketch, Item::Point(PointId(0))), []);
+        assert_eq!(drag_points(&sketch, Item::Point(PointId(1))), [PointId(1)]);
+        assert_eq!(drag_points(&sketch, Item::Point(PointId(7))), [], "gone");
+    }
+
+    #[test]
+    fn any_module_of_the_name_is_taken() {
+        let src = "module sketch_logo() { square(1); }
+{ module helper() {} }
+sketch_logo();
+";
+        assert!(module_taken(src, "sketch_logo"), "a hand-written module, not a sketch");
+        assert!(module_taken(src, "helper"), "inside a block");
+        assert!(module_taken(src, "logo"), "update_source would take sketch_logo for it");
+        assert!(!module_taken(src, "sketch_profile1"));
+    }
+
+    #[test]
+    fn write_refuses_what_would_break_the_design() {
+        let src = "cube(1);\n";
+        let sketch = l_bracket();
+        // An extrusion height named like one of the sketch's dimensions.
+        let code = extrude_code("l_bracket", &sketch.plane, &Dimension::named("width", 12.0), &ExtrudeMode::Add);
+        let refused = write(src, &sketch, "l_bracket", Some(Feature { code: &code, cut_from: None })).unwrap_err();
+        assert!(refused.contains("`width`"), "{refused}");
+        // A height named like a variable computed by the code.
+        let computed = "depth = 2 * 6;\ncube(depth);\n";
+        let code = extrude_code("l_bracket", &sketch.plane, &Dimension::named("depth", 12.0), &ExtrudeMode::Add);
+        let refused = write(computed, &sketch, "l_bracket", Some(Feature { code: &code, cut_from: None }));
+        assert!(refused.unwrap_err().contains("`depth`"));
+        // A dimension named by a keyword, past every other check: the text
+        // does not parse, and is not written.
+        let mut keyword = sketch.clone();
+        for c in &mut keyword.constraints {
+            if let Some(d) = c.dimension_mut().filter(|d| d.name.as_deref() == Some("width")) {
+                d.name = Some("for".into());
+            }
+        }
+        let refused = write(src, &keyword, "l_bracket", None).unwrap_err();
+        assert!(refused.contains("does not parse"), "{refused}");
     }
 
     #[test]

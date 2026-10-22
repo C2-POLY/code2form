@@ -23,7 +23,7 @@
 use std::ops::Range;
 
 use c2f_sketch::{
-    Constraint, Dimension, EntityId, ExtrudeMode, Geometry, Plane, Point, PointId, Sketch, SnapKind, SolveOptions,
+    Constraint, ConstraintId, Dimension, EntityId, ExtrudeMode, Geometry, Plane, Point, PointId, Sketch, SnapKind, SolveOptions,
     SolveReport, extrude_code, from_code, is_identifier, module_name, profile, revolve_code, sketches_in, solve,
     solve_with,
 };
@@ -167,6 +167,20 @@ impl SketchMode {
         self.report = solve(&mut self.sketch);
     }
 
+    /// After points, entities or constraints were removed, which numbers
+    /// what stays afresh: whatever still holds an id (the shape being
+    /// drawn, a drag, the dimension prompt) would name the wrong item, or
+    /// one past the end, so it is dropped. Removing points and entities
+    /// also clears the selection, which named them.
+    fn renumbered(&mut self) {
+        self.drawing.cancel();
+        self.drag = None;
+        self.prompt = None;
+        self.hover = None;
+        self.pick = None;
+        self.resolve();
+    }
+
     /// The color of an item: red when a conflicting constraint holds it,
     /// the text color when pinned down, blue when it can still move.
     fn color(&self, item: Item) -> Color32 {
@@ -249,9 +263,11 @@ impl StudioApp {
 
     /// A new sketch on `plane`; an extrusion of it can cut `cut_from`.
     fn new_sketch(&mut self, plane: Plane, cut_from: Option<Range<usize>>) {
-        let taken = sketches_in(&self.doc.text);
-        let name =
-            (1..).map(|n| format!("profile{n}")).find(|name| !taken.contains(&module_name(name))).expect("a free name");
+        let text = &self.doc.text;
+        let name = (1..)
+            .map(|n| format!("profile{n}"))
+            .find(|name| !view::module_taken(text, &module_name(name)))
+            .expect("a free name");
         let mode = SketchMode::new(Sketch::new(plane), name, false, cut_from, self.doc.text.clone());
         self.enter_sketch(Box::new(mode));
     }
@@ -271,7 +287,15 @@ impl StudioApp {
             if !mode.sketch.entities.is_empty() {
                 let message = "Sketch left unfinished: Sketch ▸ Resume unfinished sketch brings it back";
                 self.doc.console.log(Level::Info, message);
-                self.doc.sketch.draft = Some(mode);
+                // One draft is kept, the newest; the one it replaces is
+                // said to be gone rather than lost silently.
+                if let Some(older) = self.doc.sketch.draft.replace(mode) {
+                    let message = format!(
+                        "The older unfinished sketch {} was dropped for this one",
+                        module_name(&older.name)
+                    );
+                    self.doc.console.log(Level::Warning, message);
+                }
             }
         }
     }
@@ -367,10 +391,9 @@ impl StudioApp {
     fn finish_sketch(&mut self, ctx: &egui::Context, feature: bool) {
         let Some(mode) = self.doc.sketch.mode.take() else { return };
         match self.write_sketch(&mode, feature) {
-            Ok((written, done)) => {
-                self.apply_code_edits(ctx, Ok(written), &done);
-                self.doc.sketch.draft = None;
-            }
+            // The draft, if any, is another sketch: resuming takes the
+            // draft out, so the one finished here is never still in it.
+            Ok((written, done)) => self.apply_code_edits(ctx, Ok(written), &done),
             Err(why) => {
                 self.doc.console.log(Level::Warning, why);
                 self.doc.sketch.mode = Some(mode);
@@ -383,8 +406,9 @@ impl StudioApp {
         if mode.name.trim().is_empty() {
             return Err("Give the sketch a name.".into());
         }
-        if !mode.reopened && sketches_in(&self.doc.text).contains(&module) {
-            return Err(format!("The design already has a sketch {module}: give this one another name."));
+        // Any module of that name, sketch or not: writing would replace it.
+        if !mode.reopened && view::module_taken(&self.doc.text, &module) {
+            return Err(format!("The design already has a module {module}: give this sketch another name."));
         }
         if mode.sketch.entities.is_empty() {
             return Err("The sketch is empty: draw something first.".into());
@@ -585,7 +609,7 @@ impl StudioApp {
             if (pressed(Key::Delete) || pressed(Key::Backspace)) && !mode.selection.is_empty() {
                 mode.sketch = view::remove(&mode.sketch, &mode.selection);
                 mode.selection.clear();
-                mode.resolve();
+                mode.renumbered();
             }
             for (key, tool) in [
                 (Key::S, Tool::Select),
@@ -851,7 +875,7 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
         if delete.clicked() {
             mode.sketch = view::remove(&mode.sketch, &mode.selection);
             mode.selection.clear();
-            mode.resolve();
+            mode.renumbered();
         }
     });
 
@@ -932,7 +956,7 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
         }
         if let Some(i) = removed {
             mode.sketch.constraints.remove(i);
-            mode.resolve();
+            mode.renumbered();
         }
     }
 
@@ -958,7 +982,7 @@ fn draw_panel(ui: &mut egui::Ui, mode: &mut SketchMode, action: &mut Option<Acti
         );
         if let Some(i) = removed {
             mode.sketch.constraints.remove(i);
-            mode.resolve();
+            mode.renumbered();
         }
     }
 
@@ -1200,11 +1224,10 @@ fn select_input(
         mode.hover = view::hit(&mode.sketch, at, tolerance);
     }
     if response.drag_started_by(PointerButton::Primary) {
-        if let Some(item) = mode.hover {
-            let points = match item {
-                Item::Point(p) => vec![p],
-                Item::Entity(e) => mode.sketch.entity_points(e),
-            };
+        // Fixed points stay where they are: dragging a line with one
+        // fixed end turns it around that end, and a fixed point alone
+        // does not move.
+        if let Some(points) = mode.hover.map(|item| view::drag_points(&mode.sketch, item)).filter(|p| !p.is_empty()) {
             mode.drag =
                 Some(Drag { points: points.into_iter().map(|p| (p, mode.sketch.point(p))).collect(), from: at });
         }
@@ -1486,6 +1509,11 @@ fn paint_glyphs(viewer: &crate::viewer::Viewer, rect: Rect, painter: &egui::Pain
     let mut count = vec![0usize; sketch.entities.len() + sketch.points.len()];
     let bad: Vec<usize> = mode.report.conflicting.iter().chain(&mode.report.unsatisfied).map(|c| c.0).collect();
     for (i, c) in sketch.constraints.iter().enumerate() {
+        // A constraint naming something gone is the solver's to skip,
+        // and ours: its ids would index past the end.
+        if sketch.check(ConstraintId(i)).is_err() {
+            continue;
+        }
         let glyph = match c {
             Constraint::Horizontal(_) => "H",
             Constraint::Vertical(_) => "V",
@@ -1532,7 +1560,7 @@ fn entity_anchor(
     sketch: &Sketch,
     e: EntityId,
 ) -> Option<(Pos2, Vec2)> {
-    match sketch.entity(e).geometry {
+    match sketch.entities.get(e.0)?.geometry {
         Geometry::Line { a, b } => {
             let (a, b) = (screen(viewer, rect, frame, sketch.point(a))?, screen(viewer, rect, frame, sketch.point(b))?);
             let along = (b - a).normalized();
@@ -1571,6 +1599,9 @@ fn dimension_labels(
     let mut labels = Vec::new();
     for (i, c) in sketch.constraints.iter().enumerate() {
         let Some(d) = c.dimension() else { continue };
+        if sketch.check(ConstraintId(i)).is_err() {
+            continue;
+        }
         let value = number(d.value);
         let shown = match c {
             Constraint::Radius(..) => format!("R{value}"),
