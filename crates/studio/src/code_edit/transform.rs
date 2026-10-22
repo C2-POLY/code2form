@@ -212,32 +212,6 @@ pub fn scale_by(src: &str, range: Range<usize>, factors: [f64; 3]) -> Result<Edi
     by(src, range, Transform::Scale, factors, |a, b| a * b)
 }
 
-/// Turns the object by `delta` (degrees around x, y, z). Angles add up
-/// only when the existing `rotate` and `delta` turn around the same single
-/// axis (or nothing): otherwise, as rotations do not commute, a
-/// `rotate(delta)` goes right around the existing one.
-pub fn rotate_by(src: &str, range: Range<usize>, delta: [f64; 3]) -> Result<Edit, String> {
-    let doc = Doc::parse(src)?;
-    let path = doc.locate_instance(&range)?;
-    let chain = chain(&path);
-    let kind = Transform::Rotate;
-    let Some(wrapper) = chain.find(kind) else {
-        return wrap(&doc, chain.insertion(&doc, kind), kind, delta, &range);
-    };
-    let cur = current(&doc, wrapper, kind)?;
-    let turning = |v: [f64; 3]| -> Vec<usize> { (0..3).filter(|&i| v[i].abs() > 1e-9).collect() };
-    let mut axes = turning(cur.value);
-    axes.extend(turning(delta));
-    axes.sort_unstable();
-    axes.dedup();
-    if axes.len() <= 1 {
-        let sum = [cur.value[0] + delta[0], cur.value[1] + delta[1], cur.value[2] + delta[2]];
-        rewrite(&doc, wrapper, kind, sum, &range)
-    } else {
-        wrap(&doc, doc.after_modifiers(wrapper), kind, delta, &range)
-    }
-}
-
 fn by(
     src: &str,
     range: Range<usize>,
@@ -345,13 +319,6 @@ mod tests {
 
     #[test]
     fn deltas_compose() {
-        let src = "rotate(30) cube(1);";
-        let edit = rotate_by(src, at(src, "cube(1);", 0), [0.0, 0.0, 15.0]).unwrap();
-        assert_eq!(edit.text, "rotate(45) cube(1);");
-        let src = "rotate([0, 0, 30]) cube(1);";
-        let edit = rotate_by(src, at(src, "cube(1);", 0), [10.0, 0.0, 0.0]).unwrap();
-        assert_eq!(edit.text, "rotate([10, 0, 0]) rotate([0, 0, 30]) cube(1);");
-        same_solid(&edit.text, "rotate([10, 0, 0]) rotate([0, 0, 30]) cube([1, 1, 1]);");
         let src = "scale([2, 1, 1]) cube(1);";
         let edit = scale_by(src, at(src, "cube(1);", 0), [1.5, 2.0, 1.0]).unwrap();
         assert_eq!(edit.text, "scale([3, 2, 1]) cube(1);");

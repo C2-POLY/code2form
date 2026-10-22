@@ -176,7 +176,6 @@ impl Picking {
 
     /// The box around every triangle made by `keys` (drawn, `#` and `%`
     /// parts, and what differences subtract).
-    #[allow(dead_code)] // Until the features of manual modelling use it.
     pub fn bounds(&self, keys: &[Statement]) -> Option<(Vec3, Vec3)> {
         let marked = self.marked(keys);
         let mut found: Option<(Vec3, Vec3)> = None;

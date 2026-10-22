@@ -21,8 +21,6 @@
 //! comments and strings never mislead the edits; a source that does not
 //! parse is refused, as an edit could not know what it changes.
 
-// The GUI that calls these lands with tickets C2F-38 to C2F-41.
-#![allow(dead_code)]
 
 use std::ops::Range;
 
@@ -37,16 +35,14 @@ mod tree;
 #[cfg(test)]
 mod test_util;
 
-#[allow(unused_imports)]
 pub use create::{
     Boolean, Place, Primitive, copy_text, delete, duplicate, insert_shape, make_hole, paste, primitive_code,
     wrap_boolean,
 };
-#[allow(unused_imports)]
-pub use props::{ArgKey, ArgValue, Call, CallArg, add_arg, builtin_params, call_at, set_arg, set_arg_component};
-#[allow(unused_imports)]
-pub use transform::{Transform, rotate_by, scale_by, set_transform, transform_of, translate_by};
-#[allow(unused_imports)]
+pub use props::{ArgKey, ArgValue, Call, call_at, set_arg, set_arg_component};
+#[cfg(test)]
+pub use props::{add_arg, builtin_params};
+pub use transform::{Transform, scale_by, set_transform, transform_of, translate_by};
 pub use tree::{Modifier, NodeKind, Target, TreeNode, move_into, rename, set_modifier, tree};
 
 /// The result of an edit: the whole new source, where to put the cursor
@@ -695,7 +691,6 @@ translate([30, 0, 0]) linear_extrude(2) text(\"A\");
             let r = r.clone();
             let what = &src[r.clone()];
             check(what, set_transform(src, r.clone(), Transform::Translate, [1.0, 2.0, 3.0]));
-            check(what, rotate_by(src, r.clone(), [10.0, 0.0, 0.0]));
             check(what, scale_by(src, r.clone(), [2.0, 2.0, 2.0]));
             check(what, delete(src, r.clone()));
             check(what, duplicate(src, r.clone()));

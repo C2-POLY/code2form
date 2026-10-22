@@ -66,6 +66,8 @@ pub enum Modifier {
     /// `%`: drawn transparent, left out of the model.
     Background,
     /// `#`: highlighted.
+    /// `#`: not offered by the tree, which shows the three others.
+    #[allow(dead_code)]
     Highlight,
 }
 

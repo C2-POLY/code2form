@@ -6,7 +6,7 @@ use std::ops::Range;
 use c2f_lang::ast::{Arg, Element, ExprKind, Ident, Modifiers, Stmt, StmtKind};
 use c2f_lang::lexer::Tok;
 
-use super::{Doc, Edit, Loc, Splice, Value, call, child_lists, computed, indent_of, literal, number, scalar, single};
+use super::{Doc, Edit, Splice, Value, call, child_lists, computed, indent_of, literal, number, scalar, single};
 
 /// A module call as the panel shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -213,7 +213,6 @@ fn missing(key: ArgKey) -> String {
 /// A call located in the source, with the parameters its positional
 /// arguments fill.
 struct Resolved<'d> {
-    path: Vec<Loc<'d>>,
     stmt: &'d Stmt,
     name: &'d Ident,
     args: &'d [Arg],
@@ -227,7 +226,7 @@ impl<'d> Resolved<'d> {
         let stmt = path.last().expect("located").stmt;
         let (name, args, children) = call(stmt).ok_or(super::NOT_A_CALL)?;
         let params = params_of(doc, &name.name);
-        Ok(Resolved { path, stmt, name, args, children, params })
+        Ok(Resolved { stmt, name, args, children, params })
     }
 
     /// The parameter argument `i` fills.

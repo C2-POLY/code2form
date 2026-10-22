@@ -26,7 +26,10 @@ impl StudioApp {
         }
         self.sketch_panel(ctx);
         self.tree_panel(ctx);
-        self.properties_panel(ctx);
+        // The sketch's own panel takes its place while sketching.
+        if !self.doc.sketch.active() {
+            self.properties_panel(ctx);
+        }
     }
 
     /// What manual modelling draws over the 3D view and does with the
