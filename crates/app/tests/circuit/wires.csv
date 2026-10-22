@@ -3,9 +3,9 @@ step,from,from_label,to,to_label,color,label,length_mm
 2,xiao.GND,,amp.GND,,black,,35.0
 3,cap.+,longer lead,amp.VIN,Vin: 2.5 to 5.5 V,red,decoupling,43.4
 4,cap.-,striped side,amp.GND,,black,,41.9
-5,amp.VIN,Vin: 2.5 to 5.5 V,driver.VCC,"motor supply, 2.7 to 10.8 V",red,5 V,63.4
-6,amp.GND,,driver.GND,,black,,67.6
-7,driver.VCC,"motor supply, 2.7 to 10.8 V",driver.EEP,nSLEEP: high to run,red,keep the driver awake,35.0
+5,amp.VIN,Vin: 2.5 to 5.5 V,driver.VCC,"motor supply, 2.7 to 10.8 V",red,5 V,73.1
+6,amp.GND,,driver.GND,,black,,77.6
+7,driver.VCC,"motor supply, 2.7 to 10.8 V",driver.EEP,nSLEEP: high to run,red,keep the driver awake,32.6
 8,xiao.3V3,regulator output,mic.VDD,1.62 to 3.63 V,orange,3.3 V,65.5
 9,xiao.GND,,mic.GND,,black,,70.3
 10,mic.L/R,channel: GND for left,mic.GND,,black,left channel,18.8
@@ -17,8 +17,8 @@ step,from,from_label,to,to_label,color,label,length_mm
 16,xiao.D8,"GPIO7, A8, SCK, touch 7",mic.SCK,I2S bit clock,blue,mic I2S,54.7
 17,xiao.D9,"GPIO8, A9, MISO, touch 8",mic.WS,I2S word select,green,mic I2S,56.3
 18,mic.SD,I2S data,xiao.D10,"GPIO9, A10, MOSI, touch 9",yellow,mic I2S,61.4
-19,xiao.D1,"GPIO2, A1, touch 2",driver.IN1,"bridge A, input 1",purple,,50.9
-20,xiao.D2,"GPIO3, A2, strapping (JTAG source)",driver.IN2,"bridge A, input 2",purple,,46.5
-21,driver.OUT1,"bridge A, output 1",motor.+,terminal marked + or red,red,,40.1
-22,driver.OUT2,"bridge A, output 2",motor.-,,black,,32.5
+19,xiao.D1,"GPIO2, A1, touch 2",driver.IN1,"bridge A, input 1",purple,,46.3
+20,xiao.D2,"GPIO3, A2, strapping (JTAG source)",driver.IN2,"bridge A, input 2",purple,,46.3
+21,driver.OUT1,"bridge A, output 1",motor.+,terminal marked + or red,red,,39.1
+22,driver.OUT2,"bridge A, output 2",motor.-,,black,,37.5
 23,xiao.D0,"GPIO1, A0, touch 1",touch.PAD,solder point,white,touch,19.8
