@@ -107,8 +107,8 @@ fn pins_follow_their_part() {
     let mic = circuit.parts.iter().position(|p| p.name == "mic").unwrap();
     let sd = circuit.parts[mic].pin("SD").unwrap();
     let placed = circuit.place(End { part: mic, pin: sd });
-    // [-2.54, -5, 1], turned half a turn about z, then moved to [-12, 44, 1].
-    assert!(close(placed.position, [-9.46, 49.0, 2.0]), "{:?}", placed.position);
+    // [-2.54, -3.8, 1.24], turned half a turn about z, then moved to [-12, 44, 0].
+    assert!(close(placed.position, [-9.46, 47.8, 1.24]), "{:?}", placed.position);
     assert!(close(placed.direction, [0.0, 0.0, 1.0]));
 }
 

@@ -34,10 +34,11 @@ part = "electronics/speaker.c2f"
 at = [-45, 40, 5]
 rotate = [180, 0, 0]
 
-# On the microphone, the sound hole up.
+# Flat on the plate: it hears through a hole under it, which the plate
+# drills.
 [parts.mic]
 part = "electronics/inmp441.c2f"
-at = [-12, 44, 1]
+at = [-12, 44, 0]
 rotate = [0, 0, 180]
 
 [parts.driver]
