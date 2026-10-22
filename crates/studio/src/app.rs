@@ -2016,8 +2016,10 @@ impl StudioApp {
                 for path in self.recent.paths() {
                     let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
                     let folder = path.parent().map(display_folder).unwrap_or_default();
-                    let button = Button::new(name).shortcut_text(folder);
-                    if ui.add(button).on_hover_text(path.display().to_string()).clicked() {
+                    let button = Button::new(name)
+                        .shortcut_text(shorten_folder(&folder, RECENT_FOLDER_CHARS))
+                        .wrap_mode(egui::TextWrapMode::Extend);
+                    if ui.add(button).on_hover_text(path_lines(path, 50)).clicked() {
                         chosen = Some(path.clone());
                         ui.close();
                     }
@@ -3255,6 +3257,58 @@ fn display_folder(dir: &Path) -> String {
     }
 }
 
+/// The longest folder Open Recent shows beside a file name, in characters.
+const RECENT_FOLDER_CHARS: usize = 40;
+
+/// A folder cut down to `max` characters: its first part, `…`, and as many
+/// of its last parts as fit, as `/private/…/code2form/scratchpad`.
+fn shorten_folder(folder: &str, max: usize) -> String {
+    if folder.chars().count() <= max {
+        return folder.to_string();
+    }
+    let parts: Vec<&str> = folder.split('/').collect();
+    // `/private/…` keeps `/private`, `~/…` keeps `~`.
+    let head_len = if folder.starts_with('/') { 2 } else { 1 };
+    let head = parts[..head_len.min(parts.len())].join("/");
+    let mut tail: Vec<&str> = Vec::new();
+    let mut len = head.chars().count() + 2; // "/…"
+    for part in parts[head_len.min(parts.len())..].iter().rev() {
+        let added = part.chars().count() + 1;
+        if len + added > max && !tail.is_empty() {
+            break;
+        }
+        len += added;
+        tail.push(part);
+    }
+    tail.reverse();
+    let shown = format!("{head}/…/{}", tail.join("/"));
+    if shown.chars().count() <= max {
+        return shown;
+    }
+    // Even the last folder alone is too long: keep its end.
+    let last = parts.last().copied().unwrap_or_default();
+    let keep = max.saturating_sub(1);
+    let end: String = last.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("…{end}")
+}
+
+/// A file's full path for a tooltip, broken after a `/` whenever a line
+/// would pass `width` characters, so a long path never runs off the screen.
+fn path_lines(path: &Path, width: usize) -> String {
+    let mut text = String::new();
+    let mut line = 0;
+    for part in path.display().to_string().split_inclusive('/') {
+        let len = part.chars().count();
+        if line > 0 && line + len > width {
+            text.push('\n');
+            line = 0;
+        }
+        text.push_str(part);
+        line += len;
+    }
+    text
+}
+
 /// Something of a circuit named as `part.pin`, `part` or `wire:7` (from 1).
 fn find_hit(circuit: &c2f_circuit::Circuit, name: &str) -> Option<Hit> {
     if let Some(number) = name.strip_prefix("wire:") {
@@ -3295,6 +3349,25 @@ fn absolute(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_folders_are_cut_in_the_middle() {
+        assert_eq!(shorten_folder("~/Documents/Code2Form", 40), "~/Documents/Code2Form");
+        let long = "/private/tmp/claude-501/-Users-yoni-dev-code2form/6c5a403a-45f9-44ea-9feb-0276428c0142/scratchpad";
+        let short = shorten_folder(long, 40);
+        assert!(short.starts_with("/private/…/"), "{short}");
+        assert!(short.ends_with("/scratchpad"), "{short}");
+        assert!(short.chars().count() <= 40, "{short}");
+        let one = format!("~/{}", "x".repeat(60));
+        assert_eq!(shorten_folder(&one, 10).chars().count(), 10);
+    }
+
+    #[test]
+    fn long_paths_break_after_a_slash() {
+        let text = path_lines(Path::new("/private/tmp/claude-501/-Users-yoni-dev-code2form/6c5a/demo.scad"), 30);
+        assert_eq!(text, "/private/tmp/claude-501/\n-Users-yoni-dev-code2form/\n6c5a/demo.scad");
+        assert_eq!(path_lines(Path::new("~/a/b.c2f"), 30), "~/a/b.c2f");
+    }
 
     #[test]
     fn formats_quantities() {
