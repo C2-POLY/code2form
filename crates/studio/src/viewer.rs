@@ -131,6 +131,9 @@ pub struct Viewer {
     at_cursor: Option<Statement>,
     /// The statement last clicked, for the app to show in the editor.
     picked: Option<Statement>,
+    /// What to select once the scene rendered from this text arrives: the
+    /// statements an edit of the code left selected, as byte ranges.
+    select_after: Option<(String, Vec<std::ops::Range<usize>>)>,
     /// The highlight as last sent, not to rebuild it every frame.
     shown_highlight: (Vec<Statement>, Vec<Statement>),
 }
@@ -191,6 +194,7 @@ impl Viewer {
             hovered: None,
             at_cursor: None,
             picked: None,
+            select_after: None,
             shown_highlight: (Vec::new(), Vec::new()),
         };
         viewer.reset();
@@ -226,6 +230,18 @@ impl Viewer {
             Some(picking) => self.selection.retain(|key| picking.contains(key)),
             None => self.selection.clear(),
         }
+        if let Some((source, ranges)) = self.select_after.take() {
+            if source == scene.source {
+                let keys = ranges.into_iter().map(|r| Statement {
+                    unit: 0,
+                    span: c2f_lang::Span::new(r.start, r.end),
+                });
+                self.selection = keys.filter(|k| self.picking.as_ref().is_some_and(|p| p.contains(k))).collect();
+            } else {
+                // Not rendered yet: wait for that text.
+                self.select_after = Some((source, ranges));
+            }
+        }
         self.hovered = None;
         self.at_cursor = None;
         self.shown_highlight = (Vec::new(), Vec::new());
@@ -247,6 +263,44 @@ impl Viewer {
     }
 
     // ---- Selection ----
+
+    /// The statements selected in the view.
+    #[allow(dead_code)] // Until the features of manual modelling use it.
+    pub fn selection(&self) -> &[Statement] {
+        &self.selection
+    }
+
+    /// Selects the statements at these bytes of `source` once the scene
+    /// rendered from it arrives, as an edit of the code asks; the
+    /// selection shown until then is cleared.
+    #[allow(dead_code)] // Until the features of manual modelling use it.
+    pub fn select_after_render(&mut self, source: String, ranges: Vec<std::ops::Range<usize>>) {
+        self.select_after = Some((source, ranges));
+        self.clear_selection();
+    }
+
+    /// What picking knows of the scene shown, for a design.
+    #[allow(dead_code)] // Until the features of manual modelling use it.
+    pub fn picking(&self) -> Option<&Arc<Picking>> {
+        self.picking.as_ref()
+    }
+
+    /// The point of the model under `pos`, its normal (facing the eye) and
+    /// the statement a click there picks.
+    #[allow(dead_code)] // Until the features of manual modelling use it.
+    pub fn surface_at(&self, rect: Rect, pos: Pos2) -> Option<(Vec3, Vec3, Option<Statement>)> {
+        let picking = self.picking.as_ref()?;
+        let ray = self.ray(rect, pos);
+        let hit = picking.cast(&ray, self.cut(), false)?;
+        let (point, normal) = picking.surface(&ray, &hit);
+        Some((point, normal, hit.origin.and_then(|o| picking.target(o, false))))
+    }
+
+    /// The box around what is selected.
+    #[allow(dead_code)] // Until the features of manual modelling use it.
+    pub fn selection_bounds(&self) -> Option<(Vec3, Vec3)> {
+        self.picking.as_ref()?.bounds(&self.selection)
+    }
 
     /// The statement last clicked in the view, once.
     pub fn take_picked(&mut self) -> Option<Statement> {

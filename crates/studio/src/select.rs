@@ -166,6 +166,34 @@ impl Picking {
             .map(Statement::of)
     }
 
+    /// The point and the normal (facing the ray) of a hit.
+    #[allow(dead_code)] // Until the features of manual modelling use it.
+    pub fn surface(&self, ray: &Ray, hit: &Hit) -> (Vec3, Vec3) {
+        let [a, b, c] = self.layer(hit.layer).corners(hit.triangle);
+        let normal = (b - a).cross(c - a).normalize_or(Vec3::Z);
+        let normal = if normal.dot(ray.direction) > 0.0 { -normal } else { normal };
+        (ray.origin + ray.direction * hit.distance, normal)
+    }
+
+    /// The box around every triangle made by `keys` (drawn, `#` and `%`
+    /// parts, and what differences subtract).
+    #[allow(dead_code)] // Until the features of manual modelling use it.
+    pub fn bounds(&self, keys: &[Statement]) -> Option<(Vec3, Vec3)> {
+        let marked = self.marked(keys);
+        let mut found: Option<(Vec3, Vec3)> = None;
+        for &layer in &LAYERS {
+            let triangles = self.layer(layer);
+            for t in 0..triangles.len() {
+                if triangles.origin(t).is_some_and(|o| marked.get(o as usize).copied().unwrap_or(false)) {
+                    for p in triangles.corners(t) {
+                        found = Some(found.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+                    }
+                }
+            }
+        }
+        found
+    }
+
     /// Whether the scene still has a run of the statement `key`.
     pub fn contains(&self, key: &Statement) -> bool {
         self.origins.iter().any(|o| Statement::of(o) == *key)

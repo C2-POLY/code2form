@@ -38,6 +38,12 @@ use crate::prefs::WireMargin;
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
+mod handles;
+mod modelling;
+mod properties;
+mod shapes;
+mod tree;
+
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
@@ -2102,6 +2108,7 @@ impl StudioApp {
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
             self.design_selection(ctx);
+            self.modelling_view(ctx, ui, &response);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
             if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
                 let name = &original.parts[drag.part].name;
@@ -2447,6 +2454,7 @@ impl eframe::App for StudioApp {
         self.editor_panel(ctx);
         self.customizer_panel(ctx);
         self.catalogue_panel(ctx);
+        self.modelling_panels(ctx);
         self.view_panel(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
