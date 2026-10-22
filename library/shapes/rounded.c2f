@@ -59,29 +59,33 @@ module _edged_box(s, d, edges, round) {
     } else if (round) {
         hull() for (x = [d, s.x - d], y = [d, s.y - d], z = [d, s.z - d]) translate([x, y, z]) _ball(d);
     } else {
-        hull() {
-            translate([0, d, d]) cube([s.x, s.y - 2 * d, s.z - 2 * d]);
-            translate([d, 0, d]) cube([s.x - 2 * d, s.y, s.z - 2 * d]);
-            translate([d, d, 0]) cube([s.x - 2 * d, s.y - 2 * d, s.z]);
-        }
+        // Octahedra rather than three crossed slabs, which flatten to
+        // nothing when the chamfer takes half of a dimension.
+        hull() for (x = [d, s.x - d], y = [d, s.y - d], z = [d, s.z - d]) translate([x, y, z]) _octahedron(d);
     }
 }
 
 // The rectangle from the origin to [w, h], the corners `k` marks (bottom
 // left, bottom right, top right, top left) rounded or chamfered by `d`.
+// Written out point by point rather than as a hull of circles and
+// squares: the top or bottom corners alone may be rounded by up to `h`,
+// and a square standing in for a sharp corner would then stick out past
+// the arc above it.
 module _corner_rect(w, h, d, k, round) {
     corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
-    if (round) {
-        hull() for (i = [0 : 3]) {
-            c = corners[i];
-            if (k[i]) translate([d + c.x * (w - 2 * d), d + c.y * (h - 2 * d)]) circle(d, $fn = _segments(d));
-            else translate([c.x * (w - d), c.y * (h - d)]) square(d);
-        }
-    } else {
-        // Each corner, cut or not, going round counter-clockwise.
-        cut = [[[0, d], [d, 0]], [[w - d, 0], [w, d]], [[w, h - d], [w - d, h]], [[d, h], [0, h - d]]];
-        polygon([for (i = [0 : 3]) each (k[i] ? cut[i] : [[corners[i].x * w, corners[i].y * h]])]);
-    }
+    n = _segments(d) / 4;
+    // Each corner, cut or not, going round counter-clockwise.
+    cut = round
+        ? [for (i = [0 : 3]) let (c = corners[i], o = [d + c.x * (w - 2 * d), d + c.y * (h - 2 * d)])
+            [for (j = [0 : n]) o + d * [cos(180 + 90 * i + 90 * j / n), sin(180 + 90 * i + 90 * j / n)]]]
+        : [[[0, d], [d, 0]], [[w - d, 0], [w, d]], [[w, h - d], [w - d, h]], [[d, h], [0, h - d]]];
+    polygon([for (i = [0 : 3]) each (k[i] ? cut[i] : [[corners[i].x * w, corners[i].y * h]])]);
+}
+
+// The octahedron of "radius" `r`, its six points on the axes: a hull of
+// them at the corners of an inner box chamfers that box grown by `r`.
+module _octahedron(r) {
+    rotate_extrude($fn = 4) polygon([[0, -r], [r, 0], [0, r]]);
 }
 
 // A sphere of radius `r` whose poles and equator lie exactly on the

@@ -1317,8 +1317,19 @@ impl StudioApp {
                 });
             });
         if let Some(Content::Call(model, range)) = content {
-            for action in actions {
-                self.properties_action(ctx, &model, range.clone(), action);
+            self.properties_actions(ctx, &model, range, actions);
+        }
+    }
+
+    /// Does what the panel asked in one frame, until an action changes the
+    /// code: the others were asked of the old code, at a range and with a
+    /// model that no longer match it, and would be refused or misplaced.
+    fn properties_actions(&mut self, ctx: &egui::Context, model: &Model, range: Range<usize>, actions: Vec<Action>) {
+        let before = self.doc.text.clone();
+        for action in actions {
+            self.properties_action(ctx, model, range.clone(), action);
+            if self.doc.text != before {
+                break;
             }
         }
     }
@@ -1667,6 +1678,27 @@ mod tests {
         // Too large is refused.
         let settings = EdgeSettings { size: 30.0, ..settings };
         assert!(edge_call(p, settings, &[]).is_err());
+    }
+
+    /// Two writes asked in the same frame: the first is made, the second,
+    /// asked of the code before it, is dropped rather than refused.
+    #[test]
+    fn one_write_per_frame() {
+        let ctx = egui::Context::default();
+        let stores = super::super::Stores { session: None, settings: None };
+        let settings = crate::settings::Settings::load(None);
+        let recent = crate::recent::RecentFiles::default();
+        let mut app = StudioApp::with(&ctx, None, stores, recent, settings, Vec::new());
+        let src = "cube(5);";
+        app.doc.text = src.to_string();
+        let m = model(src, src);
+        let actions = vec![
+            Action::Place(Transform::Translate, [1.0, 0.0, 0.0]),
+            Action::Place(Transform::Translate, [2.0, 0.0, 0.0]),
+        ];
+        app.properties_actions(&ctx, &m, 0..src.len(), actions);
+        assert_eq!(app.doc.text, "translate([1, 0, 0]) cube(5);");
+        assert_eq!(app.doc.console.count(crate::console::Level::Warning), 0);
     }
 
     #[test]

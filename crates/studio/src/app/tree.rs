@@ -154,6 +154,10 @@ impl TreeState {
         let pointer = ui.input(|i| i.pointer.interact_pos());
         let released = ui.input(|i| i.pointer.any_released());
         let mut action = None;
+        // A name typed is kept apart: the click on another row that ends
+        // its field asks for a selection in the same frame, which would
+        // otherwise take its place and lose the name.
+        let mut rename = None;
         let mut last = Rect::NOTHING;
         for (path, depth) in &rows {
             let node = node_at(&nodes, path);
@@ -179,7 +183,10 @@ impl TreeState {
             if !live {
                 continue;
             }
-            action = action.or(row);
+            match row {
+                Some(r @ Action::Rename { .. }) => rename = Some(r),
+                r => action = action.or(r),
+            }
             if response.clicked() {
                 self.focus = Some(node.range.clone());
                 action = Some(Action::Select { range: node.range.clone(), add: ui.input(|i| i.modifiers.shift) });
@@ -224,7 +231,7 @@ impl TreeState {
             );
         }
         self.nodes = nodes;
-        action
+        rename.or(action)
     }
 
     /// Draws one row and its controls; returns what its controls ask.
@@ -837,6 +844,40 @@ sphere(2); // Ball
             frame(&ctx, &mut state, vec![enter], &[]),
             Some(Action::Rename { range: ball, name: "Pearl".into() })
         );
+        assert!(state.renaming.is_none());
+    }
+
+    /// A click on another row, pressed and released within one frame,
+    /// ends the field and selects in that frame: the name typed is what is
+    /// kept.
+    #[test]
+    fn a_click_elsewhere_keeps_the_name_typed() {
+        let ctx = egui::Context::default();
+        let mut state = TreeState::default();
+        state.refresh(1, MODEL);
+        frame(&ctx, &mut state, vec![], &[]);
+        let ball = code_edit::tree(MODEL).unwrap()[1].range.clone();
+        state.start_rename(&ball);
+        frame(&ctx, &mut state, vec![], &[]);
+        let select_all = egui::Event::Key {
+            key: Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        frame(&ctx, &mut state, vec![select_all, egui::Event::Text("Pearl".into())], &[]);
+        // The press and the release in one frame.
+        let at = row(0, 80.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let events = vec![egui::Event::PointerMoved(at), button(true), button(false)];
+        let action = frame(&ctx, &mut state, events, &[]);
+        assert_eq!(action, Some(Action::Rename { range: ball, name: "Pearl".into() }));
         assert!(state.renaming.is_none());
     }
 

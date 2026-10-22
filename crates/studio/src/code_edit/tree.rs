@@ -15,7 +15,8 @@ use c2f_lang::span::LineIndex;
 
 use super::create::{append_child, reindented};
 use super::{
-    Doc, Edit, Loc, Splice, UNBRACED, apply, chars, detached, in_list, indent_of, line_end, line_start, reindent,
+    Doc, Edit, Loc, Splice, UNBRACED, apply, chars, detached, in_list, indent_of, line_end, line_start, newline,
+    reindent,
     removal, single, starts_line, trailing_comment, with_comment,
 };
 
@@ -289,19 +290,30 @@ pub fn move_into(src: &str, range: Range<usize>, target: Target) -> Result<Edit,
             }
             let to = indent_of(src, t.start).to_string();
             let whole = reindent(&src[ext.clone()], from, &to);
-            let bare = reindent(&src[m.clone()], from, &to);
+            // Between statements on a line, an object named by a comment
+            // takes it along and ends its line there, the rest going on
+            // the next one.
+            let named = ext.end > m.end;
+            let nl = newline(src, line_end(src, t.start));
+            let inline = if named { format!("{whole}{nl}{to}") } else { format!("{whole} ") };
             match target {
                 Target::Before(_) if starts_line(src, t.start) => {
-                    (Splice::insert(line_start(src, t.start), format!("{to}{whole}\n")), to.len(), to)
+                    (Splice::insert(line_start(src, t.start), format!("{to}{whole}{nl}")), to.len(), to)
                 }
-                Target::Before(_) => (Splice::insert(t.start, format!("{bare} ")), 0, to),
+                Target::Before(_) => (Splice::insert(t.start, inline), 0, to),
                 _ => {
                     let text_end = with_comment(src, &t).end;
                     let eol = line_end(src, text_end);
                     if src[text_end..eol].trim().is_empty() {
-                        (Splice::insert(eol, format!("\n{to}{whole}")), 1 + to.len(), to)
+                        let nl = newline(src, eol);
+                        (Splice::insert(eol, format!("{nl}{to}{whole}")), nl.len() + to.len(), to)
+                    } else if m.start >= t.end && src[t.end..m.start].trim().is_empty() {
+                        // Already right after it.
+                        return Ok(unchanged(src, &range));
                     } else {
-                        (Splice::insert(t.end, format!(" {bare}")), 1, to)
+                        let rest = &src[t.end..];
+                        let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+                        (Splice::new(t.end..t.end + spaces, format!(" {inline}")), 1, to)
                     }
                 }
             }
@@ -429,5 +441,41 @@ module peg() cube(1);
         parses(&edit.text);
         let whole = 0..expected.len() - 1;
         assert!(move_into(expected, whole.clone(), Target::IntoBlock(whole)).is_err());
+    }
+
+    /// The name goes where the object goes, whether it leaves a shared
+    /// line or lands between statements on one.
+    #[test]
+    fn moved_objects_keep_their_name() {
+        let src = "a(); b(); // B\nc();\n";
+        let edit = move_into(src, at(src, "b();", 0), Target::After(at(src, "c();", 0))).unwrap();
+        assert_eq!(edit.text, "a();\nc();\nb(); // B\n");
+        assert_eq!(&edit.text[edit.selection], "b();");
+        // Already right after its target: nothing changes.
+        let edit = move_into(src, at(src, "b();", 0), Target::After(at(src, "a();", 0))).unwrap();
+        assert_eq!(edit.text, src);
+
+        let src = "a(); c();\nb(); // B\n";
+        let edit = move_into(src, at(src, "b();", 0), Target::After(at(src, "a();", 0))).unwrap();
+        assert_eq!(edit.text, "a(); b(); // B\nc();\n");
+        assert_eq!(&edit.text[edit.selection], "b();");
+        let edit = move_into(src, at(src, "b();", 0), Target::Before(at(src, "c();", 0))).unwrap();
+        assert_eq!(edit.text, "a(); b(); // B\nc();\n");
+        assert_eq!(&edit.text[edit.selection], "b();");
+        assert_eq!(tree(&edit.text).unwrap()[1].name, "B");
+        // Unnamed, it still joins the line.
+        let src = "a(); c();\nb();\n";
+        let edit = move_into(src, at(src, "b();", 0), Target::After(at(src, "a();", 0))).unwrap();
+        assert_eq!(edit.text, "a(); b(); c();\n");
+    }
+
+    #[test]
+    fn moves_keep_the_sources_line_breaks() {
+        let src = "a();\r\nb(); // B\r\nc();\r\n";
+        let edit = move_into(src, at(src, "a();", 0), Target::After(at(src, "b();", 0))).unwrap();
+        assert_eq!(edit.text, "b(); // B\r\na();\r\nc();\r\n");
+        assert_eq!(&edit.text[edit.selection], "a();");
+        let edit = move_into(src, at(src, "c();", 0), Target::Before(at(src, "a();", 0))).unwrap();
+        assert_eq!(edit.text, "c();\r\na();\r\nb(); // B\r\n");
     }
 }

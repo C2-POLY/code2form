@@ -357,6 +357,42 @@ mod tests {
         assert!((turned_volume(h, big, big, r, Rims::Both, true) - (PI * big * big * h - 2.0 * rim)).abs() < 1e-3);
     }
 
+    /// At the largest size the panel accepts, the edges still keep the
+    /// box: a top fillet over half the height once swung its arcs below
+    /// the cube (`[10, 10, 6]`, fillet 5, spanned z -4..6), and a chamfer
+    /// of half a dimension flattened two of the three slabs it was the
+    /// hull of (`[30, 20, 10]`, chamfer 5, came out 20 × 10 × 10).
+    #[test]
+    fn fillet_edges_at_their_limit_keep_the_box() {
+        // As in `fillet_rounded_cubes_keep_their_box_and_volume`: the
+        // corner of each edge's profile outside the arc lies in the box
+        // while the radius is at most the height.
+        for (size, r) in [([10.0, 10.0, 6.0], 5.0), ([30.0, 20.0, 4.0], 4.0)] {
+            let [x, y, z]: [f64; 3] = size;
+            let expected =
+                x * y * z - (1.0 - PI / 4.0) * r * r * 2.0 * (x + y) + 4.0 * (5.0 / 3.0 - PI / 2.0) * r.powi(3);
+            for center in [false, true] {
+                let original = format!("cube([{x}, {y}, {z}], center = {center})");
+                for edges in [CubeEdges::Top, CubeEdges::Bottom] {
+                    check(&original, &rounded_cube(size, center, r, edges).unwrap(), expected);
+                }
+            }
+        }
+        let (x, y, z, d): (f64, f64, f64, f64) = (30.0, 20.0, 10.0, 5.0);
+        let original = format!("cube([{x}, {y}, {z}])");
+        let (a, b) = (x - 2.0 * d, y - 2.0 * d);
+        let all = 2.0 * d * a * b + 2.0 * d * d * (a + b) + 4.0 / 3.0 * d.powi(3);
+        check(&original, &chamfered_cube([x, y, z], false, d, CubeEdges::All).unwrap(), all);
+        let vertical = z * (x * y - 2.0 * 10.0 * 10.0);
+        check(&original, &chamfered_cube([x, y, z], false, 10.0, CubeEdges::Vertical).unwrap(), vertical);
+        let r = 5.0;
+        let rounded = 2.0 * r * a * b + PI * r * r * (a + b) + 4.0 / 3.0 * PI * r.powi(3);
+        check(&original, &rounded_cube([x, y, z], false, r, CubeEdges::All).unwrap(), rounded);
+        let (x, y, z, d): (f64, f64, f64, f64) = (30.0, 20.0, 4.0, 4.0);
+        let top = x * y * z - d * d * (x + y) + 4.0 / 3.0 * d.powi(3);
+        check(&format!("cube([{x}, {y}, {z}])"), &chamfered_cube([x, y, z], false, d, CubeEdges::Top).unwrap(), top);
+    }
+
     #[test]
     fn fillet_too_large_is_refused() {
         assert!(rounded_cube([30.0, 20.0, 10.0], false, 5.0, CubeEdges::All).is_ok());

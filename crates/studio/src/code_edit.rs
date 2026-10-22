@@ -441,15 +441,67 @@ fn indent_unit(src: &str) -> String {
     }
 }
 
+/// For each line of `text` (code that starts outside any string or
+/// comment), whether it starts inside a string or a block comment. Such a
+/// line is left as written by re-indentation: the language keeps the
+/// spaces after a raw line break in a string, so they are part of its
+/// value.
+fn verbatim_lines(text: &str) -> Vec<bool> {
+    #[derive(PartialEq)]
+    enum In {
+        Code,
+        Str,
+        Line,
+        Block,
+    }
+    let mut state = In::Code;
+    let mut lines = vec![false];
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let next = bytes.get(i + 1).copied();
+        match (&state, bytes[i]) {
+            (_, b'\n') => {
+                if state == In::Line {
+                    state = In::Code;
+                }
+                lines.push(matches!(state, In::Str | In::Block));
+            }
+            (In::Code, b'"') => state = In::Str,
+            (In::Code, b'/') if next == Some(b'/') => state = In::Line,
+            (In::Code, b'/') if next == Some(b'*') => {
+                state = In::Block;
+                i += 1;
+            }
+            // An escaped character, a line break included, stays in.
+            (In::Str, b'\\') if next != Some(b'\n') => i += 1,
+            (In::Str, b'"') => state = In::Code,
+            (In::Block, b'*') if next == Some(b'/') => {
+                state = In::Code;
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    lines
+}
+
 /// Moves text written at indentation `from` to indentation `to`: each
 /// line after the first trades its leading `from` for `to` (lines
 /// indented less lose their indentation and get `to`); blank lines stay
-/// blank. The first line is the rest of a line and keeps what it has.
+/// blank, and lines that start inside a string or a block comment stay as
+/// written. The first line is the rest of a line and keeps what it has.
 fn reindent(text: &str, from: &str, to: &str) -> String {
     let mut out = String::with_capacity(text.len());
+    let verbatim = verbatim_lines(text);
     for (i, line) in text.split('\n').enumerate() {
         if i > 0 {
             out.push('\n');
+            if verbatim[i] {
+                out.push_str(line);
+                continue;
+            }
             if line.trim().is_empty() {
                 if line.ends_with('\r') {
                     out.push('\r');
@@ -466,14 +518,20 @@ fn reindent(text: &str, from: &str, to: &str) -> String {
 }
 
 /// Text indented by levels of `from` (four spaces, a tab...), indented by
-/// as many levels of `to`; what is left of an indentation stays.
+/// as many levels of `to`; what is left of an indentation stays, and so
+/// do lines that start inside a string or a block comment.
 fn reunit(text: &str, from: &str, to: &str) -> String {
     if from == to {
         return text.to_string();
     }
+    let verbatim = verbatim_lines(text);
     let lines: Vec<String> = text
         .split('\n')
-        .map(|line| {
+        .enumerate()
+        .map(|(i, line)| {
+            if verbatim[i] {
+                return line.to_string();
+            }
             let mut rest = line;
             let mut levels = 0;
             while let Some(r) = rest.strip_prefix(from) {
@@ -491,8 +549,10 @@ fn chars(src: &str, byte: usize) -> usize {
 }
 
 /// The bytes removed with a statement: its whole line(s) and the comment
-/// after it when it stands alone on them, else the statement and the
-/// spaces after it.
+/// after it when it stands alone on them; the spaces before it and the
+/// comment after it when it ends a line others start (`a(); b(); // B`:
+/// the comment names it, and goes with it as [`with_comment`] copies it);
+/// else the statement and the spaces after it.
 fn removal(src: &str, range: &Range<usize>) -> Range<usize> {
     let end = with_comment(src, range).end;
     let eol = line_end(src, end);
@@ -500,8 +560,21 @@ fn removal(src: &str, range: &Range<usize>) -> Range<usize> {
         let after = src[eol..].find('\n').map_or(src.len(), |i| eol + i + 1);
         return line_start(src, range.start)..after;
     }
+    if end > range.end {
+        let before = &src[line_start(src, range.start)..range.start];
+        return range.start - (before.len() - before.trim_end_matches([' ', '\t']).len())..end;
+    }
     let rest = &src[range.end..];
     range.start..range.end + (rest.len() - rest.trim_start_matches([' ', '\t']).len())
+}
+
+/// The line break to write after the line ending at `eol` (as
+/// [`line_end`] gives it): the one there, else, at the end of the source,
+/// the one the source uses, so that a file written with `\r\n` keeps
+/// them all.
+fn newline(src: &str, eol: usize) -> &'static str {
+    let crlf = if eol < src.len() { src[eol..].starts_with("\r\n") } else { src.contains("\r\n") };
+    if crlf { "\r\n" } else { "\n" }
 }
 
 /// A replacement of `range` by `text` in the source.
@@ -642,6 +715,38 @@ mod tests {
         let src = "a(); b();  c();";
         let b = src.find("b()").unwrap();
         assert_eq!(&src[removal(src, &(b..b + 4))], "b();  ");
+        // Last on a line others start, it takes the comment naming it.
+        let src = "a(); b(); // B\nc();\n";
+        let b = src.find("b()").unwrap();
+        assert_eq!(&src[removal(src, &(b..b + 4))], " b(); // B");
+    }
+
+    #[test]
+    fn line_breaks_follow_the_source() {
+        assert_eq!(newline("a();\r\nb();", 4), "\r\n");
+        assert_eq!(newline("a();\nb();", 4), "\n");
+        assert_eq!(newline("a();\r\nb();", 10), "\r\n");
+        assert_eq!(newline("a();", 4), "\n");
+    }
+
+    /// A raw line break in a string keeps the spaces after it in the
+    /// value: re-indenting the line would change the text drawn.
+    #[test]
+    fn lines_inside_strings_and_comments_keep_their_indentation() {
+        let text = "union() {\n    text(\"a\n    b\");\n    /* x\n       y */\n    cube(\"\\\"\");\n}";
+        assert_eq!(
+            reindent(text, "", "  "),
+            "union() {\n      text(\"a\n    b\");\n      /* x\n       y */\n      cube(\"\\\"\");\n  }"
+        );
+        assert_eq!(
+            reunit(text, "    ", "\t"),
+            "union() {\n\ttext(\"a\n    b\");\n\t/* x\n       y */\n\tcube(\"\\\"\");\n}"
+        );
+        // A `//` comment ends with its line; a backslash before a break
+        // keeps the string open.
+        assert_eq!(verbatim_lines("a(); // \"\nb(\"\\\nc\");\nd();"), [false, false, true, false]);
+        let (code, _) = snippet("    text(\"a\n    b\");", "  ").unwrap();
+        assert_eq!(code, "text(\"a\n    b\");");
     }
 
     /// Every statement of the tree.

@@ -13,7 +13,7 @@ use c2f_lang::lexer::Tok;
 
 use super::{
     Doc, Edit, Splice, UNBRACED, apply, call, call_name, chars, detached, in_list, indent_of, indent_unit, line_end,
-    line_start, number, reindent, removal, snippet, starts_line, vector, with_comment,
+    line_start, newline, number, reindent, removal, snippet, starts_line, vector, with_comment,
 };
 
 /// Where new code goes.
@@ -166,7 +166,8 @@ pub fn duplicate(src: &str, range: Range<usize>) -> Result<Edit, String> {
     let eol = line_end(src, ext.end);
     let (splice, offset) = if src[ext.end..eol].trim().is_empty() {
         let indent = indent_of(src, r.start);
-        (Splice::insert(eol, format!("\n{indent}{}", &src[ext])), 1 + indent.len())
+        let nl = newline(src, eol);
+        (Splice::insert(eol, format!("{nl}{indent}{}", &src[ext])), nl.len() + indent.len())
     } else {
         (Splice::insert(r.end, format!(" {}", &src[r.clone()])), 1)
     };
@@ -447,5 +448,26 @@ mod tests {
         assert_eq!(delete(src, at(src, "cube(1);", 0)).unwrap().text, "if (true) {} else sphere(1);");
         assert!(duplicate(src, at(src, "cube(1);", 0)).is_err());
         parses(&delete(src, at(src, "sphere(1);", 0)).unwrap().text);
+    }
+
+    /// An object that ends a line others start leaves with the comment
+    /// naming it, which its copies carry: no name is left behind twice.
+    #[test]
+    fn a_named_object_takes_its_name_along() {
+        let src = "a(); b(); // B\nc();\n";
+        assert_eq!(delete(src, at(src, "b();", 0)).unwrap().text, "a();\nc();\n");
+        let src = "cube(1); sphere(1); // S\n";
+        let edit = wrap_boolean(src, &[at(src, "cube(1);", 0), at(src, "sphere(1);", 0)], Boolean::Union).unwrap();
+        assert_eq!(edit.text, "union() {\n    cube(1);\n    sphere(1); // S\n}\n");
+    }
+
+    #[test]
+    fn copies_keep_the_sources_line_breaks() {
+        let src = "union() {\r\n    cube(1); // a\r\n}\r\n";
+        let edit = duplicate(src, at(src, "cube(1);", 0)).unwrap();
+        assert_eq!(edit.text, "union() {\r\n    cube(1); // a\r\n    cube(1); // a\r\n}\r\n");
+        assert_eq!(edit.selection, at(&edit.text, "cube(1);", 1));
+        let edit = duplicate("cube(1);\r\nsphere(1);", 0..8).unwrap();
+        assert_eq!(edit.text, "cube(1);\r\ncube(1);\r\nsphere(1);");
     }
 }
