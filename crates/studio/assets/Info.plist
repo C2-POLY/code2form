@@ -50,6 +50,24 @@
 		</dict>
 		<dict>
 			<key>CFBundleTypeName</key>
+			<string>Code2Form circuit</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>AppIcon</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>app.code2form.c2fc</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>c2fc</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
 			<string>SCAD design</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
@@ -86,6 +104,25 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>c2f</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.code2form.c2fc</string>
+			<key>UTTypeDescription</key>
+			<string>Code2Form circuit</string>
+			<key>UTTypeIconFile</key>
+			<string>AppIcon</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>c2fc</string>
 				</array>
 			</dict>
 		</dict>

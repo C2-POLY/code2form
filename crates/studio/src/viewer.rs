@@ -764,6 +764,7 @@ mod tests {
             formats: &[],
             pauses: Vec::new(),
             source: String::new(),
+            parts: Vec::new(),
         }
     }
 

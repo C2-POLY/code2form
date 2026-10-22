@@ -116,6 +116,11 @@ impl Editor {
         self.find.requests.push(request);
     }
 
+    /// Highlights the text as a circuit file, or as code.
+    pub fn set_circuit(&mut self, circuit: bool) {
+        self.highlighter.hash_comments = circuit;
+    }
+
     /// Gives the editor keyboard focus.
     pub fn focus(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(self.id));

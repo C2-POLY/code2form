@@ -8,7 +8,7 @@
 #   scripts/bundle-macos.sh --install   also put it in ~/Applications, where
 #                                       Launchpad, Spotlight and the Finder see it
 #   scripts/bundle-macos.sh --install --default
-#                                       and make it the app that opens .c2f and .scad files
+#                                       and make it the app that opens .c2f, .c2fc and .scad files
 #
 # The icon comes from crates/studio/assets/AppIcon.icns; redraw it with
 # `swift scripts/make-icon.swift crates/studio/assets/AppIcon.icns`. The
@@ -144,7 +144,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 let app = URL(fileURLWithPath: CommandLine.arguments[1])
-for ext in ["c2f", "scad"] {
+for ext in ["c2f", "c2fc", "scad"] {
     guard let type = UTType(filenameExtension: ext) else {
         FileHandle.standardError.write("no file type for .\(ext)\n".data(using: .utf8)!)
         exit(1)

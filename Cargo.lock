@@ -681,6 +681,7 @@ version = "0.2.0"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
+ "c2f-circuit",
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",

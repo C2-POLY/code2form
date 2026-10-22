@@ -2,6 +2,7 @@
 //! and the document they work on.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
@@ -12,6 +13,7 @@ use eframe::glow;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::circuit;
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
@@ -26,6 +28,7 @@ use crate::worker::{Format, Reply, Worker, group_digits};
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
+const CIRCUIT_FILES: (&str, &str) = ("Code2Form circuit", "c2fc");
 
 /// How long typing must pause before a re-render.
 const DEBOUNCE: Duration = Duration::from_millis(400);
@@ -71,6 +74,8 @@ struct ModelInfo {
     /// The formats it exports to.
     formats: &'static [Format],
     empty: bool,
+    /// The parts of a circuit; 0 for a design.
+    parts: usize,
 }
 
 pub struct StudioApp {
@@ -95,6 +100,13 @@ pub struct StudioApp {
     model: Option<ModelInfo>,
     /// Frame the next model that arrives (after opening a file).
     frame_next: bool,
+    /// The circuit on screen, when the file is one, as last read.
+    circuit: Option<Arc<c2f_circuit::Circuit>>,
+    /// The generation it was read for.
+    circuit_generation: u64,
+    /// The circuit's part files and their modification times, to render
+    /// again when one changes on disk.
+    part_files: Vec<(PathBuf, Option<SystemTime>)>,
 
     editor: Editor,
     viewer: Viewer,
@@ -132,6 +144,9 @@ impl StudioApp {
             failed: false,
             model: None,
             frame_next: true,
+            circuit: None,
+            circuit_generation: 0,
+            part_files: Vec::new(),
             editor: Editor::new(),
             viewer: Viewer::new(cc.gl.as_ref()),
             console: Console::default(),
@@ -178,6 +193,10 @@ impl StudioApp {
         self.path.as_deref().and_then(Path::parent).map(Path::to_path_buf).or_else(working_directory)
     }
 
+    fn is_circuit(&self) -> bool {
+        self.path.as_deref().is_some_and(circuit::is_circuit)
+    }
+
     fn busy(&self) -> bool {
         self.worker.latest() > self.finished
     }
@@ -186,6 +205,7 @@ impl StudioApp {
 
     fn render_now(&mut self) {
         self.render_deadline = None;
+        self.editor.set_circuit(self.is_circuit());
         self.sent_source = Some(self.text.clone());
         self.sent_values = self.customizer.values();
         self.worker.render(self.text.clone(), self.source_path(), self.sent_values.clone());
@@ -234,6 +254,7 @@ impl StudioApp {
                                 is_2d: scene.is_2d,
                                 formats: scene.formats,
                                 empty,
+                                parts: scene.parts.len(),
                             });
                             self.viewer.set_scene(scene, frame);
                         }
@@ -243,6 +264,13 @@ impl StudioApp {
                         }
                     }
                 }
+                Reply::Circuit { generation, circuit } => {
+                    if generation < self.circuit_generation || generation < self.worker.latest() {
+                        continue;
+                    }
+                    self.circuit_generation = generation;
+                    self.set_circuit(Some(circuit));
+                }
                 Reply::Exported { target, result } => match result {
                     Ok(message) => self.console.log(Level::Info, message),
                     Err(error) => {
@@ -251,6 +279,24 @@ impl StudioApp {
                 },
             }
         }
+    }
+
+    /// Shows a circuit just read, or none, and watches its part files.
+    fn set_circuit(&mut self, found: Option<Arc<c2f_circuit::Circuit>>) {
+        let mut files: Vec<PathBuf> = found.iter().flat_map(|c| c.parts.iter().map(|p| p.path.clone())).collect();
+        files.sort();
+        files.dedup();
+        let known = std::mem::take(&mut self.part_files);
+        self.part_files = files
+            .into_iter()
+            .map(|file| {
+                // A file already watched keeps its time, so that a change
+                // made since it was read is not missed.
+                let mtime = known.iter().find(|(f, _)| *f == file).map_or_else(|| modified(&file), |(_, m)| *m);
+                (file, mtime)
+            })
+            .collect();
+        self.circuit = found;
     }
 
     // ---- Files ----
@@ -264,7 +310,11 @@ impl StudioApp {
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Opened {}", path.display()));
                 self.remember(&path);
-                self.customizer.open(Some(&path));
+                // A circuit has no parameters, nor presets next to it.
+                self.customizer.open(Some(path.as_path()).filter(|p| !circuit::is_circuit(p)));
+                if !circuit::is_circuit(&path) {
+                    self.set_circuit(None);
+                }
                 self.path = Some(path);
                 self.frame_next = true;
                 self.editor.error_line = None;
@@ -282,6 +332,7 @@ impl StudioApp {
         self.frame_next = true;
         self.editor.error_line = None;
         self.customizer.open(None);
+        self.set_circuit(None);
         self.console.log(Level::Info, "New file");
         self.render_now();
     }
@@ -289,7 +340,7 @@ impl StudioApp {
     fn open_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open a design")
-            .add_filter("Code2Form or SCAD", &["c2f", "scad"])
+            .add_filter("Code2Form, SCAD or circuit", &["c2f", "scad", "c2fc"])
             .add_filter("All files", &["*"]);
         if let Some(dir) = self.directory() {
             dialog = dialog.set_directory(dir);
@@ -333,12 +384,18 @@ impl StudioApp {
     fn save_as(&mut self) -> bool {
         // Designs are .c2f files; a .scad file keeps its extension by default.
         let scad = self.path.as_deref().and_then(Path::extension).is_some_and(|e| e == "scad");
-        let (first, second) = if scad { (SCAD_FILES, DESIGN_FILES) } else { (DESIGN_FILES, SCAD_FILES) };
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Save as")
-            .add_filter(first.0, &[first.1])
-            .add_filter(second.0, &[second.1])
-            .set_file_name(if self.path.is_some() { self.file_name() } else { "untitled.c2f".to_string() });
+        let filters = if self.is_circuit() {
+            [CIRCUIT_FILES, DESIGN_FILES, SCAD_FILES]
+        } else if scad {
+            [SCAD_FILES, DESIGN_FILES, CIRCUIT_FILES]
+        } else {
+            [DESIGN_FILES, SCAD_FILES, CIRCUIT_FILES]
+        };
+        let mut dialog = rfd::FileDialog::new().set_title("Save as");
+        for (name, extension) in filters {
+            dialog = dialog.add_filter(name, &[extension]);
+        }
+        dialog = dialog.set_file_name(if self.path.is_some() { self.file_name() } else { "untitled.c2f".to_string() });
         if let Some(dir) = self.directory() {
             dialog = dialog.set_directory(dir);
         }
@@ -356,7 +413,12 @@ impl StudioApp {
                 self.disk_mtime = modified(&path);
                 self.console.log(Level::Info, format!("Saved {}", path.display()));
                 self.remember(&path);
-                self.customizer.moved(&path);
+                if circuit::is_circuit(&path) {
+                    self.customizer.open(None);
+                } else {
+                    self.customizer.moved(&path);
+                    self.set_circuit(None);
+                }
                 self.path = Some(path);
                 self.render_now();
                 true
@@ -397,7 +459,8 @@ impl StudioApp {
         }
     }
 
-    /// Reloads the file when it changed on disk and has no unsaved edits.
+    /// Reloads the file when it changed on disk and has no unsaved edits,
+    /// and renders a circuit again when one of its part files changed.
     fn poll_disk(&mut self, ctx: &egui::Context) {
         let Some(path) = self.path.clone() else { return };
         ctx.request_repaint_after(POLL);
@@ -405,6 +468,20 @@ impl StudioApp {
             return;
         }
         self.last_poll = Instant::now();
+        let mut changed_parts = Vec::new();
+        for (file, mtime) in &mut self.part_files {
+            let now = modified(file);
+            if now != *mtime {
+                *mtime = now;
+                changed_parts.push(file.clone());
+            }
+        }
+        if !changed_parts.is_empty() {
+            for file in &changed_parts {
+                self.console.log(Level::Info, format!("Rendering again: {} changed on disk", file.display()));
+            }
+            self.render_now();
+        }
         let Some(mtime) = modified(&path) else { return };
         if self.disk_mtime == Some(mtime) {
             return;
@@ -656,7 +733,10 @@ impl StudioApp {
                 if let Some(model) = &self.model {
                     if !model.empty {
                         let s = model.stats;
-                        if model.is_2d {
+                        if model.parts > 0 {
+                            ui.label(small(format!("· {} part{}", model.parts, plural(model.parts))));
+                            ui.label(small(format!("· {} triangles", group_digits(s.triangles))));
+                        } else if model.is_2d {
                             ui.label(small(format!("· 2D · {} vertices", group_digits(s.vertices))));
                             ui.label(small(format!("· area {}", format_quantity(s.volume))));
                         } else {
@@ -804,7 +884,11 @@ impl StudioApp {
                 failed: self.failed,
                 has_model,
                 is_2d: self.model.as_ref().is_some_and(|m| m.is_2d),
-                empty_hint: viewer::empty_hint(!self.text.trim().is_empty()),
+                empty_hint: if self.is_circuit() {
+                    "The circuit places no parts yet. Add a [parts.name] table with the part's file."
+                } else {
+                    viewer::empty_hint(!self.text.trim().is_empty())
+                },
             };
             self.viewer.show(ui, &status);
         });
