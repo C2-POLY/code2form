@@ -41,6 +41,9 @@ pub struct Viewer {
     pub camera: Camera,
     pub show_axes: bool,
     pub show_grid: bool,
+    /// The camera turns around the model by itself until a drag in the
+    /// view or the toggle stops it.
+    pub turntable: bool,
     bounds: Option<(Vec3, Vec3)>,
     grid: Grid,
     /// Width over height of the viewport, as last shown.
@@ -64,6 +67,7 @@ impl Viewer {
             camera: Camera::default(),
             show_axes: true,
             show_grid: true,
+            turntable: false,
             bounds: None,
             grid,
             aspect: 1.5,
@@ -144,6 +148,13 @@ impl Viewer {
         }
         self.aspect = rect.width() / rect.height();
         self.handle_input(ui, rect, &response);
+        if self.turntable {
+            // Time-based, so the speed holds whatever the frame rate; capped
+            // so a stalled frame does not jump.
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            self.camera.spin(dt);
+            ui.ctx().request_repaint();
+        }
 
         let view = self.camera.view();
         let projection = self.camera.projection(self.aspect, self.scene_radius());
@@ -176,6 +187,10 @@ impl Viewer {
     }
 
     fn handle_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
+        if response.drag_started() {
+            // Hand the camera back to the mouse.
+            self.turntable = false;
+        }
         let delta = response.drag_delta();
         if response.dragged() && delta != Vec2::ZERO {
             let shift = ui.input(|i| i.modifiers.shift);
@@ -329,5 +344,99 @@ pub fn empty_hint(has_text: bool) -> &'static str {
         "The script ran but produced no geometry. Its echo output and warnings are in the console."
     } else {
         "Write some code in the editor, for example \"cube(10);\", or open a .c2f or .scad file."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use c2f_geom::{RenderMesh, Stats};
+
+    const STATUS: Status = Status { rendering: false, failed: false, has_model: true, is_2d: false, empty_hint: "" };
+
+    /// Runs one frame of the view, filling an 800 by 600 window, with
+    /// `events` and a frame time of `dt` seconds.
+    fn frame(ctx: &egui::Context, viewer: &mut Viewer, events: Vec<egui::Event>, dt: f32) {
+        let input = egui::RawInput {
+            events,
+            predicted_dt: dt,
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| viewer.show(ui, &STATUS));
+        });
+    }
+
+    fn scene(size: f32) -> Scene {
+        let mut solid = RenderMesh::default();
+        solid.push_triangle([[0.0; 3], [size, 0.0, 0.0], [size, size, size]], [[1.0; 4]; 3]);
+        Scene {
+            solid,
+            highlights: RenderMesh::default(),
+            backgrounds: RenderMesh::default(),
+            is_2d: false,
+            stats: Stats::default(),
+            formats: &[],
+        }
+    }
+
+    #[test]
+    fn turntable_turns_the_yaw_and_keeps_tilt_and_zoom() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
+        let before = viewer.camera;
+        viewer.turntable = true;
+        for _ in 0..30 {
+            frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
+        }
+        assert!(viewer.turntable);
+        assert!((viewer.camera.yaw - before.yaw).abs() > 0.1, "the camera did not turn");
+        assert_eq!(
+            (viewer.camera.pitch, viewer.camera.distance, viewer.camera.target),
+            (before.pitch, before.distance, before.target)
+        );
+        assert!(ctx.has_requested_repaint(), "the turntable must keep frames coming");
+    }
+
+    #[test]
+    fn a_drag_in_the_view_stops_the_turntable() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        viewer.turntable = true;
+        let at = Pos2::new(400.0, 300.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at)], 1.0 / 60.0);
+        frame(&ctx, &mut viewer, vec![press(true)], 1.0 / 60.0);
+        assert!(viewer.turntable, "a press alone does not stop it");
+        for step in 1..=5 {
+            let to = at + Vec2::new(step as f32 * 10.0, 0.0);
+            frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(to)], 1.0 / 60.0);
+        }
+        assert!(!viewer.turntable);
+        frame(&ctx, &mut viewer, vec![press(false)], 1.0 / 60.0);
+        let yaw = viewer.camera.yaw;
+        frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
+        assert_eq!(viewer.camera.yaw, yaw, "the camera stays where the drag left it");
+    }
+
+    #[test]
+    fn a_new_render_keeps_the_turntable_going() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        viewer.turntable = true;
+        frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
+        viewer.set_scene(scene(10.0), true);
+        viewer.set_scene(scene(30.0), false);
+        assert!(viewer.turntable);
+        let yaw = viewer.camera.yaw;
+        frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
+        assert_ne!(viewer.camera.yaw, yaw);
     }
 }

@@ -7,7 +7,8 @@ programs saved as `.c2f` files, and Code2Form also opens `.scad` files as
 they are. Written in Rust, it renders as you type.
 
 - **Editor and live 3D view**: syntax highlighting, errors marked on their
-  line, re-render 400 ms after the last keystroke, orbit, pan and zoom;
+  line, re-render 400 ms after the last keystroke, orbit, pan and zoom,
+  and a turntable that turns the view around the model;
   Open Recent lists the last ten files opened or saved.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text

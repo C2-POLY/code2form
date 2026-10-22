@@ -589,6 +589,8 @@ impl StudioApp {
                     {
                         self.viewer.reset();
                     }
+                    ui.toggle_value(&mut self.viewer.turntable, "Turntable")
+                        .on_hover_text("Turn the view around the model (a drag in the view stops it)");
                 });
             });
         });
