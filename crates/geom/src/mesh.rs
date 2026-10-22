@@ -73,9 +73,34 @@ pub struct Rendered {
     pub warnings: Vec<String>,
     /// The geometry, for exports.
     pub model: Model,
+    /// The print's pauses, lowest first, within the solid's height; the 3MF
+    /// export carries them. Set with [`Rendered::with_pauses`].
+    pub pauses: Vec<c2f_eval::Pause>,
 }
 
 impl Rendered {
+    /// Keeps the pauses the evaluation asked for that fall inside the
+    /// solid's height, lowest first and one per height, and warns about the
+    /// others. A 2D or empty model is not printed, so it keeps none.
+    pub fn with_pauses(mut self, mut pauses: Vec<c2f_eval::Pause>) -> Self {
+        let Model::Solid(manifold) = &self.model else { return self };
+        let b = manifold.bounding_box();
+        pauses.retain(|pause| {
+            let inside = pause.z > b.min.z && pause.z < b.max.z;
+            if !inside {
+                self.warnings.push(format!(
+                    "Ignoring pause at z = {}: the model spans z = {} to {}",
+                    pause.z, b.min.z, b.max.z
+                ));
+            }
+            inside
+        });
+        pauses.sort_by(|a, b| a.z.total_cmp(&b.z));
+        pauses.dedup_by(|later, first| later.z == first.z);
+        self.pauses = pauses;
+        self
+    }
+
     /// The model's smallest and largest corner, at z 0 for a 2D model;
     /// `None` when it is empty.
     pub fn bounds(&self) -> Option<([f64; 3], [f64; 3])> {

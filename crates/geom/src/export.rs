@@ -1,5 +1,6 @@
 //! 3MF export: the solid as one mesh object, in millimeters, in a 3MF
-//! package (a ZIP archive of XML parts). SVG and DXF exports: the outlines
+//! package (a ZIP archive of XML parts), with the print's pauses for
+//! PrusaSlicer. SVG and DXF exports: the outlines
 //! of a 2D model, laid out as the reference implementation (release
 //! 2021.01) writes them.
 
@@ -32,11 +33,17 @@ impl Rendered {
             return None;
         }
         let model = model_xml(&vertices, &triangles);
-        Some(zip(&[
+        let mut files = vec![
             ("[Content_Types].xml", CONTENT_TYPES.as_bytes()),
             ("_rels/.rels", RELATIONSHIPS.as_bytes()),
             ("3D/3dmodel.model", model.as_bytes()),
-        ]))
+        ];
+        let pauses = pauses_xml(&self.pauses, manifold.bounding_box().min.z);
+        if let Some(pauses) = &pauses {
+            files.push((PRUSA_PAUSES, pauses.as_bytes()));
+            files.push((PRUSA_CONFIG, PRUSA_NO_SETTINGS.as_bytes()));
+        }
+        Some(zip(&files))
     }
 
     /// The 2D model as an SVG file, laid out as the reference writes it:
@@ -181,6 +188,62 @@ fn model_xml(vertices: &[[f64; 3]], triangles: &[[usize; 3]]) -> String {
     out
 }
 
+/// The part where PrusaSlicer keeps the G-code it inserts between layers.
+const PRUSA_PAUSES: &str = "Metadata/Prusa_Slicer_custom_gcode_per_print_z.xml";
+
+/// The part where PrusaSlicer keeps a project's settings. With it, a file
+/// opened from the Finder or dropped on the window can open as a project,
+/// which keeps the pauses; without it, PrusaSlicer imports the geometry
+/// alone.
+const PRUSA_CONFIG: &str = "Metadata/Slic3r_PE.config";
+
+/// Settings are `; key = value` lines; a comment without `=` sets none, so
+/// the printer, print and filament settings in use stay as they are.
+const PRUSA_NO_SETTINGS: &str = "; Code2Form sets no settings: this part only lets PrusaSlicer open the file as a project, with its print pauses.\n";
+
+/// PrusaSlicer pauses before the first layer whose top reaches a pause's
+/// `print_z`. Just above the height asked for, that is the layer which
+/// covers it, whatever the layer height, when the height is the top of a
+/// layer.
+const PAUSE_ABOVE: f64 = 0.01;
+
+/// The pauses as PrusaSlicer reads them (`M601`, with the message shown on
+/// the printer), or `None` when there are none. PrusaSlicer sets the
+/// model's bottom on the bed, so heights count from `bottom`.
+fn pauses_xml(pauses: &[c2f_eval::Pause], bottom: f64) -> Option<String> {
+    if pauses.is_empty() {
+        return None;
+    }
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<custom_gcodes_per_print_z>\n");
+    for pause in pauses {
+        // Rounded to a micrometer, so that 19.4 - 0 + 0.01 reads 19.41.
+        let print_z = ((pause.z - bottom + PAUSE_ABOVE) * 1e6).round() / 1e6;
+        let _ = writeln!(
+            out,
+            "<code print_z=\"{print_z:?}\" type=\"1\" extruder=\"1\" color=\"\" extra=\"{}\" gcode=\"M601\"/>",
+            xml_escape(&pause.message)
+        );
+    }
+    out.push_str("<mode value=\"SingleExtruder\"/>\n</custom_gcodes_per_print_z>\n");
+    Some(out)
+}
+
+fn xml_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            '\n' => out.push_str("&#10;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// A ZIP archive of deflated entries, dated 1980-01-01 so that the same
 /// model always gives the same file. Without ZIP64, each part must stay
 /// under 4 GiB, some 40 million triangles.
@@ -281,6 +344,53 @@ mod tests {
         for (&(a, b), &count) in &edges {
             assert_eq!((count, edges.get(&(b, a))), (1, Some(&1)), "edge {a}-{b}");
         }
+    }
+
+    fn pauses_part(src: &str) -> (Option<String>, Vec<String>) {
+        let program = c2f_eval::Program::load(src, std::path::Path::new("t.scad"), &[]).expect("parses");
+        let output = c2f_eval::evaluate(&program);
+        let rendered = crate::render(&output.nodes).with_pauses(output.pauses);
+        let entries = crate::import::zip::entries(&rendered.three_mf().unwrap()).unwrap();
+        let config = entries.iter().any(|(name, _)| name == PRUSA_CONFIG);
+        let part = entries.into_iter().find(|(name, _)| name == PRUSA_PAUSES);
+        assert_eq!(config, part.is_some(), "the settings part comes with the pauses");
+        (part.map(|(_, xml)| String::from_utf8(xml).unwrap()), rendered.warnings)
+    }
+
+    #[test]
+    fn pauses_count_from_the_bed_just_above_the_height_asked() {
+        // PrusaSlicer sets the bottom, here at z = -5, on the bed.
+        let (xml, warnings) = pauses_part(
+            "translate([0, 0, -5]) cube(20);
+            pause(14.4, \"Box <magnets> & \\\"nuts\\\"\");
+            pause(-2);
+            pause(-2, \"twice\");
+            pause(-5);
+            pause(15);",
+        );
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("z = -5"), "{warnings:?}");
+        assert_eq!(
+            xml.unwrap(),
+            concat!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<custom_gcodes_per_print_z>\n",
+                "<code print_z=\"3.01\" type=\"1\" extruder=\"1\" color=\"\" extra=\"\" gcode=\"M601\"/>\n",
+                "<code print_z=\"19.41\" type=\"1\" extruder=\"1\" color=\"\" ",
+                "extra=\"Box &lt;magnets&gt; &amp; &quot;nuts&quot;\" gcode=\"M601\"/>\n",
+                "<mode value=\"SingleExtruder\"/>\n</custom_gcodes_per_print_z>\n",
+            )
+        );
+    }
+
+    #[test]
+    fn the_settings_part_sets_nothing() {
+        // PrusaSlicer reads a setting from a line `; key = value`.
+        assert!(PRUSA_NO_SETTINGS.starts_with("; ") && !PRUSA_NO_SETTINGS.contains('='));
+    }
+
+    #[test]
+    fn no_pauses_no_pauses_part() {
+        assert_eq!(pauses_part("cube(5);"), (None, Vec::new()));
     }
 
     #[test]

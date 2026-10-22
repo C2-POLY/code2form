@@ -266,7 +266,8 @@ fn pipeline(
         return Err(None);
     }
     // Data files (import(), surface()) are named relative to the main file.
-    let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")));
+    let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")))
+        .with_pauses(output.pauses);
     console.extend(rendered.warnings.iter().map(|text| Line::new(Level::Warning, text.clone())));
     Ok(rendered)
 }

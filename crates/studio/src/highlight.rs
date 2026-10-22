@@ -63,6 +63,7 @@ const MODULES: &[&str] = &[
     "group",
     "roof",
     "intersection_for",
+    "pause",
 ];
 
 const FUNCTIONS: &[&str] = &[
