@@ -20,7 +20,7 @@ use crate::console::{Level, Line};
 use crate::worker::Scene;
 
 /// The color c2f-geom gives what no `color()` colors.
-const UNCOLORED: [f32; 4] = [0.976, 0.843, 0.173, 1.0];
+const UNCOLORED: [f32; 4] = c2f_geom::DEFAULT_COLOR;
 
 /// Colors for parts that leave some of their shapes uncolored, one per
 /// part in turn, so that each stands apart from the next.

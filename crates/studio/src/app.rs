@@ -28,13 +28,14 @@ use crate::recent::RecentFiles;
 use crate::tabs::{self, Owners, Session, Shelf};
 use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
-use crate::settings::{self, Settings};
+use crate::settings::{self, Placement, Settings};
 use crate::theme;
 use crate::viewer::{self, PauseEdit, Viewer};
 use crate::inspect;
 use crate::mount::{self, Mount};
 use crate::pick::{self, Hit};
 use crate::prefs::WireMargin;
+use crate::window;
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
@@ -62,6 +63,10 @@ const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Ke
 const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::G);
 const CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
 const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+const ZOOM_IN: KeyboardShortcut = egui::gui_zoom::kb_shortcuts::ZOOM_IN;
+const ZOOM_IN_SECONDARY: KeyboardShortcut = egui::gui_zoom::kb_shortcuts::ZOOM_IN_SECONDARY;
+const ZOOM_OUT: KeyboardShortcut = egui::gui_zoom::kb_shortcuts::ZOOM_OUT;
+const ZOOM_RESET: KeyboardShortcut = egui::gui_zoom::kb_shortcuts::ZOOM_RESET;
 
 /// The app icons in the settings, in points, and how many in a row.
 const ICON_CHOICE: f32 = 56.0;
@@ -69,21 +74,37 @@ const ICONS_PER_ROW: usize = 5;
 /// The height of the settings' pages, so that the window keeps its size.
 const SETTINGS_HEIGHT: f32 = 330.0;
 
+/// The model colors the settings offer, besides the color picker.
+const MODEL_COLORS: [(&str, [u8; 3]); 8] = [
+    ("Yellow", settings::MODEL_COLOR),
+    ("Orange", [240, 140, 50]),
+    ("Red", [214, 72, 66]),
+    ("Green", [96, 186, 98]),
+    ("Blue", [72, 140, 226]),
+    ("Violet", [150, 104, 214]),
+    ("Gray", [168, 174, 184]),
+    ("White", [238, 238, 236]),
+];
+
 /// The pages of the settings window.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
     AppIcon,
     Editor,
+    View,
+    Export,
     Libraries,
 }
 
 impl Section {
-    const ALL: [Section; 3] = [Section::AppIcon, Section::Editor, Section::Libraries];
+    const ALL: [Section; 5] = [Section::AppIcon, Section::Editor, Section::View, Section::Export, Section::Libraries];
 
     fn name(self) -> &'static str {
         match self {
             Section::AppIcon => "App Icon",
             Section::Editor => "Editor",
+            Section::View => "View",
+            Section::Export => "Export",
             Section::Libraries => "Libraries",
         }
     }
@@ -93,6 +114,12 @@ impl Section {
 enum FolderEdit {
     Add,
     Remove(usize),
+}
+
+/// A change to the folder exports go to.
+enum ExportFolderEdit {
+    NextToTheDesign,
+    Choose,
 }
 
 /// Something that would lose the active tab's unsaved edits, waiting for
@@ -341,6 +368,11 @@ pub struct StudioApp {
     icon_choices: Vec<TextureHandle>,
     /// The icon at the toolbar's left, in the tint picked.
     logo: TextureHandle,
+    /// The window's size and place as last seen, and whether it is
+    /// maximized; the settings take it when they are saved.
+    window: Option<(Placement, bool)>,
+    /// The zoom of the last frame, which the window was measured with.
+    measured_zoom: f32,
     confirm: Option<Pending>,
     allow_close: bool,
     title: String,
@@ -352,6 +384,8 @@ impl StudioApp {
     /// line or the Finder), the last of them active.
     pub fn new(cc: &eframe::CreationContext<'_>, paths: Vec<PathBuf>, settings: Settings) -> Self {
         theme::apply(&cc.egui_ctx);
+        // ⌘+ and ⌘− change the interface size in the settings instead.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         open_events::wake(&cc.egui_ctx);
         // Launched by opening files in the Finder.
         let paths = paths.into_iter().chain(open_events::take()).collect();
@@ -401,6 +435,8 @@ impl StudioApp {
             settings_open: false,
             settings_section: Section::AppIcon,
             icon_choices: Vec::new(),
+            window: None,
+            measured_zoom: ctx.zoom_factor(),
             confirm: None,
             allow_close: false,
             title: String::new(),
@@ -446,11 +482,11 @@ impl StudioApp {
         self.shelf.push(&mut self.doc, tab);
     }
 
-    /// An untitled tab, its view as the settings say.
+    /// An untitled tab, its view and editor as the settings say.
     fn fresh_tab(&mut self) -> Tab {
         let mut tab = Tab::new(self.next_id, self.gl.as_ref());
         self.next_id += 1;
-        apply_view_settings(&self.settings, &mut tab.viewer);
+        apply_tab_settings(&self.settings, &mut tab);
         tab
     }
 
@@ -1535,7 +1571,9 @@ impl StudioApp {
             .set_title(format!("Export {name}"))
             .add_filter(name, &[extension])
             .set_file_name(format!("{stem}.{extension}"));
-        if let Some(dir) = self.doc.directory() {
+        // The folder picked in the settings, while it exists.
+        let folder = self.settings.export_folder.clone().filter(|folder| folder.is_dir());
+        if let Some(dir) = folder.or_else(|| self.doc.directory()) {
             dialog = dialog.set_directory(dir);
         }
         if let Some(target) = dialog.save_file() {
@@ -1544,7 +1582,7 @@ impl StudioApp {
             if self.exportable != Some(self.doc.id) {
                 self.render_now();
             }
-            self.worker.export(target, format);
+            self.worker.export(target, format, self.settings.binary_stl);
         }
     }
 
@@ -1641,6 +1679,15 @@ impl StudioApp {
         });
         if settings {
             self.settings_open = true;
+        }
+        let [zoom_in, zoom_in_secondary, zoom_out, zoom_reset] =
+            ctx.input_mut(|i| [ZOOM_IN, ZOOM_IN_SECONDARY, ZOOM_OUT, ZOOM_RESET].map(|s| i.consume_shortcut(&s)));
+        let steps = i32::from(zoom_in || zoom_in_secondary) - i32::from(zoom_out);
+        let size =
+            if zoom_reset { Some(1.0) } else { (steps != 0).then(|| zoom_step(self.settings.interface_size, steps)) };
+        if let Some(size) = size.filter(|&size| size != self.settings.interface_size) {
+            self.settings.interface_size = size;
+            ctx.set_zoom_factor(size);
         }
         if save_as {
             self.save_as();
@@ -1739,8 +1786,9 @@ impl StudioApp {
                 let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
                     ui.menu_button("Export", |ui| {
                         // Solids above the separator, 2D models below.
+                        let stl = if self.settings.binary_stl { "A binary STL" } else { "An ASCII STL" };
                         let entries = [
-                            (Format::Stl, "An ASCII STL"),
+                            (Format::Stl, stl),
                             (Format::ThreeMf, "A 3MF package, in millimeters"),
                             (Format::Svg, "An SVG drawing, in millimeters"),
                             (Format::Dxf, "A DXF drawing of line segments"),
@@ -2180,23 +2228,23 @@ impl StudioApp {
         }
     }
 
-    /// Gives the app, the view and the render worker the settings.
+    /// Gives the app, the tabs and the render worker the settings.
     fn apply_settings(&mut self, ctx: &egui::Context) {
-        self.apply_view_settings();
+        self.apply_tab_settings();
         let settings = &self.settings;
         theme::set_code_size(ctx, settings.code_size);
+        ctx.set_zoom_factor(settings.interface_size);
         self.worker.set_libraries(settings.library_folders.clone());
         self.catalogue.set_libraries(settings.library_folders.clone());
         c2f_geom::set_font_folders(settings.font_folders.clone());
     }
 
-    /// Gives every tab's view the grid, axes and layer height of the
-    /// settings.
-    fn apply_view_settings(&mut self) {
-        apply_view_settings(&self.settings, &mut self.doc.viewer);
+    /// Gives every tab the settings of its view and its editor.
+    fn apply_tab_settings(&mut self) {
+        apply_tab_settings(&self.settings, &mut self.doc);
         for index in 0..self.shelf.len() {
             if let Some(tab) = self.shelf.other_mut(index) {
-                apply_view_settings(&self.settings, &mut tab.viewer);
+                apply_tab_settings(&self.settings, tab);
             }
         }
     }
@@ -2209,15 +2257,37 @@ impl StudioApp {
         let view = (viewer.show_grid, viewer.show_axes, viewer.layer_height);
         if view != (self.settings.show_grid, self.settings.show_axes, self.settings.layer_height) {
             (self.settings.show_grid, self.settings.show_axes, self.settings.layer_height) = view;
-            self.apply_view_settings();
+            self.apply_tab_settings();
         }
+        // Kept aside, not to save the settings at each step of a move.
+        let zoom = ctx.zoom_factor();
+        if zoom == self.measured_zoom {
+            if let Some(window) = window::current(ctx) {
+                self.window = Some(window);
+            }
+        }
+        self.measured_zoom = zoom;
         if self.settings == self.saved_settings || ctx.input(|i| i.pointer.any_down()) {
             return;
         }
+        self.note_window();
         if let Err(err) = self.settings.save(self.settings_store.as_deref()) {
             self.doc.console.log(Level::Warning, format!("Cannot save the settings: {err}"));
         }
         self.saved_settings = self.settings.clone();
+    }
+
+    /// Gives the settings the window's size and place. A maximized window
+    /// keeps the size and place it had before.
+    fn note_window(&mut self) {
+        match self.window {
+            Some((placement, false)) => {
+                self.settings.window = Some(placement);
+                self.settings.window_maximized = false;
+            }
+            Some((_, true)) => self.settings.window_maximized = true,
+            None => {}
+        }
     }
 
     fn settings_dialog(&mut self, ctx: &egui::Context) {
@@ -2231,6 +2301,7 @@ impl StudioApp {
         let mut chosen = None;
         let mut libraries = None;
         let mut fonts = None;
+        let mut export_folder = None;
         let mut done = false;
         let before = self.settings.clone();
         let modal = egui::Modal::new(Id::new("settings")).show(ctx, |ui| {
@@ -2263,6 +2334,8 @@ impl StudioApp {
                     match self.settings_section {
                         Section::AppIcon => chosen = self.icon_page(ui),
                         Section::Editor => editor_page(ui, ctx, &mut self.settings),
+                        Section::View => view_page(ui, ctx, &mut self.settings),
+                        Section::Export => export_folder = export_page(ui, &mut self.settings),
                         Section::Libraries => (libraries, fonts) = libraries_page(ui, &self.settings),
                     }
                 });
@@ -2280,6 +2353,26 @@ impl StudioApp {
         }
         if self.settings.code_size != before.code_size {
             theme::set_code_size(ctx, self.settings.code_size);
+        }
+        if self.settings.interface_size != before.interface_size {
+            ctx.set_zoom_factor(self.settings.interface_size);
+        }
+        let tab = |s: &Settings| (s.model_color, s.indent_width);
+        if tab(&self.settings) != tab(&before) {
+            self.apply_tab_settings();
+        }
+        match export_folder {
+            Some(ExportFolderEdit::NextToTheDesign) => self.settings.export_folder = None,
+            Some(ExportFolderEdit::Choose) => {
+                let mut dialog = rfd::FileDialog::new().set_title("Export to this folder");
+                if let Some(folder) = self.settings.export_folder.as_deref().filter(|f| f.is_dir()) {
+                    dialog = dialog.set_directory(folder);
+                }
+                if let Some(folder) = dialog.pick_folder() {
+                    self.settings.export_folder = Some(folder);
+                }
+            }
+            None => {}
         }
         if !self.settings.render_while_typing {
             self.doc.render_deadline = None;
@@ -2451,6 +2544,7 @@ impl eframe::App for StudioApp {
 
     fn on_exit(&mut self, gl: Option<&glow::Context>) {
         self.save_session();
+        self.note_window();
         if self.settings != self.saved_settings {
             let _ = self.settings.save(self.settings_store.as_deref());
         }
@@ -2543,11 +2637,15 @@ fn tab_step(input: &mut egui::InputState) -> Option<bool> {
     step
 }
 
-/// Gives `viewer` the grid, axes and layer height of `settings`.
-fn apply_view_settings(settings: &Settings, viewer: &mut Viewer) {
+/// Gives `tab` the grid, axes, layer height and model color of
+/// `settings`, and their indent width.
+fn apply_tab_settings(settings: &Settings, tab: &mut Tab) {
+    let viewer = &mut tab.viewer;
     viewer.show_grid = settings.show_grid;
     viewer.show_axes = settings.show_axes;
     viewer.layer_height = settings.layer_height;
+    viewer.model_color = color_floats(settings.model_color);
+    tab.editor.indent_width = settings.indent_width;
 }
 
 /// A settings section's title and what it is for.
@@ -2569,6 +2667,13 @@ fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) 
             .trailing_fill(true);
         ui.add(slider);
     });
+    ui.horizontal(|ui| {
+        ui.label("Tab indents by");
+        for width in settings::INDENT_WIDTHS {
+            ui.selectable_value(&mut settings.indent_width, width, width.to_string());
+        }
+        ui.label("spaces");
+    });
     ui.add_space(14.0);
     let shortcut = ctx.format_shortcut(&RENDER);
     section_heading(
@@ -2587,10 +2692,75 @@ fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) 
             ui.add(slider);
         });
     });
+}
+
+/// The model's color, the interface's size and what else is kept.
+fn view_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
+    section_heading(ui, "Model color", "The color of the parts without color().");
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (name, color) in MODEL_COLORS {
+            if color_swatch(ui, color, settings.model_color == color).on_hover_text(name).clicked() {
+                settings.model_color = color;
+            }
+        }
+        ui.add_space(4.0);
+        egui::color_picker::color_edit_button_srgb(ui, &mut settings.model_color).on_hover_text("Any color");
+    });
     ui.add_space(14.0);
-    ui.label(
-        RichText::new("The grid, the axes and the layer height are kept as you leave them.").color(theme::TEXT_DIM),
+    let keys = format!(
+        "{} and {} change it too; {} sets it back to 100%.",
+        ctx.format_shortcut(&ZOOM_IN),
+        ctx.format_shortcut(&ZOOM_OUT),
+        ctx.format_shortcut(&ZOOM_RESET)
     );
+    section_heading(ui, "Interface size", &keys);
+    ui.horizontal(|ui| {
+        // Eight sizes on one row.
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().button_padding.x = 5.0;
+        let (low, high) = (*settings::INTERFACE_SIZES.start(), *settings::INTERFACE_SIZES.end());
+        for tenths in (low * 10.0).round() as u32..=(high * 10.0).round() as u32 {
+            let size = tenths as f32 / 10.0;
+            let selected = (settings.interface_size - size).abs() < 0.01;
+            if ui.selectable_label(selected, format!("{}%", tenths * 10)).clicked() {
+                settings.interface_size = size;
+            }
+        }
+    });
+    ui.add_space(14.0);
+    let kept = "The grid, the axes, the layer height and the window's size and place are kept as you leave them.";
+    ui.label(RichText::new(kept).color(theme::TEXT_DIM));
+}
+
+/// The STL format and where exports go; the change asked for in the folder.
+fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
+    section_heading(ui, "STL files", "3D printers' slicers read both.");
+    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, as OpenSCAD writes it");
+    ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
+    ui.add_space(14.0);
+    section_heading(ui, "Export folder", "Where Export… opens.");
+    let mut edit = None;
+    if ui.radio(settings.export_folder.is_none(), "Next to the design").clicked() {
+        edit = Some(ExportFolderEdit::NextToTheDesign);
+    }
+    ui.horizontal(|ui| {
+        let folder = settings.export_folder.as_deref();
+        if ui.radio(folder.is_some(), "In this folder:").clicked() && folder.is_none() {
+            edit = Some(ExportFolderEdit::Choose);
+        }
+        if let Some(folder) = folder {
+            let missing = !folder.is_dir();
+            let color = if missing { theme::WARNING } else { theme::TEXT };
+            let label = ui.add(egui::Label::new(RichText::new(display_folder(folder)).color(color)).truncate());
+            let note = if missing { " (not found: Export… opens next to the design)" } else { "" };
+            label.on_hover_text(format!("{}{note}", folder.display()));
+        }
+    });
+    if ui.button("Choose Folder…").clicked() {
+        edit = Some(ExportFolderEdit::Choose);
+    }
+    edit
 }
 
 /// The library and font folders; the change asked for in each list.
@@ -2698,6 +2868,31 @@ fn icon_choice(ui: &mut egui::Ui, texture: &TextureHandle, tint: Tint, selected:
         color,
     );
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A model color the settings offer, ringed when picked.
+fn color_swatch(ui: &mut egui::Ui, color: [u8; 3], selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
+    let painter = ui.painter();
+    let [r, g, b] = color;
+    painter.rect_filled(rect.shrink(3.0), CornerRadius::same(5), Color32::from_rgb(r, g, b));
+    if selected || response.hovered() {
+        let (stroke, width): (Color32, f32) = if selected { (theme::ACCENT, 2.0) } else { (theme::BORDER, 1.5) };
+        painter.rect_stroke(rect, CornerRadius::same(7), Stroke::new(width, stroke), StrokeKind::Inside);
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// sRGB bytes as the renderer's floats.
+fn color_floats(color: [u8; 3]) -> [f32; 3] {
+    color.map(|c| f32::from(c) / 255.0)
+}
+
+/// The interface size `steps` tenths up (or down), within the settings'
+/// range, in whole tenths as egui's own zoom keys.
+fn zoom_step(size: f32, steps: i32) -> f32 {
+    let size = ((size * 10.0).round() + steps as f32) / 10.0;
+    size.clamp(*settings::INTERFACE_SIZES.start(), *settings::INTERFACE_SIZES.end())
 }
 
 fn toolbar_separator(ui: &mut egui::Ui) {
@@ -2824,6 +3019,15 @@ mod tests {
     }
 
     #[test]
+    fn zoom_keys_step_in_tenths_within_the_range() {
+        assert_eq!(zoom_step(1.0, 1), 1.1);
+        assert_eq!(zoom_step(1.0, -1), 0.9);
+        assert_eq!(zoom_step(1.25, 1), 1.4, "back on a tenth");
+        assert_eq!(zoom_step(1.5, 1), 1.5);
+        assert_eq!(zoom_step(0.8, -1), 0.8);
+    }
+
+    #[test]
     fn formats_durations() {
         assert_eq!(format_duration(Duration::from_millis(42)), "42 ms");
         assert_eq!(format_duration(Duration::from_millis(1500)), "1.50 s");
@@ -2901,6 +3105,25 @@ mod tests {
         app.close_tab(&ctx, 0);
         assert_eq!(open_files(&app), (files(&[""]), 0));
         assert!(app.doc.is_blank());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_tab_takes_the_model_color_and_the_indent_width() {
+        let dir = folder("tab-settings");
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, None, vec![dir.join("a.c2f"), dir.join("b.c2f")]);
+        app.settings.model_color = [255, 0, 0];
+        app.settings.indent_width = 8;
+        app.apply_tab_settings();
+        // And a tab opened afterwards.
+        app.new_tab(&ctx);
+        assert_eq!(app.shelf.len(), 3);
+        for index in 0..3 {
+            let tab = tab(&app, index);
+            assert_eq!(tab.viewer.model_color, [1.0, 0.0, 0.0], "tab {index}");
+            assert_eq!(tab.editor.indent_width, 8, "tab {index}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

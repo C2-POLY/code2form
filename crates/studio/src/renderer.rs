@@ -22,7 +22,7 @@ const ATTR_NORMAL: u32 = 1;
 const ATTR_COLOR: u32 = 2;
 
 /// The print's pauses: a translucent plane and a bright outline at each
-/// pause height, in cyan, which stands out from the yellow model.
+/// pause height, in cyan, which stands out from the default yellow model.
 const PAUSE_PLANE: [f32; 4] = [0.20, 0.78, 1.0, 0.30];
 const PAUSE_OUTLINE: [f32; 4] = [0.45, 0.90, 1.0, 1.0];
 
@@ -44,6 +44,9 @@ pub struct Frame {
     pub show_pauses: bool,
     /// The layer view: what lies above this height is not drawn.
     pub cut: Option<f32>,
+    /// The color of the parts without `color()`, in place of
+    /// `c2f_geom::DEFAULT_COLOR`.
+    pub model_color: [f32; 3],
 }
 
 /// The XY grid, sized to the model.
@@ -97,6 +100,8 @@ struct MeshProgram {
     pass: Option<glow::UniformLocation>,
     cut: Option<glow::UniformLocation>,
     cut_face: Option<glow::UniformLocation>,
+    default_color: Option<glow::UniformLocation>,
+    model_color: Option<glow::UniformLocation>,
 }
 
 struct LineProgram {
@@ -183,6 +188,8 @@ impl Renderer {
                     pass: gl.get_uniform_location(mesh, "u_pass"),
                     cut: gl.get_uniform_location(mesh, "u_cut"),
                     cut_face: gl.get_uniform_location(mesh, "u_cut_face"),
+                    default_color: gl.get_uniform_location(mesh, "u_default_color"),
+                    model_color: gl.get_uniform_location(mesh, "u_model_color"),
                     program: mesh,
                 },
                 line: LineProgram {
@@ -416,6 +423,8 @@ impl Renderer {
             gl.uniform_matrix_4_f32_slice(self.mesh.view.as_ref(), false, &frame.view.to_cols_array());
             gl.uniform_matrix_4_f32_slice(self.mesh.projection.as_ref(), false, &frame.projection.to_cols_array());
             gl.uniform_1_i32(self.mesh.pass.as_ref(), pass as i32);
+            gl.uniform_3_f32_slice(self.mesh.default_color.as_ref(), &c2f_geom::DEFAULT_COLOR[..3]);
+            gl.uniform_3_f32_slice(self.mesh.model_color.as_ref(), &frame.model_color);
             gl.bind_vertex_array(Some(buffer.vao));
             gl.draw_arrays(glow::TRIANGLES, 0, buffer.count);
         }
@@ -549,7 +558,7 @@ unsafe fn upload_mesh(gl: &glow::Context, mesh: &RenderMesh) -> Option<GpuBuffer
     for i in 0..n {
         data.extend(mesh.positions[i]);
         data.extend(mesh.normals.get(i).copied().unwrap_or([0.0, 0.0, 1.0]));
-        data.extend(mesh.colors.get(i).copied().unwrap_or([0.976, 0.843, 0.173, 1.0]));
+        data.extend(mesh.colors.get(i).copied().unwrap_or(c2f_geom::DEFAULT_COLOR));
     }
     unsafe { upload(gl, &data, &[(ATTR_POSITION, 3, 0), (ATTR_NORMAL, 3, 3), (ATTR_COLOR, 4, 6)], MESH_FLOATS) }
 }
@@ -640,6 +649,8 @@ in vec3 a_normal;
 in vec4 a_color;
 uniform mat4 u_view;
 uniform mat4 u_projection;
+uniform vec3 u_default_color;
+uniform vec3 u_model_color;
 out vec3 v_position;
 out vec3 v_normal;
 out vec4 v_color;
@@ -649,7 +660,9 @@ void main() {
     vec4 p = u_view * vec4(a_position, 1.0);
     v_position = p.xyz;
     v_normal = mat3(u_view) * a_normal;
-    v_color = a_color;
+    // The parts without color() in the color picked in the settings.
+    bool plain = all(lessThan(abs(a_color.rgb - u_default_color), vec3(0.002)));
+    v_color = plain ? vec4(u_model_color, a_color.a) : a_color;
     gl_Position = u_projection * p;
 }
 "#;

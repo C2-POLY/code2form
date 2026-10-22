@@ -126,6 +126,47 @@ impl Rendered {
     /// component with 48 characters, and slicers built on admesh
     /// (PrusaSlicer, Bambu Studio) read each one into 31 and reject the file.
     pub fn stl(&self) -> Option<String> {
+        let mut out = String::from("solid Code2Form\n");
+        self.facets(|n, corners| {
+            let _ = writeln!(out, "  facet normal {:?} {:?} {:?}", n[0], n[1], n[2]);
+            out.push_str("    outer loop\n");
+            for p in corners {
+                let _ = writeln!(out, "      vertex {:?} {:?} {:?}", p[0], p[1], p[2]);
+            }
+            out.push_str("    endloop\n  endfacet\n");
+        })?;
+        out.push_str("endsolid Code2Form\n");
+        Some(out)
+    }
+
+    /// The model as a binary STL file: an 80-byte header, the triangle
+    /// count, then 50 bytes a triangle (the normal and the three corners as
+    /// little-endian 32-bit floats, and two bytes of attributes, zero).
+    /// About a fifth of the ASCII file's size. `None` for an empty or 2D
+    /// model, or one of more than 4 billion triangles.
+    pub fn stl_binary(&self) -> Option<Vec<u8>> {
+        // Readers take a file that starts with `solid` for ASCII.
+        let mut out = vec![b' '; 80];
+        out[..STL_HEADER.len()].copy_from_slice(STL_HEADER);
+        // The count, written once known.
+        out.extend([0; 4]);
+        let mut count = 0usize;
+        self.facets(|n, corners| {
+            for v in std::iter::once(n).chain(corners) {
+                for c in v {
+                    out.extend((c as f32).to_le_bytes());
+                }
+            }
+            out.extend([0, 0]);
+            count += 1;
+        })?;
+        out[80..84].copy_from_slice(&u32::try_from(count).ok()?.to_le_bytes());
+        Some(out)
+    }
+
+    /// Calls `facet` with each triangle's unit normal and corners, counter-
+    /// clockwise seen from outside. `None` for an empty or 2D model.
+    fn facets(&self, mut facet: impl FnMut([f64; 3], [[f64; 3]; 3])) -> Option<()> {
         let Model::Solid(manifold) = &self.model else { return None };
         let mesh = manifold.get_mesh_gl64(-1);
         if mesh.tri_verts.is_empty() {
@@ -136,21 +177,67 @@ impl Rendered {
             let i = i as usize * stride;
             [mesh.vert_properties[i], mesh.vert_properties[i + 1], mesh.vert_properties[i + 2]]
         };
-        let mut out = String::from("solid Code2Form\n");
         for tri in mesh.tri_verts.chunks(3) {
             let [a, b, c] = [vertex(tri[0]), vertex(tri[1]), vertex(tri[2])];
             let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
             let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
             let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(f64::MIN_POSITIVE);
-            let _ = writeln!(out, "  facet normal {:?} {:?} {:?}", n[0] / length, n[1] / length, n[2] / length);
-            out.push_str("    outer loop\n");
-            for p in [a, b, c] {
-                let _ = writeln!(out, "      vertex {:?} {:?} {:?}", p[0], p[1], p[2]);
-            }
-            out.push_str("    endloop\n  endfacet\n");
+            facet([n[0] / length, n[1] / length, n[2] / length], [a, b, c]);
         }
-        out.push_str("endsolid Code2Form\n");
-        Some(out)
+        Some(())
+    }
+}
+
+/// The start of a binary STL's header; spaces fill the rest.
+const STL_HEADER: &[u8] = b"Code2Form binary STL";
+
+#[cfg(test)]
+mod tests {
+    fn rendered(src: &str) -> super::Rendered {
+        let program = c2f_eval::Program::load(src, std::path::Path::new("t.scad"), &[]).expect("parses");
+        crate::render(&c2f_eval::evaluate(&program).nodes)
+    }
+
+    /// The numbers after `word` on each line of an ASCII STL, as floats.
+    fn ascii_numbers(text: &str, word: &str) -> Vec<[f32; 3]> {
+        text.lines()
+            .filter_map(|line| line.trim().strip_prefix(word))
+            .map(|rest| {
+                let v: Vec<f32> = rest.split_whitespace().map(|w| w.parse::<f64>().unwrap() as f32).collect();
+                [v[0], v[1], v[2]]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn binary_stl_reads_back_as_the_ascii_one() {
+        let model = rendered("difference() { cube(10); translate([2, 2, 2]) sphere(3, $fn = 12); }");
+        let bytes = model.stl_binary().unwrap();
+        let header = &bytes[..80];
+        assert!(header.starts_with(b"Code2Form binary STL") && !header.starts_with(b"solid"));
+        let count = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
+        assert_eq!(count, model.stats.triangles);
+        assert_eq!(bytes.len(), 84 + 50 * count);
+
+        let float = |at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let (mut normals, mut corners) = (Vec::new(), Vec::new());
+        for facet in (84..bytes.len()).step_by(50) {
+            let vector = |k: usize| [float(facet + 12 * k), float(facet + 12 * k + 4), float(facet + 12 * k + 8)];
+            normals.push(vector(0));
+            corners.extend([vector(1), vector(2), vector(3)]);
+            assert_eq!(bytes[facet + 48..facet + 50], [0, 0], "attributes");
+        }
+        let text = model.stl().unwrap();
+        assert_eq!(normals, ascii_numbers(&text, "facet normal"));
+        assert_eq!(corners, ascii_numbers(&text, "vertex"));
+    }
+
+    #[test]
+    fn no_stl_for_flat_or_empty_models() {
+        for src in ["square(5);", "cube(0);", ""] {
+            let model = rendered(src);
+            assert_eq!((model.stl(), model.stl_binary()), (None, None), "{src}");
+        }
     }
 }

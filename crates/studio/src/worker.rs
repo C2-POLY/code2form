@@ -94,7 +94,7 @@ pub enum Reply {
 
 enum Request {
     Render { generation: u64, source: String, path: PathBuf, values: Vec<(String, Literal)> },
-    Export { target: PathBuf, format: Format },
+    Export { target: PathBuf, format: Format, binary_stl: bool },
     Libraries(Vec<PathBuf>),
 }
 
@@ -176,9 +176,10 @@ impl Worker {
         let _ = self.requests.send(Request::Libraries(folders));
     }
 
-    /// Writes the last good model to `target` in `format`.
-    pub fn export(&self, target: PathBuf, format: Format) {
-        let _ = self.requests.send(Request::Export { target, format });
+    /// Writes the last good model to `target` in `format`; an STL in
+    /// binary with `binary_stl`, otherwise in ASCII.
+    pub fn export(&self, target: PathBuf, format: Format, binary_stl: bool) {
+        let _ = self.requests.send(Request::Export { target, format, binary_stl });
     }
 
     pub fn latest(&self) -> u64 {
@@ -203,7 +204,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         for request in std::iter::once(first).chain(requests.try_iter()) {
             match request {
                 Request::Render { generation, source, path, values } => render = Some((generation, source, path, values)),
-                Request::Export { target, format } => exports.push((target, format)),
+                Request::Export { target, format, binary_stl } => exports.push((target, format, binary_stl)),
                 Request::Libraries(folders) => {
                     library_paths = folders.into_iter().chain(defaults.iter().cloned()).collect()
                 }
@@ -241,8 +242,8 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
                 }
             }
         }
-        for (target, format) in exports {
-            let result = export(shown.as_ref(), &target, format);
+        for (target, format, binary_stl) in exports {
+            let result = export(shown.as_ref(), &target, format, binary_stl);
             if replies.send(Reply::Exported { target, result }).is_err() {
                 return;
             }
@@ -488,9 +489,10 @@ fn pipeline(
     Ok(rendered)
 }
 
-fn export(shown: Option<&Rendered>, target: &Path, format: Format) -> Result<String, String> {
+fn export(shown: Option<&Rendered>, target: &Path, format: Format, binary_stl: bool) -> Result<String, String> {
     let rendered = shown.ok_or("there is no model to export yet")?;
     let bytes = catch_unwind(AssertUnwindSafe(|| match format {
+        Format::Stl if binary_stl => rendered.stl_binary(),
         Format::Stl => rendered.stl().map(String::into_bytes),
         Format::ThreeMf => rendered.three_mf(),
         Format::Svg => rendered.svg().map(String::into_bytes),
@@ -574,21 +576,25 @@ mod tests {
         assert_eq!(scene.solid.positions.len(), scene.solid.normals.len());
 
         for (format, magic) in [(Format::Stl, &b"solid"[..]), (Format::ThreeMf, &b"PK\x03\x04"[..])] {
-            let (result, bytes) = export_with(&worker, format);
+            let (result, bytes) = export_with(&worker, format, false);
             assert!(result.is_ok(), "{result:?}");
             assert!(bytes.starts_with(magic), "{}", format.name());
         }
+        let (result, bytes) = export_with(&worker, Format::Stl, true);
+        assert!(result.unwrap().starts_with(&format!("Exported {} triangles to ", scene.stats.triangles)));
+        assert!(!bytes.starts_with(b"solid"), "binary");
+        assert_eq!(bytes.len(), 84 + 50 * scene.stats.triangles);
     }
 
     /// Exports the shown model in `format`: the reply, and the file written.
     /// Each call gets its own file, since tests run in parallel in one process.
-    fn export_with(worker: &Worker, format: Format) -> (Result<String, String>, Vec<u8>) {
+    fn export_with(worker: &Worker, format: Format, binary_stl: bool) -> (Result<String, String>, Vec<u8>) {
         static CALLS: AtomicU64 = AtomicU64::new(0);
         let call = CALLS.fetch_add(1, Ordering::Relaxed);
         let name = format!("code2form-test-{}-{call}.{}", std::process::id(), format.extension());
         let target = std::env::temp_dir().join(name);
         let _ = std::fs::remove_file(&target);
-        worker.export(target.clone(), format);
+        worker.export(target.clone(), format, binary_stl);
         let start = Instant::now();
         let result = loop {
             if let Some(Reply::Exported { result, .. }) = worker.poll().into_iter().next() {
@@ -613,12 +619,12 @@ mod tests {
         assert!(scene.is_2d && scene.formats == Format::FLAT);
 
         for (format, magic) in [(Format::Svg, &b"<?xml"[..]), (Format::Dxf, &b"  0\nSECTION\n"[..])] {
-            let (result, bytes) = export_with(&worker, format);
+            let (result, bytes) = export_with(&worker, format, false);
             let message = result.unwrap();
             assert!(message.starts_with("Exported 4 vertices to "), "{message}");
             assert!(bytes.starts_with(magic), "{}", format.name());
         }
-        let (result, bytes) = export_with(&worker, Format::Stl);
+        let (result, bytes) = export_with(&worker, Format::Stl, true);
         assert_eq!(result, Err("the model is empty or 2D, so there is nothing to export as STL".to_string()));
         assert!(bytes.is_empty());
     }

@@ -14,10 +14,10 @@ use crate::find;
 use crate::highlight::Highlighter;
 use crate::theme;
 
-const INDENT: usize = 4;
-
 pub struct Editor {
     id: Id,
+    /// The spaces Tab indents by.
+    pub indent_width: usize,
     highlighter: Highlighter,
     /// A line (0-based) to flag in the gutter, such as a syntax error.
     pub error_line: Option<usize>,
@@ -112,6 +112,7 @@ impl Editor {
     pub fn for_tab(tab: u64) -> Self {
         Editor {
             id: Id::new(("c2f-editor", tab)),
+            indent_width: 4,
             highlighter: Highlighter::default(),
             error_line: None,
             cursor: None,
@@ -203,7 +204,7 @@ impl Editor {
                 let cursor_range = output.cursor_range;
                 if let (Some(direction), Some(range)) = (indent, cursor_range) {
                     let length = text.len();
-                    let new_range = apply_indent(text, range, direction);
+                    let new_range = apply_indent(text, range, direction, self.indent_width);
                     output.state.cursor.set_char_range(Some(new_range));
                     output.state.store(ui.ctx(), self.id);
                     changed |= text.len() != length;
@@ -600,9 +601,11 @@ fn small_button(label: &str) -> Button<'_> {
     Button::new(RichText::new(label).size(12.0)).min_size(Vec2::new(24.0, 22.0)).frame(false)
 }
 
-/// Indents (or unindents) the selected lines, or inserts spaces up to the
-/// next tab stop at the cursor, and returns the new selection.
-fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent) -> CCursorRange {
+/// Indents (or unindents) the selected lines by `width` spaces, or inserts
+/// spaces up to the next tab stop at the cursor, and returns the new
+/// selection.
+fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent, width: usize) -> CCursorRange {
+    let width = width.max(1);
     let [first, last] = range.sorted_cursors();
     let (start, end) = (first.index, last.index);
     let start_byte = byte_index(text, start);
@@ -611,7 +614,7 @@ fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent) -> CC
 
     if start == end && direction == Indent::In {
         let column = text[first_line..start_byte].chars().count();
-        let spaces = INDENT - column % INDENT;
+        let spaces = width - column % width;
         text.insert_str(start_byte, &" ".repeat(spaces));
         return CCursorRange::one(CCursor::new(start + spaces));
     }
@@ -627,15 +630,15 @@ fn apply_indent(text: &mut String, range: CCursorRange, direction: Indent) -> CC
     for &line_start in line_starts.iter().rev() {
         match direction {
             Indent::In => {
-                text.insert_str(line_start, &" ".repeat(INDENT));
-                deltas.push(INDENT as isize);
+                text.insert_str(line_start, &" ".repeat(width));
+                deltas.push(width as isize);
             }
             Indent::Out => {
                 let rest = &text.as_bytes()[line_start..];
                 let n = if rest.first() == Some(&b'\t') {
                     1
                 } else {
-                    rest.iter().take(INDENT).take_while(|&&b| b == b' ').count()
+                    rest.iter().take(width).take_while(|&&b| b == b' ').count()
                 };
                 text.replace_range(line_start..line_start + n, "");
                 deltas.push(-(n as isize));
@@ -674,9 +677,13 @@ mod tests {
     use super::*;
 
     fn run(text: &str, a: usize, b: usize, direction: Indent) -> (String, usize, usize) {
+        run_with(4, text, a, b, direction)
+    }
+
+    fn run_with(width: usize, text: &str, a: usize, b: usize, direction: Indent) -> (String, usize, usize) {
         let mut text = text.to_string();
         let range = CCursorRange::two(CCursor::new(a), CCursor::new(b));
-        let out = apply_indent(&mut text, range, direction);
+        let out = apply_indent(&mut text, range, direction, width);
         let [s, e] = out.sorted_cursors();
         (text, s.index, e.index)
     }
@@ -685,6 +692,16 @@ mod tests {
     fn tab_inserts_spaces_to_the_next_stop() {
         assert_eq!(run("ab", 2, 2, Indent::In), ("ab  ".into(), 4, 4));
         assert_eq!(run("x\ncube();", 2, 2, Indent::In), ("x\n    cube();".into(), 6, 6));
+    }
+
+    #[test]
+    fn other_widths_indent_by_their_own_stops() {
+        assert_eq!(run_with(2, "abc", 3, 3, Indent::In), ("abc ".into(), 4, 4));
+        assert_eq!(run_with(8, "ab", 2, 2, Indent::In), ("ab      ".into(), 8, 8));
+        assert_eq!(run_with(2, "a\nb", 0, 3, Indent::In), ("  a\n  b".into(), 2, 7));
+        // Unindents by at most a width, whatever indents the line.
+        assert_eq!(run_with(2, "     x", 6, 6, Indent::Out), ("   x".into(), 4, 4));
+        assert_eq!(run_with(8, "     x\n\ty", 0, 9, Indent::Out), ("x\ny".into(), 0, 3));
     }
 
     #[test]
