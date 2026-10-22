@@ -408,7 +408,10 @@ pub fn render_enclosure(
             console.push(Line::new(Level::Error, error));
             return None;
         }
-        Some(c2f_geom::render_in(&output.nodes, path.parent().unwrap_or(Path::new(""))))
+        // Its `%` copies of the parts are the circuit's, drawn already:
+        // building them would only cost time.
+        let nodes: Vec<_> = output.nodes.into_iter().filter(|node| !node.background).collect();
+        Some(c2f_geom::render_in(&nodes, path.parent().unwrap_or(Path::new(""))))
     }))
     .unwrap_or_else(|panic| {
         console.push(Line::new(Level::Error, format!("internal error in {}: {}", path.display(), panic_message(&*panic))));
