@@ -37,7 +37,7 @@ pub enum Model {
 }
 
 impl Model {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         match self {
             Model::Empty => true,
             Model::Solid(m) => m.is_empty(),
