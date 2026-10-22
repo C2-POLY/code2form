@@ -9,7 +9,9 @@ they are. Written in Rust, it renders as you type.
 - **Editor and live 3D view**: syntax highlighting, errors marked on their
   line, re-render 400 ms after the last keystroke, orbit, pan and zoom,
   and a turntable that turns the view around the model;
-  Open Recent lists the last ten files opened or saved.
+  Open Recent lists the last ten files opened or saved; each file opens in
+  a tab of its own, with its view, console and undo history, and the tabs
+  come back at the next launch.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text
   fields, grouped by `/* [Group] */`; presets are saved next to the design

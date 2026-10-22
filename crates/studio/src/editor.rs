@@ -102,9 +102,16 @@ enum Indent {
 }
 
 impl Editor {
+    #[cfg(test)]
     pub fn new() -> Self {
+        Editor::for_tab(0)
+    }
+
+    /// The editor of tab `tab`: each keeps its own cursor, scroll and undo
+    /// history, which egui stores under the editor's id.
+    pub fn for_tab(tab: u64) -> Self {
         Editor {
-            id: Id::new("c2f-editor"),
+            id: Id::new(("c2f-editor", tab)),
             highlighter: Highlighter::default(),
             error_line: None,
             cursor: None,
@@ -129,6 +136,12 @@ impl Editor {
         ctx.memory_mut(|m| m.request_focus(self.id));
     }
 
+    /// Drops what egui keeps of the editor, its undo history first, once
+    /// its tab is closed.
+    pub fn forget(&self, ctx: &egui::Context) {
+        ctx.data_mut(|d| d.remove::<egui::text_edit::TextEditState>(self.id));
+    }
+
     /// Shows the editor filling `ui`; returns whether the text changed.
     pub fn show(&mut self, ui: &mut egui::Ui, text: &mut String) -> bool {
         let font = theme::code_font();
@@ -149,7 +162,7 @@ impl Editor {
         };
 
         let mut changed = self.find_bar(ui, text);
-        egui::ScrollArea::vertical().id_salt("editor-scroll").auto_shrink(false).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(self.id.with("scroll")).auto_shrink(false).show(ui, |ui| {
             let line_count = text.bytes().filter(|&b| b == b'\n').count() + 1;
             let digits = line_count.to_string().len().max(3);
             let digit_width = ui.fonts(|f| f.glyph_width(&font, '0'));

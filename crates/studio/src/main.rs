@@ -20,6 +20,7 @@ mod recent;
 mod renderer;
 mod rewire;
 mod screenshot;
+mod tabs;
 mod theme;
 mod viewer;
 mod wiring;
@@ -31,22 +32,24 @@ use std::process::ExitCode;
 use eframe::egui;
 
 const USAGE: &str = "\
-usage: code2form [file.c2f | file.scad | circuit.c2fc]
+usage: code2form [file.c2f | file.scad | circuit.c2fc]...
 
-Opens the file (or an empty document) in an editor with a live 3D preview.
+Opens each file in a tab, the last one shown, in an editor with a live 3D
+preview; the tabs open when the app was last closed come back first.
 
 Set CODE2FORM_SCREENSHOT=out.png to save a picture of the window once
 the first render is shown; the window then opens without taking focus.
 
 The Open Recent list is kept in the user's settings folder, or in the
 file CODE2FORM_RECENT_FILES names; screenshot runs without that variable
-neither read nor change it.";
+neither read nor change it. The open tabs are kept there too, but
+screenshot runs neither read nor change them.";
 
 fn main() -> ExitCode {
     // Old macOS versions add a process serial number to apps the Finder starts.
-    let mut args = std::env::args_os().skip(1).filter(|a| !a.to_string_lossy().starts_with("-psn_"));
-    let path = args.next().map(PathBuf::from);
-    if args.next().is_some() || path.as_ref().is_some_and(|p| p.as_os_str() == "-h" || p.as_os_str() == "--help") {
+    let paths: Vec<PathBuf> =
+        std::env::args_os().skip(1).filter(|a| !a.to_string_lossy().starts_with("-psn_")).map(PathBuf::from).collect();
+    if paths.iter().any(|p| p.as_os_str() == "-h" || p.as_os_str() == "--help") {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     }
@@ -75,7 +78,7 @@ fn main() -> ExitCode {
     }
     open_events::install();
     let result =
-        eframe::run_native("Code2Form", options, Box::new(move |cc| Ok(Box::new(app::StudioApp::new(cc, path)))));
+        eframe::run_native("Code2Form", options, Box::new(move |cc| Ok(Box::new(app::StudioApp::new(cc, paths)))));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
