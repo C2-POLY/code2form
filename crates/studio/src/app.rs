@@ -222,7 +222,7 @@ impl StudioApp {
                     match outcome.result {
                         Ok(scene) => {
                             self.failed = false;
-                            self.editor.error_line = None;
+                            self.editor.error_line = outcome.annotation_error;
                             let empty = scene.is_empty();
                             let had_model = self.model.as_ref().is_some_and(|m| !m.empty);
                             let frame = !empty && (self.frame_next || !had_model);
@@ -239,7 +239,7 @@ impl StudioApp {
                         }
                         Err(line) => {
                             self.failed = true;
-                            self.editor.error_line = line;
+                            self.editor.error_line = line.or(outcome.annotation_error);
                         }
                     }
                 }

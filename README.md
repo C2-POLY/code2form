@@ -38,9 +38,20 @@ they are. Written in Rust, it renders as you type.
   app writes the change into the code, as one step to undo. A height
   computed in the code moves there, and pauses from a library or an
   included file stay as they are.
+- **Electronics annotations**: a part declares its pins, mount holes and
+  ports in comments, in its own coordinates, which the reference
+  implementation ignores:
+  `// @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`,
+  `// @mount_hole [1.5, 1.5] d=2`, `// @port usb_c [9, 0, 2] -y [9, 3.2]`.
+  After the name and position, fields come in any order: a direction
+  (`up`, `down`, `+x` … `-z`, or a vector), a pin type (`io`, `input`,
+  `output`, `power_in`, `power_out`, `ground`, `passive`, the default,
+  `nc`), the most a pin takes in volts, a `"label"`, a diameter `d=`, a
+  port's opening `[width, height]`. A badly written annotation is marked
+  on its line, and the model still renders.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
-  `-P preset`.
+  `-P preset`; `c2f pins` prints a part's annotations.
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window.
@@ -118,7 +129,7 @@ names.
 
 | Crate | What it does |
 |---|---|
-| `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, AST dump |
+| `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, electronics annotations, AST dump |
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
 | `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, SVG and DXF exports, PNG pictures |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |

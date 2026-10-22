@@ -64,6 +64,9 @@ pub struct RenderOutcome {
     pub result: Result<Scene, Option<usize>>,
     /// The customizer parameters of the file; `None` when it did not parse.
     pub parameters: Option<Vec<Parameter>>,
+    /// The line (0-based) of the first badly written electronics annotation
+    /// of the file, marked like an error while the model still renders.
+    pub annotation_error: Option<usize>,
 }
 
 pub enum Reply {
@@ -211,8 +214,9 @@ fn render_source(
     let start = Instant::now();
     let mut console = Vec::new();
     let mut parameters = None;
+    let mut annotation_error = None;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        pipeline(source, path, values, library_paths, &mut console, &mut parameters)
+        pipeline(source, path, values, library_paths, &mut console, &mut parameters, &mut annotation_error)
     }))
     .unwrap_or_else(
         |panic| {
@@ -237,7 +241,7 @@ fn render_source(
         }
         Err(line) => (Err(line), None),
     };
-    (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters }, rendered)
+    (RenderOutcome { generation, elapsed: start.elapsed(), console, result, parameters, annotation_error }, rendered)
 }
 
 fn pipeline(
@@ -247,6 +251,7 @@ fn pipeline(
     library_paths: &[PathBuf],
     console: &mut Vec<Line>,
     parameters: &mut Option<Vec<Parameter>>,
+    annotation_error: &mut Option<usize>,
 ) -> Result<Rendered, Option<usize>> {
     let mut program = match c2f_eval::Program::load(source, path, library_paths) {
         Ok(program) => program,
@@ -258,6 +263,11 @@ fn pipeline(
             return Err(line);
         }
     };
+    // A badly written annotation leaves the model as it is.
+    let (_, errors) = c2f_lang::annotations::read(source);
+    console.extend(errors.iter().map(|err| Line::new(Level::Error, err.render(source, &path.display().to_string()))));
+    let lines = c2f_lang::span::LineIndex::new(source);
+    *annotation_error = errors.first().map(|err| lines.line(err.span.start as usize));
     let found = program.parameters(source);
     // A value set before the file changed may no longer apply; it must
     // not reach whatever assignment now has that name.
@@ -423,6 +433,18 @@ mod tests {
         };
         assert!(matches!(outcome.result, Err(Some(2))));
         assert!(outcome.console.iter().any(|l| l.level == Level::Error));
+    }
+
+    #[test]
+    fn annotation_errors_are_marked_but_the_model_renders() {
+        let worker = Worker::spawn(egui::Context::default());
+        let generation = worker.render("cube(1);\n// @pin A [0, 0]\n".into(), path(), Vec::new());
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else {
+            panic!("no render")
+        };
+        assert!(outcome.result.is_ok());
+        assert_eq!(outcome.annotation_error, Some(1));
+        assert!(outcome.console.iter().any(|l| l.level == Level::Error && l.text.contains("position")));
     }
 
     #[test]

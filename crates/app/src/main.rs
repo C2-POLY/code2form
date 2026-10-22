@@ -16,7 +16,10 @@ commands:
   3mf     the same, as a 3MF package (binary: redirect it to a file)
   svg     evaluate, build the 2D geometry and print it as an SVG
   dxf     the same, as a DXF drawing
-  check   parse only and report syntax errors
+  check   parse only and report syntax errors and badly written
+          electronics annotations
+  pins    print the pins, mount holes and ports a part declares
+          (`// @pin`, `// @mount_hole`, `// @port`), one per line
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout
 
 options:
@@ -85,7 +88,7 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "csg", "stl", "3mf", "svg", "dxf"].contains(&options.command.as_str()) {
+    if !["ast", "check", "pins", "csg", "stl", "3mf", "svg", "dxf"].contains(&options.command.as_str()) {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
         return ExitCode::from(2);
     }
@@ -101,6 +104,9 @@ fn run() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if options.command == "pins" {
+        return pins(&src, &options.path);
+    }
     // Appended to the file after an end-of-text character, which the
     // lexer skips, as the reference implementation does.
     if !options.defines.is_empty() {
@@ -128,10 +134,41 @@ fn run() -> ExitCode {
             print!("{}", c2f_lang::dump::ast_dump(&program.files[0].ast, &src));
             ExitCode::SUCCESS
         }
-        "check" => ExitCode::SUCCESS,
+        "check" => match annotation_errors(&src, &options.path) {
+            0 => ExitCode::SUCCESS,
+            _ => ExitCode::FAILURE,
+        },
         // `csg`, or an export format.
         command => csg(&program, Export::named(command)),
     }
+}
+
+/// Prints the annotations of a part in source order, each after its line
+/// number, as `12: @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`.
+fn pins(src: &str, file_name: &str) -> ExitCode {
+    let (annotations, _) = c2f_lang::annotations::read(src);
+    let mut printed: Vec<(c2f_lang::Span, String)> = Vec::new();
+    printed.extend(annotations.pins.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.mount_holes.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.ports.iter().map(|a| (a.span, a.to_string())));
+    printed.sort_by_key(|(span, _)| span.start);
+    let lines = c2f_lang::span::LineIndex::new(src);
+    for (span, text) in printed {
+        println!("{}: {text}", lines.line(span.start as usize) + 1);
+    }
+    match annotation_errors(src, file_name) {
+        0 => ExitCode::SUCCESS,
+        _ => ExitCode::FAILURE,
+    }
+}
+
+/// Reports the badly written annotations of a file; returns how many.
+fn annotation_errors(src: &str, file_name: &str) -> usize {
+    let (_, errors) = c2f_lang::annotations::read(src);
+    for error in &errors {
+        eprint!("{}", error.render(src, file_name));
+    }
+    errors.len()
 }
 
 fn apply_parameter_set(program: &mut c2f_eval::Program, file: Option<&str>, name: &str) -> Result<(), String> {
