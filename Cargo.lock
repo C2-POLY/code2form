@@ -553,6 +553,7 @@ dependencies = [
 name = "c2f-eval"
 version = "0.2.0"
 dependencies = [
+ "c2f-circuit",
  "c2f-lang",
  "serde_json",
 ]

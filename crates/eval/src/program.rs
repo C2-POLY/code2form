@@ -12,6 +12,14 @@ pub struct Program {
     pub files: Vec<SourceFile>,
     /// Problems found while loading, such as missing files.
     pub warnings: Vec<String>,
+    /// The circuit file the main file names in `// @circuit`, read when
+    /// the program is loaded: an app re-renders when it changes.
+    pub circuit_path: Option<PathBuf>,
+    /// That circuit, when it was read without error, whose parts the
+    /// enclosure built-ins (`standoffs_for()`, `cutout_for()`...) place.
+    pub circuit: Option<c2f_circuit::Circuit>,
+    /// Where the circuit's parts and their libraries were looked for.
+    pub(crate) library_paths: Vec<PathBuf>,
 }
 
 pub struct SourceFile {
@@ -39,10 +47,39 @@ impl Program {
     /// Loads `src` as the main file located at `path`. Imports resolve
     /// against the directory of the file that contains them, then
     /// `library_paths`.
+    ///
+    /// When the main file names a circuit (`// @circuit robot.c2fc`, next
+    /// to it), the circuit is read too, its parts found next to it, then in
+    /// `library_paths`; a circuit that cannot be read is a warning.
     pub fn load(src: &str, path: &Path, library_paths: &[PathBuf]) -> Result<Program, LoadError> {
+        let mut program = Program::load_alone(src, path, library_paths)?;
+        let (annotations, _) = c2f_lang::annotations::read(src);
+        if let Some(link) = annotations.circuit {
+            let circuit_path = path.parent().unwrap_or(Path::new("")).join(&link.path);
+            match c2f_circuit::load(&circuit_path, library_paths) {
+                Ok(circuit) => program.circuit = Some(circuit),
+                Err(errors) => {
+                    let errors: String = errors.iter().map(c2f_circuit::Error::render).collect();
+                    program.warnings.push(format!("Can't read circuit '{}':\n{errors}", link.path));
+                }
+            }
+            program.circuit_path = Some(circuit_path);
+        }
+        Ok(program)
+    }
+
+    /// [`Program::load`] without the circuit the file may name: for a
+    /// part of that circuit.
+    pub(crate) fn load_alone(src: &str, path: &Path, library_paths: &[PathBuf]) -> Result<Program, LoadError> {
         let mut loader = Loader { library_paths, warnings: Vec::new(), files: Vec::new(), canonical: Vec::new() };
         loader.load_file(src.to_string(), path.to_path_buf())?;
-        Ok(Program { files: loader.files, warnings: loader.warnings })
+        Ok(Program {
+            files: loader.files,
+            warnings: loader.warnings,
+            circuit_path: None,
+            circuit: None,
+            library_paths: library_paths.to_vec(),
+        })
     }
 }
 

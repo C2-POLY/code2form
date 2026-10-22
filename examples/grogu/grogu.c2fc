@@ -7,13 +7,20 @@
 
 version = 1
 
+# The PETG plate the parts sit on, in this file's coordinates, its top at
+# z = 0: it takes its fences, openings and standoffs from the parts below.
+enclosure = "grogu_plate.c2f"
+
+# The XIAO's USB-C faces the front wall (-y).
 [parts.xiao]
 part = "electronics/xiao_esp32s3.c2f"
-at = [0, 0, 0]
+at = [17.8, 21, 0]
+rotate = [0, 0, 180]
 
+# Stands on its header's pins.
 [parts.amp]
 part = "electronics/max98357a.c2f"
-at = [-30, 0, 0]
+at = [-30, 0, 8.5]
 params = { headers = true }
 
 [parts.cap]
@@ -21,26 +28,30 @@ part = "electronics/capacitor_radial.c2f"
 at = [-20, 26, 0]
 params = { d = 8, h = 12 }
 
+# Face down, on its rim, over the plate's grille.
 [parts.speaker]
 part = "electronics/speaker.c2f"
-at = [-45, 40, 0]
+at = [-45, 40, 5]
+rotate = [180, 0, 0]
 
+# On the microphone, the sound hole up.
 [parts.mic]
 part = "electronics/inmp441.c2f"
-at = [35, 12, 0]
+at = [-12, 44, 1]
 rotate = [0, 0, 180]
 
 [parts.driver]
 part = "electronics/drv8833.c2f"
 at = [0, 32, 0]
 
+# Screwed to the right wall through two standoffs, its shaft through it.
 [parts.motor]
 part = "electronics/dc_motor.c2f"
 at = [25, 40, 0]
 
 [parts.touch]
 part = "electronics/touch_plate.c2f"
-at = [25, -30, 0]
+at = [22, 0, 0]
 
 # Power: the 5 V rail, with the decoupling capacitor at the amplifier.
 

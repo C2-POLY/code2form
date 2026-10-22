@@ -64,6 +64,20 @@ they are. Written in Rust, it renders as you type.
   `xiao_esp32s3(headers = true);`). Each file links to the part's
   documentation and says which dimensions are estimated; see
   `library/README.md`.
+- **Enclosures**: a `.c2f` file that names its circuit in a comment,
+  `// @circuit grogu.c2fc` (next to it), is drawn in the circuit's
+  coordinates and gets built-in modules that follow its parts:
+  `standoffs_for(part, height, d, hole, screw)`, a standoff under each
+  mount hole the part declares, along the hole's direction (`screw =
+  "M2"`, `"M2.5"` or `"M3"` sizes it and its pilot hole);
+  `holes_for(part, depth, hole, screw)`, the screws' clearance holes;
+  `cutout_for(part, port, clearance = 0.5, depth = 10)`, the port's
+  opening grown by the clearance, along the way it faces, to subtract from
+  a wall; `circuit_part(part)`, the part itself. The circuit is read with
+  the file, so moving a part moves them at the next render. Without
+  `@circuit` they warn and draw nothing; the reference implementation
+  ignores them as unknown modules. `examples/grogu/grogu_plate.c2f` is
+  the plate the Grogu circuit names as its `enclosure`.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`; `c2f pins` prints a part's annotations.
