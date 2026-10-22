@@ -30,6 +30,10 @@ pub struct Scene {
     pub stats: Stats,
     /// The formats the model exports to: none when it is empty.
     pub formats: &'static [Format],
+    /// The print's pauses, lowest first, within the solid's height.
+    pub pauses: Vec<c2f_eval::Pause>,
+    /// The text rendered, where the pauses' sources point.
+    pub source: String,
 }
 
 impl Scene {
@@ -225,6 +229,9 @@ fn render_source(
                 is_2d: rendered.is_2d,
                 stats: rendered.stats,
                 formats: Format::of(&rendered.model, &rendered.stats),
+                // Kept in the rendering too: the 3MF export writes them.
+                pauses: rendered.pauses.clone(),
+                source: source.to_string(),
             };
             (Ok(scene), Some(rendered))
         }

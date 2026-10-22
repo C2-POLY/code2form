@@ -16,10 +16,11 @@ use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
 use crate::open_events;
+use crate::pause_edit;
 use crate::recent::RecentFiles;
 use crate::screenshot::Screenshot;
 use crate::theme;
-use crate::viewer::{self, Viewer};
+use crate::viewer::{self, PauseEdit, Viewer};
 use crate::worker::{Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
@@ -573,6 +574,12 @@ impl StudioApp {
                     toolbar_separator(ui);
                     ui.toggle_value(&mut self.viewer.show_grid, "Grid").on_hover_text("Show the XY grid");
                     ui.toggle_value(&mut self.viewer.show_axes, "Axes").on_hover_text("Show the axes");
+                    ui.toggle_value(&mut self.viewer.layer_view, "Layers")
+                        .on_hover_text("Cut the model at the top of a layer, picked with the slider on the right");
+                    if self.viewer.has_pauses() {
+                        ui.toggle_value(&mut self.viewer.show_pauses, "Pauses")
+                            .on_hover_text("Show the heights where the print pauses");
+                    }
                     toolbar_separator(ui);
                     ui.menu_button("View", |ui| {
                         for &(name, yaw, pitch) in viewer::PRESETS {
@@ -801,6 +808,36 @@ impl StudioApp {
             };
             self.viewer.show(ui, &status);
         });
+        if let Some(edit) = self.viewer.take_pause_edit() {
+            self.apply_pause_edit(ctx, edit);
+        }
+    }
+
+    /// Makes a change to the pauses asked for in the layer view in the
+    /// code, as one step of the editor's undo history, and renders it.
+    fn apply_pause_edit(&mut self, ctx: &egui::Context, edit: PauseEdit) {
+        // The pauses point into the text they were rendered from.
+        if self.viewer.scene_source() != self.text {
+            self.console.log(Level::Warning, "The code changed since the last render: try again once it is rendered");
+            return;
+        }
+        let (result, done) = match edit {
+            PauseEdit::Add { z } => {
+                (Ok(pause_edit::add(&self.text, z)), format!("Added a pause at {} mm", pause_edit::number(z)))
+            }
+            PauseEdit::Move { number, z } => {
+                (pause_edit::set_height(&self.text, number, z), format!("Moved a pause to {} mm", pause_edit::number(z)))
+            }
+            PauseEdit::Remove { call } => (pause_edit::remove(&self.text, call), "Removed a pause".to_string()),
+        };
+        match result {
+            Ok((text, cursor)) => {
+                self.editor.replace_text(ctx, &mut self.text, text, cursor);
+                self.console.log(Level::Info, done);
+                self.render_now();
+            }
+            Err(why) => self.console.log(Level::Warning, format!("Cannot change the pause: {why}")),
+        }
     }
 
     fn confirm_dialog(&mut self, ctx: &egui::Context) {

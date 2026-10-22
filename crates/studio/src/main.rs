@@ -9,6 +9,7 @@ mod editor;
 mod find;
 mod highlight;
 mod open_events;
+mod pause_edit;
 mod recent;
 mod renderer;
 mod screenshot;

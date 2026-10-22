@@ -50,6 +50,11 @@ pub struct Interp<'p> {
     pub echo: Vec<String>,
     pub warnings: Vec<String>,
     pub pauses: Vec<crate::Pause>,
+    /// The `pause()` calls written in the main file, by the address of
+    /// their instance.
+    main_pauses: std::collections::HashMap<usize, crate::PauseSource>,
+    /// Where the `pause()` call being evaluated is written, if known.
+    pub pause_call: Option<crate::PauseSource>,
     /// Names of the user modules being instantiated, innermost last.
     pub module_stack: Vec<&'p str>,
     call_depth: usize,
@@ -123,6 +128,8 @@ impl<'p> Interp<'p> {
             echo: Vec::new(),
             warnings: Vec::new(),
             pauses: Vec::new(),
+            main_pauses: main_pauses(&program.files[0].ast.stmts),
+            pause_call: None,
             module_stack: Vec::new(),
             call_depth: 0,
             instantiation_depth: 0,
@@ -318,7 +325,14 @@ impl<'p> Interp<'p> {
                     None => Ok(None),
                 }
             }
-            InstanceKind::Call { name, args, children } => self.call_module(&name.name, args, children, env),
+            InstanceKind::Call { name, args, children } => {
+                if name.name == "pause" {
+                    self.pause_call = self.main_pauses.get(&(inst as *const Instance as usize)).cloned();
+                }
+                let node = self.call_module(&name.name, args, children, env);
+                self.pause_call = None;
+                node
+            }
         }
     }
 
@@ -1145,4 +1159,44 @@ fn dynamic_parent<'p>(env: &Env<'p>) -> Env<'p> {
         }
     }
     current.clone()
+}
+
+/// The `pause()` calls written in the main file itself (not in a file it
+/// includes), by the address of their instance, with where they are.
+fn main_pauses(stmts: &[Stmt]) -> std::collections::HashMap<usize, crate::PauseSource> {
+    fn walk(stmts: &[Stmt], out: &mut std::collections::HashMap<usize, crate::PauseSource>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::Block(inner) => walk(inner, out),
+                StmtKind::Module(def) => walk(std::slice::from_ref(&def.body), out),
+                StmtKind::Instance(inst) => match &inst.kind {
+                    InstanceKind::Call { name, args, children } => {
+                        if name.name == "pause" && name.span.file == 0 {
+                            // The height: `z = ...`, else the first positional argument.
+                            let z = args
+                                .iter()
+                                .find(|a| a.name.as_ref().is_some_and(|n| n.name == "z"))
+                                .or_else(|| args.iter().find(|a| a.name.is_none()));
+                            let number = z
+                                .filter(|a| matches!(a.value.kind, ExprKind::Number(_)) && a.value.span.file == 0)
+                                .map(|a| a.value.span.range());
+                            let source = crate::PauseSource { call: name.span.start as usize, number };
+                            out.insert(inst as *const Instance as usize, source);
+                        }
+                        walk(children, out);
+                    }
+                    InstanceKind::If { then, otherwise, .. } => {
+                        walk(then, out);
+                        if let Some(otherwise) = otherwise {
+                            walk(otherwise, out);
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    walk(stmts, &mut out);
+    out
 }

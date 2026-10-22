@@ -28,7 +28,16 @@ they are. Written in Rust, it renders as you type.
   and leaves the printer, print and filament settings as they are: with
   File > Open Project, or "Open as project" when the file is dropped or
   opened from the Finder. It makes no geometry, and the reference
-  implementation ignores it with a warning.
+  implementation ignores it with a warning. The 3D view shows each pause
+  as a plane at its height, labelled with its message (the Pauses toggle).
+- **Layer view** (the Layers toggle): the model cut at the top of a layer,
+  its cut face in red so cavities show, picked with a slider on the right
+  of the view (drag, scroll, or the arrow keys), which marks the pauses;
+  the layer height is set under the slider. Right-click the slider to add
+  a pause at a layer's top or remove one, and drag a mark to move it: the
+  app writes the change into the code, as one step to undo. A height
+  computed in the code moves there, and pauses from a library or an
+  included file stay as they are.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
   SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`.

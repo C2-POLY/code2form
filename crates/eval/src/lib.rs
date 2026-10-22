@@ -39,6 +39,18 @@ pub struct Pause {
     pub z: f64,
     /// Shown on the printer while it waits; may be empty.
     pub message: String,
+    /// Where the call is written, when it is in the main file.
+    pub source: Option<PauseSource>,
+}
+
+/// Where a `pause()` call is written in the main file, so that an editor
+/// can move or remove it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PauseSource {
+    /// Byte offset of the call's name.
+    pub call: usize,
+    /// The bytes of the height, when it is written as a plain number.
+    pub number: Option<std::ops::Range<usize>>,
 }
 
 impl Output {

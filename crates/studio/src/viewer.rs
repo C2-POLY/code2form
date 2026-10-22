@@ -1,15 +1,17 @@
 //! The 3D view: camera controls, the OpenGL paint callback and the
-//! overlays drawn on top (hints, status badges, the axis gizmo).
+//! overlays drawn on top (hints, status badges, the axis gizmo, the
+//! labels of the print's pauses, the layer slider).
 
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+    self, Align2, Color32, CornerRadius, FontId, Key, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
 use eframe::{egui_glow, glow};
-use glam::{Vec2 as GVec2, Vec3};
+use glam::{Mat4, Vec2 as GVec2, Vec3, Vec4};
 
 use crate::camera::Camera;
+use crate::pause_edit;
 use crate::renderer::{self, Grid, Renderer};
 use crate::theme;
 use crate::worker::Scene;
@@ -23,6 +25,35 @@ pub struct Status<'a> {
     pub is_2d: bool,
     /// A short hint about what is being edited, for the empty state.
     pub empty_hint: &'a str,
+}
+
+/// A change to the pauses asked for in the layer view, for the app to make
+/// in the source.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PauseEdit {
+    Add { z: f32 },
+    /// Writes a new height over the number at these bytes.
+    Move { number: std::ops::Range<usize>, z: f32 },
+    /// Removes the call whose name starts at this byte.
+    Remove { call: usize },
+}
+
+/// A pause as the view shows it.
+struct PauseMark {
+    z: f32,
+    /// Its rectangle's corners in the 3D view.
+    corners: [[f32; 3]; 4],
+    label: String,
+    source: Option<c2f_eval::PauseSource>,
+}
+
+/// What the layer slider's context menu is about.
+#[derive(Clone, Copy)]
+enum SliderMenu {
+    /// A layer, to add a pause at its top.
+    Layer(u32),
+    /// A pause, to remove it.
+    Pause(usize),
 }
 
 /// Standard views: name, yaw and pitch in degrees.
@@ -41,10 +72,26 @@ pub struct Viewer {
     pub camera: Camera,
     pub show_axes: bool,
     pub show_grid: bool,
+    pub show_pauses: bool,
+    /// The layer view: the model cut at the top of a layer, picked with
+    /// the slider on the right of the view.
+    pub layer_view: bool,
+    pub layer_height: f32,
+    /// The layer the cut shows the top of, from 1; `None` for the last.
+    layer: Option<u32>,
+    /// The solid's bottom and top.
+    heights: Option<(f32, f32)>,
     /// The camera turns around the model by itself until a drag in the
     /// view or the toggle stops it.
     pub turntable: bool,
     bounds: Option<(Vec3, Vec3)>,
+    pauses: Vec<PauseMark>,
+    /// The text the scene was rendered from.
+    scene_source: String,
+    /// The pause being dragged on the slider, and the layer it is over.
+    dragging: Option<(usize, u32)>,
+    menu: Option<SliderMenu>,
+    edit: Option<PauseEdit>,
     grid: Grid,
     /// Width over height of the viewport, as last shown.
     aspect: f32,
@@ -67,8 +114,18 @@ impl Viewer {
             camera: Camera::default(),
             show_axes: true,
             show_grid: true,
+            show_pauses: true,
+            layer_view: false,
+            layer_height: 0.2,
+            layer: None,
+            heights: None,
             turntable: false,
             bounds: None,
+            pauses: Vec::new(),
+            scene_source: String::new(),
+            dragging: None,
+            menu: None,
+            edit: None,
             grid,
             aspect: 1.5,
         };
@@ -80,6 +137,24 @@ impl Viewer {
     pub fn set_scene(&mut self, scene: Scene, frame: bool) {
         self.bounds = scene.bounds().map(|(lo, hi)| (Vec3::from(lo), Vec3::from(hi)));
         self.grid = Grid::for_bounds(self.bounds);
+        self.heights = if scene.is_2d { None } else { scene.solid.bounds().map(|(lo, hi)| (lo[2], hi[2])) };
+        self.pauses = match renderer::pause_footprint(&scene) {
+            Some(footprint) => scene
+                .pauses
+                .iter()
+                .map(|p| PauseMark {
+                    z: p.z as f32,
+                    corners: renderer::pause_corners(p.z as f32, footprint),
+                    label: pause_label(p),
+                    source: p.source.clone(),
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        self.scene_source = scene.source.clone();
+        // Indices into the old pauses mean nothing now.
+        self.dragging = None;
+        self.menu = None;
         if let Ok(renderer) = &self.renderer {
             if let Ok(mut r) = renderer.lock() {
                 r.set_scene(scene);
@@ -95,6 +170,55 @@ impl Viewer {
     /// origin when there is none.
     fn frame_box(&self) -> (Vec3, Vec3) {
         self.bounds.unwrap_or((Vec3::splat(-10.0), Vec3::splat(10.0)))
+    }
+
+    /// The number of layers the solid prints in, if there is one.
+    pub fn layer_count(&self) -> Option<u32> {
+        let (lo, hi) = self.heights?;
+        let layers = ((hi - lo) / self.layer_height.max(0.01) - 1e-3).ceil().max(1.0);
+        Some(layers.min(1e6) as u32)
+    }
+
+    /// The layer shown, from 1 to the last.
+    pub fn layer(&self) -> Option<u32> {
+        let count = self.layer_count()?;
+        Some(self.layer.unwrap_or(count).clamp(1, count))
+    }
+
+    fn set_layer(&mut self, layer: i64) {
+        if let Some(count) = self.layer_count() {
+            let layer = layer.clamp(1, i64::from(count)) as u32;
+            self.layer = (layer < count).then_some(layer);
+        }
+    }
+
+    /// The top of a layer.
+    fn layer_top(&self, layer: u32) -> Option<f32> {
+        let (lo, hi) = self.heights?;
+        Some((lo + layer as f32 * self.layer_height).min(hi))
+    }
+
+    /// The height the layer view cuts the model at; `None` when it is off.
+    pub fn cut(&self) -> Option<f32> {
+        if !self.layer_view {
+            return None;
+        }
+        self.layer_top(self.layer()?)
+    }
+
+    /// The change to the pauses asked for in the layer view, if any.
+    pub fn take_pause_edit(&mut self) -> Option<PauseEdit> {
+        self.edit.take()
+    }
+
+    /// The text the scene shown was rendered from.
+    pub fn scene_source(&self) -> &str {
+        &self.scene_source
+    }
+
+    /// The model asks for print pauses.
+    pub fn has_pauses(&self) -> bool {
+        !self.pauses.is_empty()
     }
 
     pub fn view_all(&mut self) {
@@ -160,7 +284,14 @@ impl Viewer {
         let projection = self.camera.projection(self.aspect, self.scene_radius());
         match &self.renderer {
             Ok(renderer) => {
-                let frame = renderer::Frame { view, projection, show_grid: self.show_grid, show_axes: self.show_axes };
+                let frame = renderer::Frame {
+                    view,
+                    projection,
+                    show_grid: self.show_grid,
+                    show_axes: self.show_axes,
+                    show_pauses: self.show_pauses,
+                    cut: self.cut(),
+                };
                 let renderer = renderer.clone();
                 let callback = egui_glow::CallbackFn::new(move |_info, painter| {
                     if let Ok(mut r) = renderer.lock() {
@@ -182,6 +313,12 @@ impl Viewer {
         }
 
         let painter = ui.painter_at(rect);
+        if self.show_pauses {
+            self.paint_pause_labels(&painter, rect, projection * view);
+        }
+        if self.layer_view && self.heights.is_some() {
+            self.layer_slider(ui, &painter, rect, &response);
+        }
         self.paint_gizmo(&painter, rect);
         paint_overlays(ui, &painter, rect, status);
     }
@@ -223,6 +360,203 @@ impl Viewer {
                 });
                 self.camera.zoom(factor, focus);
             }
+        }
+    }
+
+    /// Each pause's height and message, next to the corner of its rectangle
+    /// that shows farthest right, kept inside the view.
+    fn paint_pause_labels(&self, painter: &egui::Painter, rect: Rect, view_projection: Mat4) {
+        let to_screen = |p: [f32; 3]| {
+            let clip = view_projection * Vec4::new(p[0], p[1], p[2], 1.0);
+            (clip.w > 1e-6).then(|| {
+                let ndc = clip.truncate() / clip.w;
+                Pos2::new(rect.left() + (ndc.x + 1.0) * 0.5 * rect.width(), rect.top() + (1.0 - ndc.y) * 0.5 * rect.height())
+            })
+        };
+        let cut = self.cut();
+        for PauseMark { z, corners, label, .. } in &self.pauses {
+            if cut.is_some_and(|cut| *z > cut + 1e-4) {
+                continue;
+            }
+            let Some(anchor) = corners.iter().filter_map(|&c| to_screen(c)).max_by(|a, b| a.x.total_cmp(&b.x)) else {
+                continue;
+            };
+            let galley = painter.layout_no_wrap(label.clone(), FontId::proportional(12.0), Color32::WHITE);
+            let size = galley.size();
+            let mut inside = rect.shrink(10.0);
+            if self.layer_view {
+                // Clear of the layer slider.
+                inside.max.x -= 60.0;
+            }
+            let min = Pos2::new(
+                (anchor.x + 8.0).min(inside.right() - size.x).max(inside.left()),
+                (anchor.y - size.y / 2.0).clamp(inside.top(), (inside.bottom() - size.y).max(inside.top())),
+            );
+            let text = Rect::from_min_size(min, size);
+            let badge = text.expand2(Vec2::new(6.0, 3.0));
+            painter.rect_filled(badge, CornerRadius::same(4), Color32::from_black_alpha(160));
+            painter.rect_stroke(badge, CornerRadius::same(4), Stroke::new(1.0, PAUSE_COLOR), StrokeKind::Inside);
+            painter.galley(text.min, galley, Color32::WHITE);
+        }
+    }
+
+    /// The layer slider, on the right of the view: drag or click it, scroll
+    /// over it, or press the up and down arrows (with Shift, ten layers) over
+    /// the view. Marks show the pauses: drag one to move it, right-click the
+    /// slider to add a pause at a layer or remove one. The layer height is
+    /// set below it.
+    fn layer_slider(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, rect: Rect, view: &egui::Response) {
+        let (Some(count), Some((lo, hi))) = (self.layer_count(), self.heights) else { return };
+        let x = rect.right() - 34.0;
+        let track = Track { top: rect.top() + 56.0, bottom: rect.bottom() - 84.0, count, lo, layer_height: self.layer_height };
+        if track.bottom - track.top < 40.0 {
+            return;
+        }
+        let area = Rect::from_x_y_ranges(x - 14.0..=x + 14.0, track.top - 10.0..=track.bottom + 10.0);
+        let response = ui.interact(area, ui.id().with("layer_slider"), Sense::click_and_drag());
+        // Each mark's height on the track, and whether its height is a
+        // number in the source, which a drag can rewrite.
+        let marks: Vec<(f32, bool)> = self
+            .pauses
+            .iter()
+            .map(|mark| (track.y_of_height(mark.z), mark.source.as_ref().is_some_and(|s| s.number.is_some())))
+            .collect();
+        let mark_near = |y: f32| {
+            marks
+                .iter()
+                .enumerate()
+                .map(|(i, &(at, _))| (i, (at - y).abs()))
+                .filter(|&(_, distance)| distance <= 6.0)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        };
+        let hovered_mark = response.hover_pos().and_then(|pos| mark_near(pos.y));
+        let movable = |i: usize| marks[i].1;
+
+        // A press on a mark that can move starts dragging it; anywhere else
+        // it picks the layer.
+        let pressed = ui.input(|i| i.pointer.primary_pressed());
+        if pressed && response.hovered() && self.dragging.is_none() {
+            if let Some(i) = hovered_mark.filter(|&i| movable(i)) {
+                self.dragging = Some((i, track.layer_of_height(self.pauses[i].z)));
+            }
+        }
+        let pointer = response.interact_pointer_pos().filter(|_| response.is_pointer_button_down_on());
+        match (self.dragging, pointer) {
+            (Some((i, _)), Some(pos)) => self.dragging = Some((i, track.layer_at(pos.y).max(1))),
+            (Some((i, layer)), None) => {
+                self.dragging = None;
+                let z = self.layer_top(layer).unwrap_or(hi);
+                let mark = &self.pauses[i];
+                if let Some(number) = mark.source.as_ref().and_then(|s| s.number.clone()) {
+                    if (z - mark.z).abs() > 1e-4 {
+                        self.edit = Some(PauseEdit::Move { number, z });
+                    }
+                }
+            }
+            (None, Some(pos)) => self.set_layer(i64::from(track.layer_at(pos.y))),
+            (None, None) => {}
+        }
+        if response.secondary_clicked() {
+            self.menu = response.interact_pointer_pos().map(|pos| match mark_near(pos.y) {
+                Some(i) => SliderMenu::Pause(i),
+                None => SliderMenu::Layer(track.layer_at(pos.y).max(1)),
+            });
+        }
+
+        let current = i64::from(self.layer().unwrap_or(count));
+        if response.hovered() {
+            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            if scroll != 0.0 {
+                self.set_layer(current + scroll.signum() as i64);
+            }
+        }
+        if (view.hovered() || response.hovered()) && ui.memory(|m| m.focused().is_none()) {
+            let (up, down, shift) =
+                ui.input(|i| (i.key_pressed(Key::ArrowUp), i.key_pressed(Key::ArrowDown), i.modifiers.shift));
+            let step = if shift { 10 } else { 1 };
+            if up {
+                self.set_layer(current + step);
+            } else if down {
+                self.set_layer(current - step);
+            }
+        }
+        let layer = self.layer().unwrap_or(count);
+        let z = self.layer_top(layer).unwrap_or(hi);
+
+        // The track, filled up to the layer shown, and the pause marks.
+        let handle = Pos2::new(x, track.y_of_layer(layer as f32));
+        painter.line_segment(
+            [Pos2::new(x, track.top), Pos2::new(x, track.bottom)],
+            Stroke::new(4.0, Color32::from_white_alpha(30)),
+        );
+        painter.line_segment([Pos2::new(x, track.bottom), handle], Stroke::new(4.0, theme::ACCENT));
+        let active = response.hovered() || response.dragged();
+        painter.circle(handle, if active { 8.0 } else { 7.0 }, theme::TEXT, Stroke::new(2.0, theme::ACCENT));
+        for (i, mark) in self.pauses.iter().enumerate() {
+            let dragged = self.dragging.filter(|&(d, _)| d == i);
+            let y = match dragged {
+                Some((_, layer)) => track.y_of_layer(layer as f32),
+                None => track.y_of_height(mark.z),
+            };
+            let strong = dragged.is_some() || hovered_mark == Some(i);
+            let (half, width) = if strong { (12.0, 3.0) } else { (9.0, 2.0) };
+            painter.line_segment([Pos2::new(x - half, y), Pos2::new(x + half, y)], Stroke::new(width, PAUSE_COLOR));
+            if let Some((_, layer)) = dragged {
+                let z = self.layer_top(layer).unwrap_or(hi);
+                badge_left_of(painter, Pos2::new(x - 14.0, y), &format!("Pause → {} mm", pause_edit::number(z)), PAUSE_COLOR);
+            }
+        }
+        if self.dragging.is_none() {
+            // What the cut shows, left of the handle.
+            badge_left_of(painter, handle - Vec2::new(14.0, 0.0), &format!("Layer {layer} / {count} · {z:.2} mm"), theme::TEXT);
+        }
+
+        // The layer height, under the track.
+        let field = Rect::from_center_size(Pos2::new(x - 18.0, track.bottom + 38.0), Vec2::new(76.0, 20.0));
+        let height = egui::DragValue::new(&mut self.layer_height).range(0.05..=1.0).speed(0.005).max_decimals(2).suffix(" mm");
+        ui.put(field, height).on_hover_text("Layer height");
+
+        if hovered_mark.is_some_and(movable) || self.dragging.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        let hint = match hovered_mark {
+            Some(i) if movable(i) => "Drag to move this pause · Right-click to remove it",
+            Some(i) if self.pauses[i].source.is_some() => {
+                "Its height is computed in the code, so it moves there · Right-click to remove it"
+            }
+            Some(_) => "This pause is written in a library or an included file",
+            None => "Drag to pick a layer · Right-click to add a pause",
+        };
+        let response = if self.dragging.is_none() { response.on_hover_text(hint) } else { response };
+        response.context_menu(|ui| self.slider_menu(ui));
+    }
+
+    fn slider_menu(&mut self, ui: &mut egui::Ui) {
+        match self.menu {
+            Some(SliderMenu::Layer(layer)) => {
+                let z = self.layer_top(layer).unwrap_or(0.0);
+                if ui.button(format!("Add a pause at {} mm", pause_edit::number(z))).clicked() {
+                    self.edit = Some(PauseEdit::Add { z });
+                    ui.close();
+                }
+            }
+            Some(SliderMenu::Pause(i)) => {
+                let Some(mark) = self.pauses.get(i) else { return };
+                ui.label(egui::RichText::new(&mark.label).color(PAUSE_COLOR));
+                match &mark.source {
+                    Some(source) => {
+                        if ui.button("Remove this pause").clicked() {
+                            self.edit = Some(PauseEdit::Remove { call: source.call });
+                            ui.close();
+                        }
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("Written in a library or an included file").color(theme::TEXT_DIM));
+                    }
+                }
+            }
+            None => {}
         }
     }
 
@@ -347,6 +681,56 @@ pub fn empty_hint(has_text: bool) -> &'static str {
     }
 }
 
+/// The layer slider's track: layers from the bottom to the top.
+#[derive(Clone, Copy)]
+struct Track {
+    top: f32,
+    bottom: f32,
+    count: u32,
+    /// The solid's bottom.
+    lo: f32,
+    layer_height: f32,
+}
+
+impl Track {
+    fn y_of_layer(&self, layer: f32) -> f32 {
+        self.bottom - (self.bottom - self.top) * layer / self.count as f32
+    }
+
+    fn y_of_height(&self, z: f32) -> f32 {
+        self.y_of_layer(((z - self.lo) / self.layer_height).clamp(0.0, self.count as f32))
+    }
+
+    /// The layer at a height of the track, from 0.
+    fn layer_at(&self, y: f32) -> u32 {
+        let t = ((self.bottom - y) / (self.bottom - self.top)).clamp(0.0, 1.0);
+        (t * self.count as f32).round() as u32
+    }
+
+    /// The layer whose top is nearest a height.
+    fn layer_of_height(&self, z: f32) -> u32 {
+        ((z - self.lo) / self.layer_height).round().clamp(1.0, self.count as f32) as u32
+    }
+}
+
+/// A one-line badge whose right edge is at `right`, centred on its height.
+fn badge_left_of(painter: &egui::Painter, right: Pos2, text: &str, color: Color32) {
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.0), color);
+    let size = galley.size();
+    let text = Rect::from_min_size(right - Vec2::new(size.x + 8.0, size.y / 2.0), size);
+    painter.rect_filled(text.expand2(Vec2::new(6.0, 3.0)), CornerRadius::same(4), Color32::from_black_alpha(160));
+    painter.galley(text.min, galley, color);
+}
+
+/// The cyan of the pause planes, for their labels.
+const PAUSE_COLOR: Color32 = Color32::from_rgb(115, 230, 255);
+
+/// "Pause 19.4 mm", then the message, if any.
+fn pause_label(pause: &c2f_eval::Pause) -> String {
+    let height = format!("Pause {} mm", pause.z);
+    if pause.message.is_empty() { height } else { format!("{height} · {}", pause.message) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,7 +762,130 @@ mod tests {
             is_2d: false,
             stats: Stats::default(),
             formats: &[],
+            pauses: Vec::new(),
+            source: String::new(),
         }
+    }
+
+    /// A 20 mm model in the layer view, with a pause at 10 mm whose height
+    /// is the number at bytes 6..8 of its source.
+    fn paused_layer_view(ctx: &egui::Context) -> Viewer {
+        let mut viewer = Viewer::new(None);
+        let mut scene = scene(20.0);
+        let source = c2f_eval::PauseSource { call: 0, number: Some(6..8) };
+        scene.pauses = vec![c2f_eval::Pause { z: 10.0, message: String::new(), source: Some(source) }];
+        viewer.set_scene(scene, false);
+        viewer.layer_view = true;
+        frame(ctx, &mut viewer, vec![], 1.0 / 60.0);
+        viewer
+    }
+
+    fn click(at: Pos2, button: PointerButton, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos: at, button, pressed, modifiers: egui::Modifiers::NONE }
+    }
+
+    #[test]
+    fn a_pause_mark_drags_to_another_layer() {
+        let ctx = egui::Context::default();
+        let mut viewer = paused_layer_view(&ctx);
+        // The track runs from y 56 (layer 100) to 516 (layer 0) at x 766.
+        let (mark, to) = (Pos2::new(766.0, 286.0), Pos2::new(766.0, 240.0));
+        frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(mark)], 1.0 / 60.0);
+        frame(&ctx, &mut viewer, vec![click(mark, PointerButton::Primary, true)], 1.0 / 60.0);
+        frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(to)], 1.0 / 60.0);
+        assert_eq!(viewer.dragging, Some((0, 60)));
+        frame(&ctx, &mut viewer, vec![click(to, PointerButton::Primary, false)], 1.0 / 60.0);
+        frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
+        assert_eq!(viewer.take_pause_edit(), Some(PauseEdit::Move { number: 6..8, z: 12.0 }));
+        assert_eq!(viewer.layer(), Some(100), "dragging a pause leaves the layer shown");
+    }
+
+    #[test]
+    fn a_right_click_on_the_slider_targets_a_layer_or_a_pause() {
+        let ctx = egui::Context::default();
+        let mut viewer = paused_layer_view(&ctx);
+        // A quarter of the way up, away from the mark; then on the mark.
+        for y in [401.0, 287.0] {
+            let at = Pos2::new(766.0, y);
+            frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at)], 1.0 / 60.0);
+            frame(&ctx, &mut viewer, vec![click(at, PointerButton::Secondary, true)], 1.0 / 60.0);
+            frame(&ctx, &mut viewer, vec![click(at, PointerButton::Secondary, false)], 1.0 / 60.0);
+            match (y, viewer.menu) {
+                // The panel's margins shift the track by a pixel or two.
+                (401.0, Some(SliderMenu::Layer(layer))) => assert!((24..=26).contains(&layer), "layer {layer}"),
+                (287.0, Some(SliderMenu::Pause(0))) => {}
+                _ => panic!("a right-click at y {y} has no fitting menu"),
+            }
+        }
+    }
+
+    #[test]
+    fn layers_follow_the_model_and_the_layer_height() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(scene(20.0), false);
+        assert_eq!((viewer.layer_count(), viewer.layer()), (Some(100), Some(100)));
+        assert_eq!(viewer.cut(), None, "the layer view starts off");
+        viewer.layer_view = true;
+        assert_eq!(viewer.cut(), Some(20.0));
+        viewer.set_layer(92);
+        assert!((viewer.cut().unwrap() - 18.4).abs() < 1e-4);
+        viewer.set_layer(500);
+        assert_eq!((viewer.layer(), viewer.cut()), (Some(100), Some(20.0)));
+        // A last layer thinner than the others ends at the top.
+        viewer.layer_height = 0.3;
+        assert_eq!((viewer.layer_count(), viewer.cut()), (Some(67), Some(20.0)));
+        // A smaller model keeps the layer when it still has it.
+        viewer.layer_height = 0.2;
+        viewer.set_layer(30);
+        viewer.set_scene(scene(10.0), false);
+        assert_eq!((viewer.layer_count(), viewer.layer()), (Some(50), Some(30)));
+        viewer.set_scene(scene(4.0), false);
+        assert_eq!(viewer.layer(), Some(20));
+    }
+
+    #[test]
+    fn a_click_on_the_slider_picks_a_layer() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(scene(20.0), false);
+        viewer.layer_view = true;
+        frame(&ctx, &mut viewer, vec![], 1.0 / 60.0);
+        // The track runs from y 56 to 516 at x 766 in an 800 by 600 view.
+        let at = Pos2::new(766.0, 286.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at), press(true)], 1.0 / 60.0);
+        frame(&ctx, &mut viewer, vec![press(false)], 1.0 / 60.0);
+        assert_eq!(viewer.layer(), Some(50));
+        let camera = viewer.camera;
+        assert_eq!((camera.yaw, camera.pitch), (Viewer::new(None).camera.yaw, Viewer::new(None).camera.pitch));
+    }
+
+    #[test]
+    fn pauses_get_a_rectangle_around_the_model_and_a_label() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(scene(10.0), false);
+        assert!(!viewer.has_pauses());
+        let mut with_pauses = scene(10.0);
+        with_pauses.pauses = vec![
+            c2f_eval::Pause { z: 3.0, message: String::new(), source: None },
+            c2f_eval::Pause { z: 9.4, message: "Magnets".to_string(), source: None },
+        ];
+        viewer.set_scene(with_pauses, false);
+        assert!(viewer.has_pauses());
+        let labels: Vec<&str> = viewer.pauses.iter().map(|mark| mark.label.as_str()).collect();
+        assert_eq!(labels, ["Pause 3 mm", "Pause 9.4 mm · Magnets"]);
+        // The 10 mm footprint, with an 8% margin on each side.
+        let corners = &viewer.pauses[1].corners;
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
+        assert!(near(corners[0], [-0.8, -0.8, 9.4]), "{corners:?}");
+        assert!(near(corners[2], [10.8, 10.8, 9.4]), "{corners:?}");
+        // Drawing the labels needs no GPU.
+        frame(&egui::Context::default(), &mut viewer, vec![], 1.0 / 60.0);
     }
 
     #[test]

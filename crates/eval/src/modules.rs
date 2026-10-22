@@ -237,7 +237,8 @@ pub fn instantiate<'p>(
                         Value::Undef => String::new(),
                         other => other.to_display(),
                     };
-                    interp.pauses.push(crate::Pause { z, message });
+                    let source = interp.pause_call.take();
+                    interp.pauses.push(crate::Pause { z, message, source });
                 }
                 None => interp.warn(format!("Ignoring pause(): z = {} is not a height", p.get("z").repr())),
             }
