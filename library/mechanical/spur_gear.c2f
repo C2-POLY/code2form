@@ -1,0 +1,101 @@
+// Involute spur gear, parametric: its module, number of teeth, thickness,
+// bore and pressure angle (20° by default). Its axis along z, its faces
+// at z = 0 and z = thickness, a tooth centered on +x.
+// https://www.iso.org/standard/22643.html
+//
+// The tooth is ISO 53's basic rack (ISO 53, profile A): the pitch circle
+// m·z across, the addendum m above it, the dedendum 1.25 m below, the
+// flanks involutes of the base circle m·z·cos(α), radial lines under the
+// base circle down to the root. Drawn here from those formulas, no outside
+// library. Two gears of the same module and pressure angle mesh at a
+// center distance m·(z1 + z2)/2: `gear_pair.c2f` places them.
+//
+// `backlash` thins each tooth by that much on the pitch circle, so that
+// two printed gears do not bind: 0.1 to 0.2 mm for FDM printing at a
+// module of 1 to 2. Below 17 teeth at 20°, a cut gear's root is undercut;
+// this one draws the full involute down to the base circle instead, which
+// prints well enough for light loads.
+
+// @description Parametric involute spur gear (module, teeth, thickness,
+// @description bore, pressure angle 20°): a pinion or a wheel to print, to
+// @description slow a motor down and give it torque.
+// @spec gear: involute spur gear, ISO 53 basic rack
+// @spec module: 1 mm by default (0.5 to 5)
+// @spec teeth: 20 by default (8 to 200)
+// @spec pressure angle: 20°
+// @spec pitch diameter: module x teeth (20 mm by default)
+// @spec outside diameter: module x (teeth + 2) (22 mm by default)
+// @spec mass: 1.8 g as drawn by default, in PLA (1.24 g/cm³)
+// @source https://www.iso.org/standard/22643.html ISO 53, the basic rack tooth profile
+// @source https://khkgears.net/new/gear_knowledge/gear_technical_reference/involute_gear_profile.html KHK, the involute gear profile
+
+/* [Gear] */
+// The module: the pitch diameter over the number of teeth, in millimeters.
+mod = 1; // [0.5:0.25:5]
+// The number of teeth.
+teeth = 20; // [8:1:200]
+// The thickness along the axis.
+thickness = 5; // [1:0.5:50]
+// The bore's diameter; 0 for none.
+bore = 5; // [0:0.5:50]
+// The pressure angle, in degrees.
+pressure_angle = 20; // [14.5, 20, 25]
+// How much each tooth is thinned on the pitch circle.
+backlash = 0; // [0:0.05:0.5]
+
+// The involute's polar angle at radius `r`, in radians, for the base
+// radius `rb`.
+function involute_angle(rb, r) = let (a = acos(rb / r)) tan(a) - a * PI / 180;
+
+// The point at radius `r` and angle `a` (in radians).
+function gear_polar(r, a) = [r * cos(a * 180 / PI), r * sin(a * 180 / PI)];
+
+// The points of `points` turned by `a` degrees about the origin.
+function gear_turn(points, a) = [for (p = points) [p[0] * cos(a) - p[1] * sin(a), p[0] * sin(a) + p[1] * cos(a)]];
+
+// The outline of one tooth centered on +x, from its root on the -y side
+// round its tip to its root on the +y side.
+function gear_tooth(m, z, alpha, backlash, steps = 8) =
+    let (
+        r = m * z / 2,
+        rb = r * cos(alpha),
+        ra = r + m,
+        rf = r - 1.25 * m,
+        // Half the tooth's angle at the base circle: half its angle on the
+        // pitch circle, less the backlash, plus the involute's turn from
+        // the base circle to the pitch circle.
+        half = PI / (2 * z) - backlash / (2 * r) + involute_angle(rb, r),
+        start = max(rb, rf),
+        radii = [for (k = [0 : steps]) start + (ra - start) * k / steps],
+        flank = [for (rho = radii) [rho, half - involute_angle(rb, rho)]]
+    )
+    concat(
+        rf < rb ? [gear_polar(rf, -half)] : [],
+        [for (p = flank) gear_polar(p[0], -p[1])],
+        [for (k = [len(flank) - 1 : -1 : 0]) gear_polar(flank[k][0], flank[k][1])],
+        rf < rb ? [gear_polar(rf, half)] : []
+    );
+
+// The gear's outline, in the xy plane: its teeth round the root circle.
+module gear_outline(m, z, alpha = 20, backlash = 0) {
+    tooth = gear_tooth(m, z, alpha, backlash);
+    union() {
+        polygon([for (i = [0 : z - 1]) each gear_turn(tooth, 360 * i / z)]);
+        circle(r = m * z / 2 - 1.25 * m, $fn = 4 * z);
+    }
+}
+
+// An involute spur gear of module `mod` (millimeters), `teeth`
+// teeth, `thickness` thick, a `bore` through it, the pressure angle
+// `pressure_angle` (degrees), each tooth thinned by `backlash` on the
+// pitch circle.
+module spur_gear(mod = 1, teeth = 20, thickness = 5, bore = 5, pressure_angle = 20, backlash = 0) {
+    assert(teeth >= 6 && teeth == floor(teeth), "spur_gear: teeth is a whole number, 6 or more");
+    assert(bore < mod * (teeth - 2.5), "spur_gear: the bore is wider than the root circle");
+    color([0.93, 0.80, 0.38]) linear_extrude(thickness) difference() {
+        gear_outline(mod, teeth, pressure_angle, backlash);
+        if (bore > 0) circle(d = bore, $fn = 48);
+    }
+}
+
+spur_gear(mod, teeth, thickness, bore, pressure_angle, backlash);

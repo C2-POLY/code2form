@@ -1,0 +1,33 @@
+// Deep groove ball bearing 608, 8 x 22 x 7 mm, shielded on both faces:
+// the outer and inner steel rings and the shields between them. Its axis
+// along z, a face at z = 0, centered on the origin.
+// https://www.electrokit.com/en/kullager-skf-8mm-dim-8x22x7
+//
+// From SKF's figures for the open 608, as Electrokit lists them: 8 x 22 x 7 mm,
+// dynamic load rating 3.45 kN, static 1.37 kN, 12.1 g. A shielded 608-2Z has
+// the same size and ratings; a sealed 608-2RS1 is rated lower (about 2 kN
+// dynamic), as SKF's seals cost it room.
+// The bore, outside diameter and width are ISO 15's for the designation,
+// so any maker's 608 has them. The rings' section and the shields are
+// drawn, not measured. To hold it in a printed part, `bearing_seat.c2f`
+// cuts its pocket.
+
+// @description Deep groove ball bearing 608, 8 mm bore, 22 mm outside, 7 mm
+// @description wide: the bearing of skateboard wheels, fidget spinners and 3D
+// @description printers' idlers: the cheapest and easiest to find.
+// @spec bearing: deep groove ball bearing, single row, 608 (SKF 608)
+// @spec bore: 8 mm
+// @spec outside diameter: 22 mm
+// @spec width: 7 mm
+// @spec dynamic load: 3.45 kN
+// @spec static load: 1.37 kN
+// @spec mass: 12.1 g
+// @source https://www.electrokit.com/en/kullager-skf-8mm-dim-8x22x7 SKF 608 at Electrokit (dimensions, load ratings, mass)
+
+use <lib/ball_bearing.c2f>
+
+module bearing_608() {
+    ball_bearing(8, 22, 7);
+}
+
+bearing_608();

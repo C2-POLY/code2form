@@ -1,5 +1,6 @@
-//! The parts catalogue: every part under `electronics/` in the library
-//! folders, the library's and the user's own, with a picture of each, to
+//! The parts catalogue: every part under `electronics/`, then under
+//! `mechanical/`, in the library folders, the library's and the user's
+//! own, with a picture of each, to
 //! drag into a circuit or add with a button; and new parts made from a
 //! template, in the user's parts folder.
 //!
@@ -25,8 +26,13 @@ use crate::i18n::tr;
 use crate::pick::Ray;
 use crate::theme;
 
-/// The folder of parts in a library folder.
+/// The folder of parts in a library folder, where new parts go.
 pub const FOLDER: &str = "electronics";
+
+/// The folders of parts in a library folder, in the order the catalogue
+/// lists them: the electronics, then the mechanical parts (bearings,
+/// screws, gears...) and their helpers.
+pub const FOLDERS: [&str; 2] = [FOLDER, "mechanical"];
 
 /// A thumbnail's size, in pixels.
 const THUMB: [usize; 2] = [96, 72];
@@ -36,6 +42,8 @@ const THUMB: [usize; 2] = [96, 72];
 pub struct Entry {
     /// As a circuit names it: `electronics/xiao_esp32s3.c2f`.
     pub rel: String,
+    /// The folder it is in, one of [`FOLDERS`].
+    pub folder: &'static str,
     pub path: PathBuf,
     /// The file's stem.
     pub name: String,
@@ -51,47 +59,59 @@ pub struct Entry {
     pub document: Document,
 }
 
-/// The parts under `electronics/` in each of `roots`, the first folder
-/// winning for a path found in several, by name.
+/// The parts under `electronics/` then `mechanical/` in each of `roots`,
+/// the first folder winning for a path found in several, by name within
+/// each.
 pub fn list(roots: &[PathBuf]) -> Vec<Entry> {
     let mut seen = HashSet::new();
     let mut entries = Vec::new();
     for root in roots {
-        let Ok(dir) = std::fs::read_dir(root.join(FOLDER)) else { continue };
-        let mut files: Vec<PathBuf> = dir
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "c2f"))
-            .collect();
-        files.sort();
-        for path in files {
-            let Some(file) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-            let rel = format!("{FOLDER}/{file}");
-            if !seen.insert(rel.clone()) {
-                continue;
-            }
-            let source = c2f_eval::read_source(&path).unwrap_or_default();
-            let (annotations, _) = c2f_lang::annotations::read(&source);
-            let name = file.trim_end_matches(".c2f").to_string();
-            // The search reads the whole description, the row its first
-            // sentence.
-            let full = match &annotations.description {
-                Some(description) => description.text.clone(),
-                None => description(&source),
-            };
-            entries.push(Entry {
-                description: first_sentence(&full),
-                document: Document::new(&name, &rel, &full, &annotations),
-                rel,
-                name,
-                pins: annotations.pins.iter().map(|p| p.name.clone()).collect(),
-                modified: std::fs::metadata(&path).and_then(|m| m.modified()).ok(),
-                annotations,
-                path,
-            });
+        for folder in FOLDERS {
+            entries.extend(list_folder(root, folder, &mut seen));
         }
     }
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let rank = |entry: &Entry| FOLDERS.iter().position(|f| *f == entry.folder);
+    entries.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    entries
+}
+
+/// The parts in `root`'s `folder` whose path is not in `seen` yet.
+fn list_folder(root: &Path, folder: &'static str, seen: &mut HashSet<String>) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    let Ok(dir) = std::fs::read_dir(root.join(folder)) else { return entries };
+    let mut files: Vec<PathBuf> = dir
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "c2f"))
+        .collect();
+    files.sort();
+    for path in files {
+        let Some(file) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+        let rel = format!("{folder}/{file}");
+        if !seen.insert(rel.clone()) {
+            continue;
+        }
+        let source = c2f_eval::read_source(&path).unwrap_or_default();
+        let (annotations, _) = c2f_lang::annotations::read(&source);
+        let name = file.trim_end_matches(".c2f").to_string();
+        // The search reads the whole description, the row its first
+        // sentence.
+        let full = match &annotations.description {
+            Some(description) => description.text.clone(),
+            None => description(&source),
+        };
+        entries.push(Entry {
+            description: first_sentence(&full),
+            document: Document::new(&name, &rel, &full, &annotations),
+            rel,
+            folder,
+            name,
+            pins: annotations.pins.iter().map(|p| p.name.clone()).collect(),
+            modified: std::fs::metadata(&path).and_then(|m| m.modified()).ok(),
+            annotations,
+            path,
+        });
+    }
     entries
 }
 
@@ -599,11 +619,13 @@ impl Catalogue {
                                 self.selected = if open { None } else { Some(entry.rel.clone()) };
                             }
                             let pins = entry.pins.len();
-                            ui.label(
-                                RichText::new(tr!("{pins} pin{}", "{pins} broche{}", if pins == 1 { "" } else { "s" }))
-                                    .size(11.5)
-                                    .color(theme::palette().text_dim),
-                            );
+                            // A mechanical part says so rather than "0 pins".
+                            let kind = if entry.folder == FOLDER {
+                                tr!("{pins} pin{}", "{pins} broche{}", if pins == 1 { "" } else { "s" })
+                            } else {
+                                tr("mechanical", "mécanique").to_string()
+                            };
+                            ui.label(RichText::new(kind).size(11.5).color(theme::palette().text_dim));
                         });
                         if !entry.description.is_empty() {
                             ui.add(
@@ -703,9 +725,14 @@ mod tests {
         std::fs::write(library.join("electronics/board.c2f"), "// Another board.\ncube(2);\n").unwrap();
         std::fs::write(library.join("electronics/Amp.c2f"), "// An amplifier, I2S in\ncube(1);\n").unwrap();
         std::fs::write(library.join("electronics/notes.txt"), "not a part").unwrap();
+        std::fs::create_dir_all(library.join("mechanical")).unwrap();
+        std::fs::write(library.join("mechanical/axle.c2f"), "// A steel axle.\ncylinder(d = 8, h = 50);\n").unwrap();
         let entries = list(&[mine.clone(), library.clone(), mine.join("missing")]);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["Amp", "board"]);
+        // The electronics first, then the mechanical parts.
+        assert_eq!(names, ["Amp", "board", "axle"]);
+        assert_eq!((entries[2].rel.as_str(), entries[2].folder), ("mechanical/axle.c2f", "mechanical"));
+        assert_eq!(entries[0].folder, "electronics");
         // The first folder wins.
         assert_eq!(entries[1].path, mine.join("electronics/board.c2f"));
         assert_eq!(
@@ -716,7 +743,8 @@ mod tests {
         let found = |query: &str| -> Vec<&str> { search(&entries, query).iter().map(|e| e.name.as_str()).collect() };
         assert_eq!(found("BOARD b"), ["board"]);
         assert_eq!(found("ampli i2s"), ["Amp"]);
-        assert_eq!(found(""), ["Amp", "board"]);
+        assert_eq!(found(""), ["Amp", "board", "axle"]);
+        assert_eq!(found("axe"), ["axle"]);
         for dir in [mine, library] {
             let _ = std::fs::remove_dir_all(dir);
         }

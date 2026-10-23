@@ -1,0 +1,31 @@
+// Deep groove ball bearing 625, 5 x 16 x 5 mm, shielded on both faces:
+// the outer and inner steel rings and the shields between them. Its axis
+// along z, a face at z = 0, centered on the origin.
+// https://kramp.com/shop-de/en/p/deep-groove-ball-bearing-5x16x5mm-skf--625SKF
+//
+// From SKF's figures for the 625, as Kramp lists them: 5 x 16 x 5 mm, dynamic
+// load rating 1140 N, static 380 N, 4.7 g.
+// The bore, outside diameter and width are ISO 15's for the designation,
+// so any maker's 625 has them. The rings' section and the shields are
+// drawn, not measured. To hold it in a printed part, `bearing_seat.c2f`
+// cuts its pocket.
+
+// @description Deep groove ball bearing 625, 5 mm bore, 16 mm outside, 5 mm
+// @description wide: for a 5 mm shaft, as a NEMA 17 motor's, in a small
+// @description printed mechanism.
+// @spec bearing: deep groove ball bearing, single row, 625 (SKF 625)
+// @spec bore: 5 mm
+// @spec outside diameter: 16 mm
+// @spec width: 5 mm
+// @spec dynamic load: 1.14 kN
+// @spec static load: 0.38 kN
+// @spec mass: 4.7 g
+// @source https://kramp.com/shop-de/en/p/deep-groove-ball-bearing-5x16x5mm-skf--625SKF SKF 625 at Kramp (dimensions, load ratings, mass)
+
+use <lib/ball_bearing.c2f>
+
+module bearing_625() {
+    ball_bearing(5, 16, 5);
+}
+
+bearing_625();

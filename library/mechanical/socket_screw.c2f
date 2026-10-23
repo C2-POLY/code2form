@@ -1,0 +1,74 @@
+// Socket head cap screw, ISO 4762 (DIN 912), M2 to M5: the round head
+// with its hexagon socket, the shank. The thread is not drawn: the shank
+// is its nominal diameter. Its axis along z, the head's underside at
+// z = 0, the head above and the shank below, down to z = -length.
+// https://www.fasteners.eu/standards/ISO/4762/
+//
+// From ISO 4762's table, as fasteners.eu gives it: the head's diameter
+// (dk max) and height (k max), the socket's size across flats (s) and
+// least depth (t), the pitch. The length is from under the head, in the
+// standard's lengths (6, 8, 10, 12, 16, 20, 25, 30 mm...). Estimated: the
+// mass, from steel's density (7.85 g/cm³) and the drawn volume, about
+// 1.1 g for M3 x 10; the file echoes it for the parameters set.
+//
+// The holes to print for it: a clearance hole of the size plus 0.4 mm
+// (3.4 mm for M3), a counterbore of the head's diameter plus 1 mm, as
+// deep as the head is high; or a heat-set insert (`heat_set_insert.c2f`)
+// or a hex nut (`hex_nut.c2f`) to screw into.
+
+// @description Socket head cap screw ISO 4762 (DIN 912), M2, M2.5, M3, M4 or
+// @description M5, its length as a parameter: the screw of printed
+// @description assemblies, with hex nuts or heat-set inserts.
+// @spec standard: ISO 4762 (DIN 912), steel 8.8 or A2 stainless
+// @spec sizes: M2, M2.5, M3, M4, M5
+// @spec head: M2 3.8 x 2, M2.5 4.5 x 2.5, M3 5.5 x 3, M4 7 x 4, M5 8.5 x 5 mm (diameter x height)
+// @spec hex key: M2 1.5, M2.5 2, M3 2.5, M4 3, M5 4 mm
+// @spec pitch: M2 0.4, M2.5 0.45, M3 0.5, M4 0.7, M5 0.8 mm
+// @spec mass: 1.1 g for M3 x 10 in steel (estimated from its volume)
+// @source https://www.fasteners.eu/standards/ISO/4762/ ISO 4762 dimensions at fasteners.eu
+
+/* [Screw] */
+// The thread's size.
+size = "M3"; // [M2, M2.5, M3, M4, M5]
+// The length under the head, in millimeters.
+length = 10; // [3:1:60]
+
+// The sizes of ISO 4762: name, thread diameter, head diameter (dk max),
+// head height (k max), socket across flats (s), socket depth (t min),
+// pitch.
+function socket_screw_sizes() = [
+    ["M2", 2, 3.8, 2, 1.5, 1.0, 0.4],
+    ["M2.5", 2.5, 4.5, 2.5, 2, 1.1, 0.45],
+    ["M3", 3, 5.5, 3, 2.5, 1.3, 0.5],
+    ["M4", 4, 7, 4, 3, 2.0, 0.7],
+    ["M5", 5, 8.5, 5, 4, 2.5, 0.8],
+];
+
+// The row of `size`, undef for a size the file does not know.
+function socket_screw_size(size) =
+    let (found = [for (s = socket_screw_sizes()) if (s[0] == size) s]) len(found) > 0 ? found[0] : undef;
+
+// An ISO 4762 screw of `size` (M2 to M5), `length` long under its head.
+module socket_screw(size = "M3", length = 10) {
+    s = socket_screw_size(size);
+    assert(s != undef, str("socket_screw: the size is M2, M2.5, M3, M4 or M5, not \"", size, "\""));
+    d = s[1];
+    dk = s[2];
+    k = s[3];
+    key = s[4];
+    depth = s[5];
+    volume = PI / 4 * (dk * dk * k + d * d * length) - 3 * sqrt(3) / 2 * pow(key / sqrt(3), 2) * depth;
+    echo(str("socket_screw: ", size, " x ", length, ", about ", round(volume * 7.85 / 100) / 10, " g in steel"));
+    $fn = 32;
+    color([0.20, 0.20, 0.22]) {
+        difference() {
+            // The head, its top edge rounded off a little.
+            rotate_extrude() polygon([[0, 0], [dk / 2, 0], [dk / 2, k - 0.1 * d], [dk / 2 - 0.1 * d, k], [0, k]]);
+            translate([0, 0, k - depth]) cylinder(d = key / cos(30), h = depth + 1, $fn = 6);
+        }
+        // The shank, its end chamfered.
+        rotate_extrude() polygon([[0, -length], [d / 2 - 0.1 * d, -length], [d / 2, -length + 0.1 * d], [d / 2, 0.01], [0, 0.01]]);
+    }
+}
+
+socket_screw(size, length);

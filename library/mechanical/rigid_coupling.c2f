@@ -1,0 +1,58 @@
+// Rigid shaft coupling, the common aluminium one that joins a motor's
+// shaft to a lead screw or a printed part's axle: a round sleeve bored to
+// each shaft's diameter from its two ends, each half clamped by set
+// screws. Its axis along z, its ends at z = 0 (the `bore1` side) and
+// z = length.
+// https://www.tinytronics.nl/shop/en/mechanics-and-actuators/parts/motor-couplers/fixed-motor-coupler-5mm-to-8mm
+//
+// The common size, 20 mm across and 25 mm long, bores 5 and 8 mm (a NEMA
+// 17 stepper's shaft to a T8 lead screw), is as sellers list it, not from
+// a maker's drawing; others are 14 mm across or square (TinyTronics' 5 to
+// 8 mm one is 14 x 14 x 25 mm, 8 g). Estimated: the two M4 set screws per
+// half, 90° apart, 6 mm from each end, and the mass, from aluminium's
+// density (2.7 g/cm³) and the drawn volume, about 19 g at the default
+// size; the file echoes it for the parameters set. Check yours before
+// printing a pocket for it.
+
+// @description Rigid shaft coupling, aluminium, joining two shafts end to end
+// @description (5 mm to 8 mm by default, bores 3 to 12 mm as parameters): a
+// @description motor to a lead screw or an axle, clamped by set screws.
+// @spec coupling: rigid, aluminium, set screws
+// @spec bores: 5 and 8 mm by default (3 to 12 mm)
+// @spec size: 20 mm across, 25 mm long by default
+// @spec set screws: two M4 per half, 90° apart (estimated)
+// @spec mass: 19 g at the default size (estimated from its volume)
+// @source https://www.tinytronics.nl/shop/en/mechanics-and-actuators/parts/motor-couplers/fixed-motor-coupler-5mm-to-8mm TinyTronics, a 5 to 8 mm rigid coupler
+// @source https://www.engineeringtoolbox.com/metal-alloys-densities-d_50.html Engineering ToolBox, the densities of metals
+
+/* [Coupling] */
+// The bore of the end at z = 0, in millimeters.
+bore1 = 5; // [3:0.5:12]
+// The bore of the other end.
+bore2 = 8; // [3:0.5:12]
+// The outside diameter.
+diameter = 20; // [10:1:30]
+// The length.
+length = 25; // [15:1:40]
+
+// A coupling `diameter` across and `length` long, bored `bore1` from z = 0
+// and `bore2` from z = length, each bore half the length deep.
+module rigid_coupling(bore1 = 5, bore2 = 8, diameter = 20, length = 25) {
+    assert(max(bore1, bore2) <= diameter - 6, "rigid_coupling: a bore leaves less than 3 mm of wall");
+    half = length / 2;
+    volume = PI / 4 * (diameter * diameter * length - (bore1 * bore1 + bore2 * bore2) * half);
+    echo(str("rigid_coupling: ", bore1, " to ", bore2, " mm, ", diameter, " x ", length, " mm, about ",
+             round(volume * 2.7 / 1000), " g in aluminium"));
+    $fn = 64;
+    color([0.82, 0.83, 0.86]) difference() {
+        // The sleeve, its outer edges chamfered.
+        rotate_extrude() polygon([[0, 0], [diameter / 2 - 0.8, 0], [diameter / 2, 0.8], [diameter / 2, length - 0.8],
+                                  [diameter / 2 - 0.8, length], [0, length]]);
+        translate([0, 0, -1]) cylinder(d = bore1, h = half + 1.01);
+        translate([0, 0, half]) cylinder(d = bore2, h = half + 1);
+        // The set screws' holes, two per half, 90° apart.
+        for (z = [6, length - 6], a = [0, 90]) translate([0, 0, z]) rotate(a) rotate([0, 90, 0]) cylinder(d = 4, h = diameter, $fn = 16);
+    }
+}
+
+rigid_coupling(bore1, bore2, diameter, length);

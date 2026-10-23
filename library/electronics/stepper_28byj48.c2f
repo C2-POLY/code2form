@@ -1,0 +1,84 @@
+// 28BYJ-48 5 V geared stepper motor, the one sold with a ULN2003 driver
+// board: the silver can with its two flange ears, the shaft with its two
+// flats off center on its boss, the blue cover on the side, and its five
+// wires (blue, pink, yellow, orange, red) shown cut short into the white
+// 5-pin plug that goes into the ULN2003 board's socket. The shaft at the
+// origin along +z, the flange's face at z = 0, the can's axis 8 mm off
+// the shaft towards +y.
+// https://components101.com/motors/28byj-48-stepper-motor
+//
+// From the Kiatronics datasheet: 5 V, four phases, a 1/64 gearbox, a
+// stride angle of 5.625°/64, 50 ohm per phase, a pull-in torque of
+// 300 gf·cm and a self-positioning (holding) torque over 34.3 mN·m. From
+// the common drawing and the sellers' photos (not measured): the can
+// 28 mm across and 19 mm deep, the ears' 4.2 mm holes 35 mm apart, the
+// shaft 5 mm with two flats 3 mm apart, 9.5 mm past the flange with its
+// 9 mm boss, the cover about 15 mm wide. Estimated: the speed, about
+// 15 rpm, the most it turns reliably at 5 V in half steps (the sheet
+// gives 100 Hz, its rated stepping rate); the mass, about 35 g (sellers
+// give 30 to 36 g); the plug (a JST XH, 2.5 mm pitch), drawn 6 mm from
+// the cover where the real cable is about 23 cm long.
+//
+// The plug's pins, in its order: 1 blue (coil D on the board), 2 pink,
+// 3 yellow, 4 orange, 5 red (the coils' common, + 5 V).
+
+// @description Small geared stepper motor, 28BYJ-48, 5 V, with a 1/64
+// @description gearbox: slow, precise turns for a pointer, a valve or a
+// @description turntable, driven by a ULN2003 board through its 5-pin plug.
+// @spec motor: unipolar stepper, 4 phases, 1/64 gearbox
+// @spec supply: 5 V
+// @spec steps: 5.625°/64 per half step, 4096 half steps a turn
+// @spec torque: 300 gf·cm pull-in
+// @spec holding torque: 34.3 mN·m (self-positioning torque, at least)
+// @spec speed: 15 rpm at 5 V, half steps (estimated)
+// @spec mass: 35 g (estimated)
+// @spec resistance: 50 ohm per phase
+// @spec connector: 5-pin JST XH plug, 2.5 mm pitch, to a ULN2003 board
+// @source https://pdf.direnc.net/upload/28byj-48-reduktorlu-step-motor-datasheet.pdf datasheet (Kiatronics)
+// @source https://components101.com/motors/28byj-48-stepper-motor Components101, pinout and figures
+
+// @pin blue [-5, 37.5, -9] +y passive 5V "plug pin 1, coil D"
+// @pin pink [-2.5, 37.5, -9] +y passive 5V "plug pin 2, coil C"
+// @pin yellow [0, 37.5, -9] +y passive 5V "plug pin 3, coil B"
+// @pin orange [2.5, 37.5, -9] +y passive 5V "plug pin 4, coil A"
+// @pin red [5, 37.5, -9] +y power_in 5V "plug pin 5, the coils' common, 5 V"
+// @mount_hole [-17.5, 8, 0] d=4.2 +z
+// @mount_hole [17.5, 8, 0] d=4.2 +z
+// @port shaft [0, 0, 9.5] +z d=5 "shaft, 5 mm with two flats 3 mm apart"
+
+module stepper_28byj48() {
+    $fn = 48;
+    steel = [0.78, 0.79, 0.81];
+    brass = [0.85, 0.68, 0.38];
+
+    // The can, its back's label.
+    color(steel) translate([0, 8, -19]) cylinder(r = 14, h = 18);
+    color([0.86, 0.86, 0.86]) translate([0, 8, -19.3]) cylinder(r = 13.6, h = 0.3);
+
+    // The flange, its two ears drilled.
+    color(steel) translate([0, 8, -1]) difference() {
+        hull() {
+            cylinder(r = 7, h = 1);
+            for (x = [-17.5, 17.5]) translate([x, 0, 0]) cylinder(r = 3.5, h = 1);
+        }
+        for (x = [-17.5, 17.5]) translate([x, 0, -1]) cylinder(d = 4.2, h = 3, $fn = 16);
+    }
+    color(steel) translate([0, 8, -1]) cylinder(r = 14, h = 1);
+
+    // The shaft's boss and the shaft with its two flats.
+    color(brass) {
+        cylinder(r = 4.5, h = 1.5);
+        translate([0, 0, 1.5]) intersection() {
+            cylinder(r = 2.5, h = 8, $fn = 24);
+            cube([3, 6, 20], center = true);
+        }
+    }
+
+    // The blue cover on the side, the wires out of it, into the plug.
+    color([0.20, 0.35, 0.75]) translate([-7.5, 19.5, -17]) cube([15, 5, 15]);
+    colors = [[0.15, 0.30, 0.85], [0.95, 0.45, 0.65], [0.95, 0.85, 0.20], [0.95, 0.55, 0.15], [0.85, 0.15, 0.15]];
+    for (i = [0 : 4]) color(colors[i]) translate([-5 + i * 2.5, 24.5, -9]) rotate([-90, 0, 0]) cylinder(d = 1.4, h = 6.5, $fn = 12);
+    color([0.95, 0.95, 0.92]) translate([-7.45, 30.5, -11.9]) cube([14.9, 7, 5.8]);
+}
+
+stepper_28byj48();

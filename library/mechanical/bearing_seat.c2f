@@ -1,0 +1,85 @@
+// The seat of a ball bearing in a printed part: a pocket the bearing's
+// outside diameter plus a clearance, as deep as the bearing is wide, with
+// a shoulder under it for the outer ring and a hole through for the shaft.
+// A design uses it with
+//
+//     use <mechanical/bearing_seat.c2f>
+//     bearing_seat("608") cube([40, 40, 10]);       // cut from its children
+//     difference() { body(); bearing_seat("608"); } // or as the pocket alone
+//
+// The pocket's axis is z, its opening at z = 0, going down: place the seat
+// with translate() and rotate() at the face it opens in.
+//
+// The clearances, for FDM printing (a 0.4 mm nozzle, PLA or PETG): a hole
+// prints about 0.1 to 0.2 mm under its size, as the plastic squeezed out
+// of each layer bulges inwards and the slicer's polygon cuts the arcs.
+//   - "press": the outside diameter plus 0.1 mm. The pocket comes out at
+//     the bearing's size or a little under: the bearing goes in with a
+//     vise or a mallet and stays in, held by the plastic's spring.
+//   - "slide": the outside diameter plus 0.3 mm. The bearing slips in by
+//     hand and comes out again: hold it with a cap, a screw head or a drop
+//     of glue.
+// Both come from printing test rings, as the 3D printing community does
+// it; a printer whose holes come out true wants 0.1 mm more. The pocket
+// has 128 sides, so that its flats take nothing off, and a 0.5 mm chamfer
+// at the opening, which guides the bearing in and takes the first layer's
+// bulge off the edge. The shoulder's hole is halfway between the bore
+// and the outside diameter: the outer ring rests on the shoulder, the
+// inner ring and the shaft turn clear of it.
+
+// @description Helper to model the seat of a ball bearing (608, 625, 6800,
+// @description 6001) in a printed part: bearing_seat(bearing, fit, depth)
+// @description cuts the pocket, a press or a slide fit with clearances for
+// @description FDM printing, its shoulder and the hole through for the shaft.
+// @spec fits: press (outside diameter + 0.1 mm), slide (outside diameter + 0.3 mm)
+// @spec bearings: 608, 625, 6800, 6001
+// @spec depth: the bearing's width by default
+// @source https://www.iso.org/standard/69977.html ISO 15, the boundary dimensions of radial bearings
+
+use <lib/ball_bearing.c2f>
+
+/* [Seat] */
+// The bearing it holds.
+bearing = "608"; // [608, 625, 6800, 6001]
+// How it holds it.
+fit = "press"; // [press, slide]
+
+// The clearance on the diameter for `fit`, in millimeters.
+function bearing_clearance(fit) = fit == "slide" ? 0.3 : 0.1;
+
+// The pocket's diameter for `bearing` held with `fit`.
+function bearing_pocket(bearing, fit = "press") = bearing_dimensions(bearing)[1] + bearing_clearance(fit);
+
+// The seat of `bearing` (608, 625, 6800 or 6001), held with `fit` (press or
+// slide), `depth` deep (its width by default): cut from the children, or
+// the pocket alone without them. `through` makes the hole for the shaft go
+// on 100 mm under the shoulder.
+module bearing_seat(bearing = "608", fit = "press", depth = undef, through = true) {
+    size = bearing_dimensions(bearing);
+    assert(size != undef, str("bearing_seat: unknown bearing \"", bearing, "\", take one of ", bearing_names()));
+    assert(fit == "press" || fit == "slide", str("bearing_seat: fit is \"press\" or \"slide\", not \"", fit, "\""));
+    d = size[0];
+    B = size[2];
+    deep = depth == undef ? B : depth;
+    pocket = size == undef ? undef : bearing_pocket(bearing, fit);
+    echo(str("bearing_seat: ", bearing, ", ", fit, " fit, a pocket ", pocket, " mm across and ", deep, " mm deep"));
+    if ($children > 0)
+        difference() {
+            children();
+            cut();
+        }
+    else
+        cut();
+
+    module cut() {
+        $fn = 128;
+        chamfer = 0.5;
+        translate([0, 0, -deep]) cylinder(d = pocket, h = deep + 0.01);
+        translate([0, 0, -chamfer]) cylinder(d1 = pocket, d2 = pocket + 2 * chamfer, h = chamfer + 0.01);
+        if (through) translate([0, 0, -deep - 100]) cylinder(d = (d + size[1]) / 2, h = 100.01);
+    }
+}
+
+// A block around the seat, 3 mm under the bearing, to see it.
+size = bearing_dimensions(bearing);
+bearing_seat(bearing, fit) translate([-size[1], -size[1], -size[2] - 3]) cube([2 * size[1], 2 * size[1], size[2] + 3]);
