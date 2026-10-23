@@ -92,12 +92,12 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part"]
+        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part", "loads"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
         let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
-        assert_eq!(takes_code, !["library_parts", "electrify"].contains(&tool["name"].as_str().unwrap()), "{tool}");
+        assert_eq!(takes_code, !["library_parts", "electrify", "loads"].contains(&tool["name"].as_str().unwrap()), "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);
@@ -767,4 +767,45 @@ fn save_part_refuses_what_check_part_finds_wrong_and_fit_a_clearance_it_cannot_m
     let (is_error, _) = server.report("fit", json!({ "path": circuit, "clearance": 20 }));
     assert!(is_error);
     let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn loads_weighs_a_shaft_and_its_motor_from_the_motor_sheet() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/loads");
+    let mut scenario: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("winder.json")).unwrap()).unwrap();
+    scenario["working_dir"] = json!(dir);
+    let mut server = Server::start();
+    let (is_error, report) = server.report("loads", scenario.clone());
+    assert!(!is_error, "{report}");
+    // 150 g, 20 mm off the axis: 29.4 mN·m, then friction.
+    let static_torque = report["torque"]["static_mNm"].as_f64().unwrap();
+    assert!((static_torque - 29.42).abs() < 0.01, "{report}");
+    // The motor's 34 mN·m and 10 N come from its sheet.
+    assert_eq!(report["motor"]["torque_mNm"], 34.0, "{report}");
+    assert_eq!(report["motor"]["max_radial_load_N"], 10.0, "{report}");
+    let alone = report["supports"][0]["bearing_load_N"].as_f64().unwrap();
+    assert!(report["supports"][0]["moment_Nmm"].as_f64().unwrap() > 50.0, "{report}");
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| w.as_str().unwrap().contains("overhung")), "{report}");
+    assert!(report["suggested_ratio"].as_f64().is_some_and(|r| r > 1.0), "{report}");
+    assert!(!report["summary"].as_array().unwrap().is_empty());
+
+    // A bearing 5 mm behind the watch takes the load off the motor.
+    scenario["supports"].as_array_mut().unwrap().insert(0, json!({ "name": "front", "at_mm": 30, "kind": "bearing", "static_load_N": 340 }));
+    let (_, report) = server.report("loads", scenario.clone());
+    let motor = report["supports"][1]["bearing_load_N"].as_f64().unwrap();
+    assert!(motor < alone / 20.0, "{report}");
+    scenario["supports"][1]["coupling"] = json!(true);
+    let (_, report) = server.report("loads", scenario.clone());
+    assert_eq!(report["supports"][1]["radial_N"], 0.0, "{report}");
+
+    // The same scenario on the command line, its parts found beside it.
+    let output = Command::new(env!("CARGO_BIN_EXE_c2f")).args(["loads", "--json"]).arg(dir.join("winder.json")).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(cli["torque"]["static_mNm"], json!(static_torque));
+
+    let bad = json!({ "axis": { "at": [0, 0, 0], "direction": [1, 0, 0] }, "supports": [], "shaft": { "d_mm": 5, "material": "wood" } });
+    let (is_error, _) = server.report("loads", bad);
+    assert!(is_error);
 }

@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::Export;
 
 mod circuit;
+mod loads;
 mod part;
 mod prompts;
 
@@ -41,7 +42,9 @@ user's library; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
 `circuit_bom` list its wires in order and its parts, `fit` says how its \
-parts fit in their enclosure. To go from an \
+parts fit in their enclosure. `loads` weighs a design's moving parts: \
+the torque a motor must give a shaft, what its supports take and the \
+margins, to decide on a bearing, a reduction or another motor. To go from an \
 idea to a printed object with its electronics, follow the prompts \
 `design_object` (the model first, approved by the user) then \
 `add_electronics` (`electrify` makes the approved design ready for its \
@@ -260,6 +263,9 @@ fn tools() -> Value {
     if let Some(tools) = tools.as_array_mut() {
         tools.extend(part::tools());
     }
+    if let Some(tools) = tools.as_array_mut() {
+        tools.extend(loads::tools());
+    }
     tools
 }
 
@@ -317,7 +323,7 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "export" => export_tool,
         "section" => section_tool,
         "electrify" => electrify_tool,
-        _ => circuit::tool(name).or_else(|| part::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
+        _ => circuit::tool(name).or_else(|| part::tool(name)).or_else(|| loads::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
     if !args.is_object() {

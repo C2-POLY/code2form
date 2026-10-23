@@ -751,6 +751,7 @@ c2f circuit fit grogu.c2fc              # each part's room in the enclosure, and
 c2f circuit fit --clearance 1 grogu.c2fc
 c2f circuit stl grogu.c2fc > grogu.stl  # the parts assembled (not the wires)
 c2f circuit 3mf grogu.c2fc > grogu.3mf
+c2f loads winder.json                   # the loads on a shaft and its motor (section 7)
 ```
 
 The wiring list, to print and solder from (the first rows of Grogu's):
@@ -805,6 +806,7 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 | `fit` | how each part fits in the enclosure, as [`c2f circuit fit`](#does-it-fit) says it; `clearance` sets the room wanted |
 | `check_part` | a part's annotations checked against its rendered shape (see below) |
 | `save_part` | writes a part into your parts folder, then checks it (see below) |
+| `loads` | the torque a motor must give a shaft, what each support takes, the shaft's deflection and the margins against the motor's and bearings' sheets (see below) |
 
 The circuit tools take the circuit as `code` (its parts found from
 `working_dir`, then the library) or as a file `path`. `check_circuit`
@@ -854,6 +856,46 @@ A typical request: "Find the Adafruit BME280 breakout's product page and
 datasheet, write it as a Code2Form part with its pins, mount holes and
 sheet, check it until it has no errors, and save it as
 `bme280_breakout`." Then **⟳** in the catalogue lists it.
+
+### Loads on a shaft
+
+`loads` (and `c2f loads scenario.json` on the command line, the same
+JSON) weighs a design's moving parts with numbers: static engineering
+estimates, with margins for what they leave out, not a simulation. The
+scenario gives the shaft's `axis` (`at` and `direction`; gravity is
+along -z, the axis may be tilted), the `loads` (`name`, `mass_g`, `at`
+their center of mass), the `supports` along the axis (`at_mm`, `kind`
+`motor`, `bearing` or `bushing` for a printed hole, a `part` whose sheet
+gives its figures, `coupling` true for a motor on a flexible coupling,
+which holds nothing up), the `motor` (its `part`, or `torque_mNm`,
+`stall_torque_mNm`, `speed_rpm`, `max_radial_load_N`,
+`max_axial_load_N`), the `shaft` (`d_mm` and `material`, or `E_GPa`),
+the `ratio` (1) and the `target_margin` (2). A motor's or a bearing's
+figures come from its sheet when the scenario leaves them out:
+`// @spec torque: 34 mN·m`, `stall torque`, `holding torque`, `speed`,
+`max radial load`, `max axial load`, `static load`.
+
+It answers the torque the shaft needs (the loads' unbalance in the
+worst position of a turn, plus friction: 0.0015 in a ball bearing, 0.3
+in a printed hole or a gear motor's sleeve), each support's radial and
+axial reaction and moment, the shaft's deflection at each load, the
+margins, a `suggested_ratio` when the torque falls short, `warnings`
+and a `summary` to quote. One support holds the loads and their
+overhang's moment, which loads a motor's front bearing with the moment
+over its bearings' span (8 mm); two are solved exactly; more share the
+load as on springs of one stiffness.
+
+A watch winder: a 150 g watch whose center sits 20 mm off a horizontal
+5 mm steel shaft, 35 mm in front of a gear motor's face (34 mN·m, 10 N
+of radial load). On the motor alone, the shaft needs 40.2 mN·m (29.4
+for the watch, 10.8 of friction in the motor's sleeve): a torque margin
+of 0.85, and a 3:1 reduction suggested; the watch's 1.47 N hangs 35 mm
+past the motor, 51.5 N·mm that put 7.91 N on its front bearing, a radial
+margin of 1.26 and an overhung-load warning. A ball bearing 5 mm behind
+the watch takes 1.72 N and leaves the motor 0.25 N: friction falls to
+0.19 mN·m, the torque needed to 29.6 mN·m, and a 2:1 reduction reaches
+the margin of 2. With `coupling` true, the motor takes no radial load
+at all, and the bearing alone holds the overhang's 7.4 N·mm.
 
 ### From an idea to a build
 

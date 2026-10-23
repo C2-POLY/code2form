@@ -29,6 +29,7 @@
 
 pub mod check;
 pub mod electrify;
+pub mod loads;
 pub mod part;
 pub mod quantity;
 pub mod route;
