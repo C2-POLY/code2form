@@ -19,6 +19,8 @@ pub enum Icon {
     Pauses,
     /// The parts drawn apart.
     Explode,
+    /// A box cut open by a plane.
+    Section,
     Settings,
     Play,
     Pause,
@@ -137,6 +139,15 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
                     StrokeKind::Middle,
                 );
             }
+        }
+        Icon::Section => {
+            // The box's kept half, its cut face hatched, and the plane
+            // standing past it.
+            line(&[(10.0, 5.0), (3.0, 5.0), (3.0, 15.0), (10.0, 15.0)]);
+            for (x, y) in [(3.0, 9.0), (3.0, 13.0), (5.0, 15.0)] {
+                line(&[(x, y), (x + (10.0 - x).min(y - 5.0), y - (10.0 - x).min(y - 5.0))]);
+            }
+            line(&[(10.0, 2.5), (17.0, 5.5), (17.0, 17.5), (10.0, 14.5), (10.0, 2.5)]);
         }
         Icon::Reset => {
             // Three quarters of a circle, turning back, with its arrowhead.

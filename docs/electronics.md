@@ -396,6 +396,23 @@ enclosure by 120.00 mm³". Parts that only touch are fine.
 To look inside, turn on **Layers**: the slider cuts the parts, the
 enclosure and the wires at a height.
 
+Or turn on **Section** (the box cut open, among the view's tools): it
+cuts the enclosure alone across **X**, **Y** or **Z**, where its slider
+says, and the parts and wires stay whole inside it. The same card's
+**Opacity** slider (also under **Enclosure** in the **Views** menu)
+sets how see-through the enclosure is, from 0 to 100 % (28 % by
+default); opaque, the cut runs through its walls in red. Neither
+renders anything again. A design without a circuit gets the same
+**Section** tool, which cuts the model.
+
+The **Parts** card, at the bottom left of the view, lists each part in
+the color it shows in: a click picks it out with its wires, as a click
+on it in the view does, and a second click clears it.
+
+For a screenshot, `CODE2FORM_SCREENSHOT_SELECT=cut:z:20` cuts the view
+across z at 20 mm; add `,opacity:100` for an opaque enclosure, and a
+part's name to pick it out.
+
 ### Catalogue
 
 The **Catalogue** button in the top bar (for a circuit) opens a panel

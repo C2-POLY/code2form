@@ -356,9 +356,10 @@ pub fn collision_lines(circuit: &Circuit, collisions: &[Collision]) -> Vec<Line>
 
 /// A part that collides, as it shows.
 const COLLIDING: [f32; 4] = [0.95, 0.16, 0.14, 1.0];
-/// An uncolored enclosure, and how much of it shows through.
+/// An uncolored enclosure, and how much of it shows through: the view
+/// scales this to the opacity its slider sets.
 const ENCLOSURE: [f32; 4] = [0.74, 0.80, 0.88, 1.0];
-const ENCLOSURE_ALPHA: f32 = 0.28;
+pub const ENCLOSURE_ALPHA: f32 = 0.28;
 
 /// The scene of a circuit: its parts placed, and where each one's
 /// triangles are in the solid. The console gets each part file's lines

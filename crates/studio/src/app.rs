@@ -33,6 +33,7 @@ use crate::pause_edit;
 use crate::part_edit::{self, Grab};
 use crate::recent::RecentFiles;
 use crate::tabs::{self, Owners, Session, Shelf};
+use crate::renderer;
 use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
 use crate::settings::{self, GLTF_SCALES, Placement, Settings};
@@ -799,6 +800,7 @@ impl StudioApp {
                 }
                 let explode = asks("exploded") && shown && !self.doc.exploded;
                 let along_axis = asks("axis");
+                let (cut, opacity) = self.screenshot.as_ref().and_then(|s| s.select.as_deref()).map_or((None, None), section_asked);
                 match outcome.result {
                     Ok(scene) => {
                         self.doc.failed = false;
@@ -823,6 +825,12 @@ impl StudioApp {
                         self.doc.part_boxes = part_boxes(&scene);
                         if on_screen {
                             self.doc.viewer.set_scene(scene, frame);
+                            if let Some(section) = cut.filter(|_| shown) {
+                                self.doc.viewer.show_section(section);
+                            }
+                            if let Some(opacity) = opacity.filter(|_| shown) {
+                                self.doc.viewer.enclosure_opacity = opacity;
+                            }
                         }
                         if explode && self.doc.viewer.can_explode() {
                             self.doc.exploded = true;
@@ -855,6 +863,8 @@ impl StudioApp {
                 self.doc.circuit_generation = generation;
                 self.set_circuit(Some(circuit));
                 if let Some(target) = self.screenshot.as_ref().and_then(|s| s.select.clone()).filter(|_| shown) {
+                    // The section and the opacity are the view's, set with the scene.
+                    let target = target.split(',').filter(|w| section_asked(w) == (None, None)).collect::<Vec<_>>().join(",");
                     let rewire = target.strip_prefix("rewire:").and_then(|t| t.split_once('>'));
                     let moved = target.strip_prefix("move:").and_then(|t| t.split_once(':'));
                     if target == "catalogue" {
@@ -2694,8 +2704,9 @@ impl StudioApp {
         // The floating bars cover the view's edges: its own overlays keep
         // clear of them.
         let exploding = self.doc.exploded && self.doc.viewer.can_explode() && !self.doc.is_circuit();
+        let cards = usize::from(exploding) + usize::from(self.doc.viewer.section_view && self.doc.viewer.can_section());
         self.doc.viewer.insets = viewer::Insets {
-            top: if exploding { 12.0 + 2.0 * VIEW_TOOLS_HEIGHT } else { 48.0 },
+            top: if cards > 0 { 12.0 + (1 + cards) as f32 * VIEW_TOOLS_HEIGHT } else { 48.0 },
             bottom: if animated { 58.0 } else { 0.0 },
             right: if card && self.doc.customizer_shown() { 300.0 } else { 0.0 },
         };
@@ -2751,7 +2762,10 @@ impl StudioApp {
                 let lengths = inspect::Lengths { routed: &wiring.lengths, margin: self.wire_margin.mm };
                 if let Some(selection) = self.doc.selection.filter(|_| !self.doc.mount.active) {
                     let (title, lines) = inspect::card(&wiring.circuit, selection, &self.doc.text, lengths);
-                    let card = inspect::paint_card(&painter, response.rect, &title, &lines);
+                    // Under the section's card when it is shown.
+                    let sectioning = self.doc.viewer.section_view && self.doc.viewer.can_section();
+                    let below = response.rect.with_min_y(response.rect.top() + if sectioning { VIEW_TOOLS_HEIGHT } else { 0.0 });
+                    let card = inspect::paint_card(&painter, below, &title, &lines);
                     if let Hit::Part(part) = selection {
                         let button = egui::Rect::from_min_size(card.left_bottom() + Vec2::new(0.0, 6.0), Vec2::new(150.0, 22.0));
                         let remove = ui.put(button, Button::new(tr("Remove with its wires", "Retirer avec ses fils")));
@@ -2795,6 +2809,9 @@ impl StudioApp {
         });
         let rect = self.view_rect;
         self.view_tools(ctx, rect);
+        if self.doc.is_circuit() && !self.doc.mount.active {
+            self.parts_legend(ctx, rect);
+        }
         if card {
             self.parameters_card(ctx, rect);
         }
@@ -2869,6 +2886,7 @@ impl StudioApp {
                                 if toggle.on_hover_text(tr("Show the enclosure around the parts, see-through", "Afficher le boîtier autour des composants, transparent")).changed() {
                                     viewer.set_show_enclosure(shown);
                                 }
+                                opacity_slider(ui, viewer);
                             }
                         });
                         tool_separator(ui);
@@ -2895,6 +2913,20 @@ impl StudioApp {
                             tool_separator(ui);
                             let hint = tr("Exploded view: draw the model's part()s apart, to see how they fit together", "Vue éclatée : écarter les part() du modèle, pour voir comment elles s'assemblent");
                             explode = icons::button(ui, Icon::Explode, on, hint).clicked();
+                        }
+                        if viewer.can_section() {
+                            tool_separator(ui);
+                            let hint = if circuit {
+                                tr(
+                                    "Section: cut the enclosure open across an axis, to see the parts and wires inside",
+                                    "Coupe : ouvrir le boîtier selon un axe, pour voir les composants et les fils à l'intérieur",
+                                )
+                            } else {
+                                tr("Section: cut the model open across an axis, to see inside", "Coupe : ouvrir le modèle selon un axe, pour voir l'intérieur")
+                            };
+                            if icons::button(ui, Icon::Section, viewer.section_view, hint).clicked() {
+                                viewer.section_view = !viewer.section_view;
+                            }
                         }
                     });
                 });
@@ -2929,6 +2961,10 @@ impl StudioApp {
                     });
                 });
         }
+        if self.doc.viewer.section_view && self.doc.viewer.can_section() {
+            let below = if explodable && on { 2.0 } else { 1.0 };
+            self.section_card(ctx, rect.left_top() + Vec2::new(12.0, 12.0 + below * VIEW_TOOLS_HEIGHT));
+        }
         if how != self.doc.explode_how {
             self.doc.explode_how = how;
             self.doc.viewer.set_explode_how(how);
@@ -2945,6 +2981,86 @@ impl StudioApp {
                 self.doc.viewer.set_explode(self.doc.explode_shown.max(0.01));
                 self.doc.viewer.view_all();
             }
+        }
+    }
+
+    /// The section's card, at `at`: the axis it cuts across, where along
+    /// it, and for a circuit the enclosure's opacity. Only uniforms
+    /// change: nothing renders again.
+    fn section_card(&mut self, ctx: &egui::Context, at: egui::Pos2) {
+        let circuit = self.doc.is_circuit();
+        let viewer = &mut self.doc.viewer;
+        let section = viewer.section();
+        egui::Area::new(Id::new(("section-tools", self.doc.id)))
+            .fixed_pos(at)
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                card_frame().inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (axis, name) in renderer::Section::AXES.into_iter().enumerate() {
+                            let hint = tr!("Cut across {}", "Couper selon {}", name);
+                            if ui.selectable_label(section.axis == axis, name).on_hover_text(hint).clicked() && section.axis != axis {
+                                viewer.set_section_axis(axis);
+                            }
+                        }
+                        ui.add_space(4.0);
+                        if let Some((lo, hi)) = viewer.section_range(section.axis) {
+                            ui.spacing_mut().slider_width = 130.0;
+                            let mut value = section.at;
+                            let slider = egui::Slider::new(&mut value, lo..=hi).max_decimals(1).suffix(" mm");
+                            let hint = tr("Where the cut runs: what lies beyond it is hidden", "Où passe la coupe : ce qui est au-delà est masqué");
+                            if ui.add(slider).on_hover_text(hint).changed() {
+                                viewer.set_section_at(value);
+                            }
+                        }
+                        if circuit && viewer.has_enclosure() {
+                            ui.add_space(4.0);
+                            opacity_slider(ui, viewer);
+                        }
+                    });
+                });
+            });
+    }
+
+    /// A circuit's parts, each in the color it shows in, over the view's
+    /// bottom left: a click picks one out with its wires, as a click on
+    /// it in the view does.
+    fn parts_legend(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let Some(wiring) = &self.doc.wiring else { return };
+        let colors = self.doc.viewer.part_colors();
+        if wiring.circuit.parts.is_empty() || colors.len() != wiring.circuit.parts.len() {
+            return;
+        }
+        let parts: Vec<(String, [f32; 4])> = wiring.circuit.parts.iter().map(|p| p.name.clone()).zip(colors.iter().copied()).collect();
+        let selected = match self.doc.selection {
+            Some(Hit::Part(part)) => Some(part),
+            _ => None,
+        };
+        let mut clicked = None;
+        // Above the axis gizmo.
+        egui::Area::new(Id::new(("parts-legend", self.doc.id)))
+            .pivot(Align2::LEFT_BOTTOM)
+            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.bottom() - 100.0))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                card_frame().inner_margin(Margin::symmetric(8, 6)).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(egui::RichText::new(tr("Parts", "Composants")).size(12.5).color(theme::palette().text_strong));
+                    for (index, (name, color)) in parts.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            let (dot, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+                            ui.painter().circle(dot.center(), 5.0, wiring::color32(*color), Stroke::new(1.0, theme::palette().line(110)));
+                            let hint = tr("Pick out this part and its wires (click again to clear)", "Faire ressortir ce composant et ses fils (cliquer à nouveau pour effacer)");
+                            if ui.selectable_label(selected == Some(index), name).on_hover_text(hint).clicked() {
+                                clicked = Some(index);
+                            }
+                        });
+                    }
+                });
+            });
+        if let Some(part) = clicked {
+            let hit = if selected == Some(part) { None } else { Some(Hit::Part(part)) };
+            self.select(ctx, hit);
         }
     }
 
@@ -4015,6 +4131,30 @@ fn zoom_step(size: f32, steps: i32) -> f32 {
 fn toolbar_separator(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 20.0), Sense::hover());
     ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme::palette().border));
+}
+
+/// The slider of a circuit's enclosure's opacity; moving it shows the
+/// enclosure if it was hidden.
+fn opacity_slider(ui: &mut egui::Ui, viewer: &mut viewer::Viewer) {
+    ui.label(tr("Opacity", "Opacité"));
+    let mut opacity = viewer.enclosure_opacity;
+    let slider = egui::Slider::new(&mut opacity, 0.0..=1.0)
+        .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
+        .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
+    let hint = tr("How opaque the enclosure is drawn", "L'opacité du boîtier");
+    if ui.add(slider).on_hover_text(hint).changed() {
+        viewer.enclosure_opacity = opacity;
+        viewer.set_show_enclosure(true);
+    }
+}
+
+/// The section and the enclosure's opacity a screenshot asks for among
+/// `select`'s words: `cut:z:20`, `opacity:100` (in percent).
+fn section_asked(select: &str) -> (Option<renderer::Section>, Option<f32>) {
+    let words = || select.split(',').map(str::trim);
+    let cut = words().find_map(|w| renderer::Section::parse(w.strip_prefix("cut:")?));
+    let opacity = words().find_map(|w| w.strip_prefix("opacity:")?.trim().parse::<f32>().ok()).map(|v| (v / 100.0).clamp(0.0, 1.0));
+    (cut, opacity)
 }
 
 /// A thin line between groups of the view's tools.
