@@ -228,6 +228,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_open_import_is_shown_but_not_built() {
+        let dir = std::env::temp_dir().join(format!("c2f-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A tetrahedron missing a face.
+        std::fs::write(dir.join("open.off"), "OFF\n4 3 0\n0 0 0\n1 0 0\n0 1 0\n0 0 1\n3 0 2 1\n3 0 1 3\n3 0 3 2\n").unwrap();
+        let program = c2f_eval::Program::load("translate([10, 0, 0]) import(\"open.off\");", Path::new("t.scad"), &[]).unwrap();
+        let rendered = crate::render_in(&c2f_eval::evaluate(&program).nodes, &dir);
+        assert!(rendered.model.is_empty());
+        assert_eq!(rendered.solid.triangle_count(), 3);
+        assert_eq!(rendered.solid.bounds().map(|(lo, _)| lo[0]), Some(10.0));
+        assert!(rendered.warnings[0].contains("it is shown"), "{:?}", rendered.warnings);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn merged_corners() {
         let mut mesh = MeshBuilder::default();
         mesh.corners([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);

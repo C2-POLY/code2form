@@ -63,7 +63,8 @@ pub fn render_in(nodes: &[Node], base_dir: &Path) -> Rendered {
     let parts: Vec<Model> = nodes.iter().map(|n| builder.node(n, ctx)).collect();
     let model = builder.union(parts);
     let is_2d = matches!(model, Model::Flat(_));
-    let solid = display(&model, None);
+    let mut solid = display(&model, None);
+    solid.append(std::mem::take(&mut builder.loose));
     let stats = match &model {
         Model::Solid(m) => Stats { triangles: m.num_tri(), vertices: m.num_vert(), volume: m.volume() },
         Model::Flat(c) => Stats { triangles: 0, vertices: c.num_vert(), volume: c.area() },
@@ -116,6 +117,10 @@ struct Builder {
     /// The `multmatrix()`es around the node being built, innermost last:
     /// a `#` or `%` part is shown where they put it.
     placement: Vec<Matrix>,
+    /// Imported meshes that are not closed solids: shown where the model
+    /// puts them, as a downloaded part should be, but left out of the
+    /// model and its exports.
+    loose: RenderMesh,
 }
 
 impl Builder {
@@ -520,17 +525,35 @@ impl Builder {
     /// go through Manifold's robust import.
     fn meshes(&mut self, meshes: Vec<TriMesh>, ctx: Ctx, what: &str) -> Model {
         let mut solids = Vec::new();
-        for mesh in &meshes {
-            let mesh = mesh_gl(mesh, ctx.paint());
+        for triangles in &meshes {
+            let mesh = mesh_gl(triangles, ctx.paint());
             let strict = Manifold::from_mesh_gl64(&mesh);
             let solid = if strict.is_empty() { Manifold::from_mesh_gl64_robust(&mesh) } else { strict };
             if solid.is_empty() {
-                self.warn(format!("{what} is not a closed solid"));
+                self.warn(format!("{what} is not a closed solid: it is shown, but left out of the model and its exports"));
+                self.show_loose(triangles, ctx.paint());
             } else {
                 solids.push(Model::Solid(solid));
             }
         }
         combine(solids, OpType::Add)
+    }
+
+    /// Draws `mesh` where the model puts it, outside the model.
+    fn show_loose(&mut self, mesh: &TriMesh, color: [f32; 4]) {
+        let m = self.placement.iter().fold(c2f_eval::node::IDENTITY, |m, inner| crate::parts::multiply(&m, inner));
+        let place = |[x, y, z]: [f64; 3]| {
+            let at = |i: usize| (m[i][0] * x + m[i][1] * y + m[i][2] * z + m[i][3]) as f32;
+            [at(0), at(1), at(2)]
+        };
+        // A mirror turns the faces inside out.
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        for &[a, b, c] in &mesh.triangles {
+            let [a, b, c] = [a, b, c].map(|i| place(mesh.positions[i as usize]));
+            let corners = if det < 0.0 { [a, c, b] } else { [a, b, c] };
+            self.loose.push_triangle(corners, [color; 3]);
+        }
     }
 }
 
