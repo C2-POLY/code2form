@@ -1,8 +1,11 @@
 //! The exploded view of a model: its `part()`s drawn apart, so that one
-//! sees how they fit together. Each part moves away from the center of
-//! what it is written in (the whole model, or its parent part), towards its
-//! own center, by half the size of that; a part in a part moves with its
-//! parent, then away from it. What is outside any part stays in place.
+//! sees how they fit together, as they come apart. Each part slides along
+//! its own Z axis, the axis it is built and turns about, the way that takes
+//! it away from the center of what it is written in (the whole model, or
+//! its parent part), by half the size of that. A part in a part moves with
+//! its parent, then away from it, [`CHILD_FACTOR`] times further at each
+//! level, so that each level comes apart from the one above. What is
+//! outside any part stays in place.
 
 use std::ops::Range;
 use std::path::Path;
@@ -12,6 +15,10 @@ use c2f_eval::node::{Matrix, Node};
 use crate::build::render_in;
 use crate::mesh::RenderMesh;
 use crate::parts::{self, multiply};
+
+/// How much further a part moves from its parent than its parent from its
+/// own, at each level down.
+const CHILD_FACTOR: f32 = 1.5;
 
 /// A model's parts, drawn each on its own, and how far each moves when the
 /// view is all the way exploded.
@@ -75,22 +82,26 @@ pub fn exploded(nodes: &[Node], base_dir: &Path) -> Option<Exploded> {
     }
     // The root's box is the whole model's.
     let whole = around[1..].iter().fold(around[0], |a, &b| union(a, b));
+    let mut depth: Vec<i32> = Vec::with_capacity(split.parts.len());
     for (i, part) in split.parts.iter().enumerate() {
+        depth.push(part.parent.map_or(0, |p| depth[p] + 1));
         let from = match part.parent {
             Some(p) => around[p + 1],
             None => whole,
         };
-        let own = exploded_move(around[i + 1], from);
+        let axis = [world[i][0][2], world[i][1][2], world[i][2][2]].map(|v| v as f32);
+        let own = exploded_move(around[i + 1], from, axis).map(|v| v * CHILD_FACTOR.powi(depth[i]));
         let carried = part.parent.map_or([0.0; 3], |p| exploded.pieces[p + 1].1);
         exploded.pieces[i + 1].1 = [carried[0] + own[0], carried[1] + own[1], carried[2] + own[2]];
     }
     Some(exploded)
 }
 
-/// How far a part in box `part` moves away from the center of `from`: half
-/// the size of `from`, towards the part's center, or up when the two
-/// centers are one. A part that fills `from` is all there is: it stays.
-fn exploded_move(part: Option<([f32; 3], [f32; 3])>, from: Option<([f32; 3], [f32; 3])>) -> [f32; 3] {
+/// How far a part in box `part` moves away from `from`: half the size of
+/// `from`, along `axis` (the part's Z), the way that takes its center away
+/// from the center of `from`, or along +`axis` when neither way does. A
+/// part that fills `from` is all there is: it stays.
+fn exploded_move(part: Option<([f32; 3], [f32; 3])>, from: Option<([f32; 3], [f32; 3])>, axis: [f32; 3]) -> [f32; 3] {
     let (Some((lo, hi)), Some((flo, fhi))) = (part, from) else { return [0.0; 3] };
     let size = ((fhi[0] - flo[0]).powi(2) + (fhi[1] - flo[1]).powi(2) + (fhi[2] - flo[2]).powi(2)).sqrt();
     let same = |a: [f32; 3], b: [f32; 3]| (0..3).all(|k| (a[k] - b[k]).abs() <= 1e-4 * size);
@@ -99,10 +110,12 @@ fn exploded_move(part: Option<([f32; 3], [f32; 3])>, from: Option<([f32; 3], [f3
     }
     let center = |lo: [f32; 3], hi: [f32; 3]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
     let (c, f) = (center(lo, hi), center(flo, fhi));
-    let d = [c[0] - f[0], c[1] - f[1], c[2] - f[2]];
-    let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-    let direction = if length > 1e-4 * size.max(1e-6) { d.map(|v| v / length) } else { [0.0, 0.0, 1.0] };
-    direction.map(|v| v * size / 2.0)
+    let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    // A part scaled flat along its Z has no axis to slide on: up, then.
+    let axis = if length > 1e-6 { axis.map(|v| v / length) } else { [0.0, 0.0, 1.0] };
+    let along = (0..3).map(|k| (c[k] - f[k]) * axis[k]).sum::<f32>();
+    let sign = if along < -1e-4 * size { -1.0 } else { 1.0 };
+    axis.map(|v| sign * v * size / 2.0)
 }
 
 fn union(a: Option<([f32; 3], [f32; 3])>, b: Option<([f32; 3], [f32; 3])>) -> Option<([f32; 3], [f32; 3])> {
@@ -183,10 +196,10 @@ mod tests {
         let whole = (10f32.powi(2) * 2.0 + 12f32.powi(2)).sqrt();
         assert!(lid[2] > 0.0 && (lid.iter().map(|v| v * v).sum::<f32>().sqrt() - whole / 2.0).abs() < 1e-3, "{lid:?}");
         // The knob moves with the lid, then up from it by half the lid's
-        // size with its knob.
+        // size with its knob, half as far again, a level down.
         let lid_size = (10f32.powi(2) * 2.0 + 4f32.powi(2)).sqrt();
         let own = [knob[0] - lid[0], knob[1] - lid[1], knob[2] - lid[2]];
-        assert!(close(own, [0.0, 0.0, lid_size / 2.0]), "{own:?}");
+        assert!(close(own, [0.0, 0.0, 1.5 * lid_size / 2.0]), "{own:?}");
         // Halfway, half as far; the root stays.
         let half = exploded.at(0.5);
         assert!(close(half.positions[0], exploded.mesh.positions[0]));
@@ -197,6 +210,26 @@ mod tests {
         let exploded = exploded_src("cube(4, center = true); part(\"a\") cube(2, center = true);").unwrap();
         let offset = exploded.offsets()[0];
         assert!(offset[0] == 0.0 && offset[1] == 0.0 && offset[2] > 0.0, "{offset:?}");
+    }
+
+    #[test]
+    fn a_part_slides_along_its_own_axis() {
+        // Its Z turned to the model's X, its center off to the side in Y
+        // and ahead in X: it slides along X, away from the center.
+        let exploded = exploded_src(
+            "cube([20, 20, 2], center = true);
+            translate([6, 8, 0]) rotate([0, 90, 0]) part(\"roller\") cylinder(r = 2, h = 4, center = true, $fn = 4);",
+        )
+        .unwrap();
+        let roller = exploded.offsets()[0];
+        assert!(roller[0] > 0.0 && roller[1].abs() < 1e-4 && roller[2].abs() < 1e-4, "{roller:?}");
+        // Behind the center, it slides the other way.
+        let exploded = exploded_src(
+            "cube([20, 20, 2], center = true);
+            translate([-6, 8, 0]) rotate([0, 90, 0]) part(\"roller\") cylinder(r = 2, h = 4, center = true, $fn = 4);",
+        )
+        .unwrap();
+        assert!(exploded.offsets()[0][0] < 0.0, "{:?}", exploded.offsets());
     }
 
     #[test]

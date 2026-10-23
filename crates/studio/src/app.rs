@@ -809,6 +809,7 @@ impl StudioApp {
                         }
                         if explode && self.doc.viewer.can_explode() {
                             self.doc.exploded = true;
+                            self.doc.explode_amount = 1.0;
                             self.doc.explode_shown = 1.0;
                             self.doc.viewer.set_explode(1.0);
                             self.doc.viewer.view_all();

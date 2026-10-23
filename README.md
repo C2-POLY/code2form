@@ -15,9 +15,11 @@ they are. Written in Rust, it renders as you type.
 - **Exploded view**: a design whose pieces are written in `part("name")`
   gets an Exploded button over the view. It slides the parts apart, so
   one sees how they fit together, and a slider sets how far. Each part
-  moves away from the center of what it is in (the model, or its parent
-  part), by half the size of that; a part in a part moves with its
-  parent, then away from it; a part that is the whole model stays. Only
+  slides along its own Z axis (the axis it is built and turns about, as
+  its `rotate()`s place it), the way that takes it away from the center
+  of what it is in (the model, or its parent part), by half the size of
+  that; a part in a part moves with its parent, then 1.5 times further
+  from it at each level down; a part that is the whole model stays. Only
   the view changes: the model, its exports and its sizes stay
   assembled, and an animated model plays apart.
 - **Examples**: the Examples menu lists the designs and circuits that
