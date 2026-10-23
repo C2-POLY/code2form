@@ -37,6 +37,52 @@ pub struct FileSource {
     pub timestamp: i64,
 }
 
+/// How a `part()` moves against the part it is written in, for a robot
+/// (URDF): `part("elbow", joint = "revolute", axis = [0, 1, 0],
+/// limits = [-90, 90])`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Joint {
+    pub kind: JointKind,
+    /// In the part's own frame, of length 1.
+    pub axis: [f64; 3],
+    /// Lowest and highest position: degrees for a revolute joint,
+    /// millimeters for a prismatic one.
+    pub limits: Option<[f64; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JointKind {
+    /// Turns about its axis, between its limits.
+    Revolute,
+    /// Turns about its axis without limits, as a wheel does.
+    Continuous,
+    /// Slides along its axis.
+    Prismatic,
+    Fixed,
+}
+
+impl JointKind {
+    /// The kind a `joint = "…"` names, as URDF names it.
+    pub fn named(name: &str) -> Option<JointKind> {
+        match name {
+            "revolute" => Some(JointKind::Revolute),
+            "continuous" => Some(JointKind::Continuous),
+            "prismatic" => Some(JointKind::Prismatic),
+            "fixed" => Some(JointKind::Fixed),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JointKind::Revolute => "revolute",
+            JointKind::Continuous => "continuous",
+            JointKind::Prismatic => "prismatic",
+            JointKind::Fixed => "fixed",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeKind {
     Group,
@@ -63,8 +109,9 @@ pub enum NodeKind {
     Color([f64; 4]),
     /// Not in the reference: a part of the model kept apart from the rest,
     /// which a glTF export writes as a node of its own to move and animate.
-    /// Other exports unite it with the rest, as a group.
-    Part { name: String },
+    /// Other exports unite it with the rest, as a group. A URDF export
+    /// makes it a link, which its joint moves.
+    Part { name: String, joint: Option<Joint> },
     Offset { op: OffsetOp, segments: Segments },
     Resize { size: [f64; 3], auto: [bool; 3], convexity: u32 },
     LinearExtrude {
