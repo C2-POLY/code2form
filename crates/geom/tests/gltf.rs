@@ -434,3 +434,42 @@ fn frames_are_capped() {
     let glb = animated("x = $t; cube(1);", &options).unwrap();
     assert!(glb.warnings.iter().any(|w| w.contains("cut to 10000 frames")), "{:?}", glb.warnings);
 }
+
+fn example(name: &str) -> (std::path::PathBuf, String) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/game").join(name);
+    let src = c2f_eval::read_source(&path).unwrap();
+    (path, src)
+}
+
+#[test]
+fn the_gears_and_the_walker_export_animated() {
+    for (name, parts) in [("gears.c2f", 3), ("walker.c2f", 11)] {
+        let (path, src) = example(name);
+        let mut program = c2f_eval::Program::load(&src, &path, &[]).unwrap();
+        let glb = c2f_geom::program_glb(&mut program, &GltfOptions::default()).unwrap();
+        assert!(glb.warnings.is_empty(), "{name}: {:?}", glb.warnings);
+        assert_eq!(glb.frames, 61, "{name}");
+        let model = Gltf::read(&glb.bytes);
+        assert_eq!(model.json["nodes"].as_array().unwrap().len(), parts + 1, "{name}");
+    }
+}
+
+#[test]
+fn the_gears_teeth_never_overlap() {
+    let (path, src) = example("gears.c2f");
+    // The gears alone, placed as the example places them, two at a time.
+    let gears = &src[..src.find("// The plate and the axles").unwrap()];
+    for (a, b) in [(0, 1), (1, 2), (0, 2)] {
+        for t in [0.0, 0.013, 0.05, 0.21, 0.5, 0.77, 0.993] {
+            let check = format!(
+                "{gears}
+                module placed(i) {{ c = [c1, c2, c3][i]; translate([c[0], c[1], 0]) rotate([0, 0, [a1, a2, a3][i]]) gear(teeth[i]); }}
+                intersection() {{ placed({a}); placed({b}); }}"
+            );
+            let mut program = c2f_eval::Program::load(&check, &path, &[]).unwrap();
+            program.t = t;
+            let rendered = c2f_geom::render(&c2f_eval::evaluate(&program).nodes);
+            assert_eq!(rendered.stats.volume, 0.0, "gears {a} and {b} at $t = {t}");
+        }
+    }
+}

@@ -10,6 +10,7 @@ mod circuit;
 mod console;
 mod customizer;
 mod editor;
+mod examples;
 mod find;
 mod highlight;
 mod icon_setting;

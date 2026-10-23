@@ -101,6 +101,10 @@ mkdir -p "$app/Contents/Resources/libraries"
 ditto "$root/library" "$app/Contents/Resources/libraries"
 cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$app/Contents/Resources/libraries/"
 
+# The examples the Examples menu lists, copied to the user's documents
+# before they open.
+ditto "$root/examples" "$app/Contents/Resources/examples"
+
 # The fonts text() defaults to (Liberation, SIL Open Font License) and the
 # MCAD library (LGPL 2.1), with their licences, copied from the reference
 # app so that this one works on its own.

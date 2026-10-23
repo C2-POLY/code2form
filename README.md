@@ -12,6 +12,12 @@ they are. Written in Rust, it renders as you type.
   Open Recent lists the last ten files opened or saved; each file opens in
   a tab of its own, with its view, console and undo history, and the tabs
   come back at the next launch.
+- **Examples**: the Examples menu lists the designs and circuits that
+  come with the app, by subject: a chest that opens, three gears that
+  drive one another and a walking mannequin (Game), and the Grogu
+  circuit with its plate. One opens as a copy in
+  `~/Documents/Code2Form/Examples`, its folder with it, to change and
+  save; opened again, the copy keeps its changes.
 - **Settings** (⌘,): the app icon in ten tints (graphite by default,
   shown in the Dock and the Finder), the code's size, whether to render
   as you type and after what pause, and folders searched for libraries
@@ -235,7 +241,11 @@ translate([20, 20, 5]) rotate([0, 0, 360 * $t]) part("turret") {
 
 `examples/game/chest.c2f` is a treasure chest whose lid opens and closes
 while a gem on it turns: three nodes (`chest`, `lid`, `gem`), two
-materials and a transparent one, and an animation that loops.
+materials and a transparent one, and an animation that loops. Next to it,
+`gears.c2f` has three gears of 12, 24 and 18 teeth, each turning at the
+speed its teeth set, and `walker.c2f` a mannequin whose limbs are parts
+in the parts they hang from (hips, chest, upper arm, forearm...), walking
+on the spot.
 
 **Godot 4** (checked with 4.7): copy the `.glb` into the project. Godot
 imports it as a scene: open it, or drag it into another scene. The nodes

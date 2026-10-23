@@ -21,6 +21,7 @@ use crate::app_icon::{self, Tint};
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
+use crate::examples;
 use crate::icon_setting;
 use crate::open_events;
 use crate::pause_edit;
@@ -1917,6 +1918,7 @@ impl StudioApp {
                     self.open_dialog(ctx);
                 }
                 self.recent_menu(ui);
+                self.examples_menu(ui);
                 if tool_button(ui, "Save", "Save the file", Some(keys.get(Action::Save))).clicked() {
                     self.save();
                 }
@@ -2062,6 +2064,44 @@ impl StudioApp {
         if clear {
             self.recent.clear();
             self.save_recent();
+        }
+    }
+
+    /// The examples that come with the app, a submenu for each subject;
+    /// one opens as a copy in the user's documents.
+    fn examples_menu(&mut self, ui: &mut egui::Ui) {
+        let mut chosen = None;
+        let source = examples::source_dir();
+        let response = ui.menu_button("Examples", |ui| {
+            let found = source.as_deref().map(examples::list).unwrap_or_default();
+            if found.is_empty() {
+                ui.label(RichText::new("No examples found").color(theme::palette().text_dim));
+            }
+            let mut subjects: Vec<&str> = found.iter().map(|e| e.subject.as_str()).collect();
+            subjects.dedup();
+            for subject in subjects {
+                ui.menu_button(subject, |ui| {
+                    for example in found.iter().filter(|e| e.subject == subject) {
+                        if ui.button(&example.file_name).on_hover_text(&example.summary).clicked() {
+                            chosen = Some(example.clone());
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+        response.response.on_hover_text("Open an example, as a copy in Documents/Code2Form/Examples");
+        let (Some(example), Some(source)) = (chosen, source) else { return };
+        let Some(user) = examples::user_dir() else {
+            self.doc.console.log(Level::Error, "Cannot open the example: no home folder");
+            return;
+        };
+        match examples::copy_out(&example, &source, &user) {
+            Ok(copy) => self.open(ui.ctx(), copy),
+            Err(err) => {
+                let message = format!("Cannot copy the example {} to {}: {err}", example.file_name, user.display());
+                self.doc.console.log(Level::Error, message);
+            }
         }
     }
 

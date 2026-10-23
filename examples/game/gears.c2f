@@ -1,0 +1,82 @@
+// Three gears that drive one another: the small one turns the large one,
+// which turns the middle one. Each turns at the speed its teeth set: one
+// tooth of a gear pushes one tooth of the next, so a gear with half the
+// teeth turns twice as fast, and the other way round.
+//
+// Over one loop of $t the 12-tooth gear makes 6 turns, the 24-tooth gear
+// 3 and the 18-tooth gear 4: each ends where it started, so the loop is
+// seamless. Press play under the view, or export it as glTF.
+
+/* [Gears] */
+// Teeth of each gear.
+teeth = [12, 24, 18];
+// The size of a tooth (the module): the pitch circle's diameter is
+// module × teeth.
+module_size = 2; // [1:0.5:4]
+// Thickness of the gears.
+thickness = 6; // [2:12]
+// Where the third gear sits around the second, in degrees.
+third_at = 55; // [20:160]
+// Turns of the first gear in one loop: a multiple of 2 keeps the loop
+// seamless with these teeth.
+turns = 6; // [2:2:12]
+
+/* [Hidden] */
+colors = ["Tomato", "Gold", "MediumSeaGreen"];
+$fn = 48;
+
+function pitch_radius(z) = module_size * z / 2;
+
+// A gear's outline: trapezoid teeth around the root circle, a tooth at 0°.
+function outline(z) =
+    let(
+        pitch = 360 / z,
+        tip = pitch_radius(z) + module_size,
+        root = pitch_radius(z) - 1.25 * module_size
+    )
+    [for (i = [0:z - 1], corner = [[-0.30, root], [-0.13, tip], [0.13, tip], [0.30, root]])
+        let(a = (i + corner[0]) * pitch) corner[1] * [cos(a), sin(a)]];
+
+module gear(z) {
+    difference() {
+        linear_extrude(thickness) polygon(outline(z));
+        // The bore for the axle, and lightening holes in the larger ones.
+        translate([0, 0, -1]) cylinder(r = 2.6, h = thickness + 2);
+        if (z >= 18)
+            for (a = [0:60:359])
+                rotate(a) translate([pitch_radius(z) * 0.55, 0, -1]) cylinder(r = pitch_radius(z) * 0.18, h = thickness + 2);
+    }
+    // A hub that shows which way it turns.
+    translate([0, 0, thickness]) difference() {
+        cylinder(r = 5, h = 2);
+        translate([0, 0, -1]) cylinder(r = 2.6, h = 4);
+    }
+}
+
+// Where each gear's center is: the second to the right of the first, the
+// third around the second; neighbours' pitch circles touch.
+c1 = [0, 0];
+c2 = c1 + (pitch_radius(teeth[0]) + pitch_radius(teeth[1])) * [1, 0];
+c3 = c2 + (pitch_radius(teeth[1]) + pitch_radius(teeth[2])) * [cos(third_at), sin(third_at)];
+
+// The angle of gear b, driven by gear a at `angle`, seen from a at
+// `towards` degrees: it turns the other way, by the ratio of the teeth,
+// and puts a gap where a's tooth comes in.
+function driven(angle, za, zb, towards) =
+    -(za / zb) * (angle - towards) + towards + 180 + 180 / zb;
+
+a1 = 360 * turns * $t;
+a2 = driven(a1, teeth[0], teeth[1], 0);
+a3 = driven(a2, teeth[1], teeth[2], third_at);
+
+// The plate and the axles, which do not move.
+color("DimGray") {
+    hull() for (c = [c1, c2, c3]) translate([c[0], c[1], -4]) cylinder(r = 8, h = 3);
+    for (c = [c1, c2, c3]) translate([c[0], c[1], -2]) cylinder(r = 2.4, h = thickness + 5);
+}
+
+for (i = [0:2]) {
+    center = [c1, c2, c3][i];
+    translate([center[0], center[1], 0]) rotate([0, 0, [a1, a2, a3][i]])
+        part(str("gear_", teeth[i])) color(colors[i]) gear(teeth[i]);
+}
