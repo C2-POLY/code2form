@@ -420,6 +420,8 @@ pub fn scene(
         source: source.to_string(),
         parts: ranges,
         enclosure: enclosure_range,
+        // A circuit's parts are placed by the circuit, not written in part().
+        exploded: None,
     }
 }
 

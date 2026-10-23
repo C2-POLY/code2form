@@ -43,6 +43,10 @@ use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
+/// How fast the exploded view slides its parts apart and back: the whole
+/// way in a third of a second.
+const EXPLODE_SPEED: f32 = 3.0;
+
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
 const CIRCUIT_FILES: (&str, &str) = ("Code2Form circuit", "c2fc");
@@ -245,6 +249,11 @@ struct Tab {
     customizer_open: Option<bool>,
     /// Playing the design along `$t`, when it reads it.
     animation: Animation,
+    /// The exploded view: whether it is on, how far apart the slider sets
+    /// the parts (0 to 1), and how far apart they are drawn, on their way.
+    exploded: bool,
+    explode_amount: f32,
+    explode_shown: f32,
 }
 
 impl Tab {
@@ -282,6 +291,9 @@ impl Tab {
             customizer: Customizer::default(),
             customizer_open: None,
             animation: Animation::default(),
+            exploded: false,
+            explode_amount: 1.0,
+            explode_shown: 0.0,
         }
     }
 
@@ -708,10 +720,13 @@ impl StudioApp {
                 let source = (self.doc.sent_source.clone().unwrap_or_default(), self.doc.sent_values.clone());
                 let scene = outcome.result.as_ref().ok();
                 let on_screen = self.doc.animation.rendered(outcome.generation, outcome.animated, &source, scene);
-                let play = self.screenshot.as_ref().is_some_and(|s| s.select.as_deref() == Some("play"));
-                if play && shown && self.doc.animation.animated && self.doc.animation.cached() == 1 {
+                let asks = |what: &str| {
+                    self.screenshot.as_ref().and_then(|s| s.select.as_deref()).is_some_and(|s| s.split(',').any(|w| w == what))
+                };
+                if asks("play") && shown && self.doc.animation.animated && self.doc.animation.cached() == 1 {
                     self.doc.animation.play();
                 }
+                let explode = asks("exploded") && shown && !self.doc.exploded;
                 match outcome.result {
                     Ok(scene) => {
                         self.doc.failed = false;
@@ -736,6 +751,12 @@ impl StudioApp {
                         self.doc.part_boxes = part_boxes(&scene);
                         if on_screen {
                             self.doc.viewer.set_scene(scene, frame);
+                        }
+                        if explode && self.doc.viewer.can_explode() {
+                            self.doc.exploded = true;
+                            self.doc.explode_shown = 1.0;
+                            self.doc.viewer.set_explode(1.0);
+                            self.doc.viewer.view_all();
                         }
                         // The new solid comes in its own colors.
                         self.update_overlay();
@@ -1061,6 +1082,69 @@ impl StudioApp {
             self.doc.mount.restart();
             self.report_mount_problem();
             self.go_to_wire(0);
+        }
+    }
+
+    // ---- Exploded view ----
+
+    /// Moves the parts towards where the exploded view wants them, a bit
+    /// each frame, so that they slide apart and back together.
+    fn explode(&mut self, ctx: &egui::Context) {
+        let doc = &mut self.doc;
+        if !doc.viewer.can_explode() {
+            doc.exploded = false;
+        }
+        let target = if doc.exploded { doc.explode_amount } else { 0.0 };
+        if doc.explode_shown != target {
+            let step = ctx.input(|i| i.stable_dt).min(0.1) * EXPLODE_SPEED;
+            let gap = target - doc.explode_shown;
+            doc.explode_shown = if gap.abs() <= step { target } else { doc.explode_shown + step * gap.signum() };
+            ctx.request_repaint();
+        }
+        doc.viewer.set_explode(doc.explode_shown);
+    }
+
+    /// The exploded view's toggle over the top left of the view of a design
+    /// with part()s, and while it is on, how far apart.
+    fn explode_bar(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let mut amount = self.doc.explode_amount;
+        let mut toggle = false;
+        let on = self.doc.exploded;
+        egui::Area::new(Id::new(("explode-bar", self.doc.id)))
+            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.top() + 12.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(theme::palette().veil(200))
+                    .stroke(Stroke::new(1.0, theme::palette().line(30)))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let hint = "Draw the model's part()s apart, to see how they fit together";
+                            toggle = ui.add(egui::Button::selectable(on, "Exploded")).on_hover_text(hint).clicked();
+                            if !on {
+                                return;
+                            }
+                            let slider = egui::Slider::new(&mut amount, 0.0..=1.0)
+                                .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
+                                .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
+                            ui.add(slider).on_hover_text("How far apart the parts are drawn");
+                        });
+                    });
+            });
+        if amount != self.doc.explode_amount {
+            self.doc.explode_amount = amount;
+            // The slider moves the parts at once, without sliding.
+            self.doc.explode_shown = amount;
+        }
+        if toggle {
+            self.doc.exploded = !on;
+            if self.doc.exploded {
+                // The parts all the way apart are framed as they slide.
+                self.doc.viewer.set_explode(self.doc.explode_shown.max(0.01));
+                self.doc.viewer.view_all();
+            }
         }
     }
 
@@ -2397,6 +2481,9 @@ impl StudioApp {
         if let Some(input) = bar {
             self.animation_input(ctx, input);
         }
+        if self.doc.viewer.can_explode() && !self.doc.is_circuit() {
+            self.explode_bar(ctx, self.view_rect);
+        }
         if self.doc.mount.active {
             self.mount_bar(ctx, self.view_rect);
             // The pins of the wire on screen pulse.
@@ -2761,6 +2848,7 @@ impl eframe::App for StudioApp {
         }
         self.receive();
         self.animate(ctx);
+        self.explode(ctx);
         self.shortcuts(ctx);
         self.poll_disk(ctx);
 

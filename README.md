@@ -12,6 +12,14 @@ they are. Written in Rust, it renders as you type.
   Open Recent lists the last ten files opened or saved; each file opens in
   a tab of its own, with its view, console and undo history, and the tabs
   come back at the next launch.
+- **Exploded view**: a design whose pieces are written in `part("name")`
+  gets an Exploded button over the view. It slides the parts apart, so
+  one sees how they fit together, and a slider sets how far. Each part
+  moves away from the center of what it is in (the model, or its parent
+  part), by half the size of that; a part in a part moves with its
+  parent, then away from it; a part that is the whole model stays. Only
+  the view changes: the model, its exports and its sizes stay
+  assembled, and an animated model plays apart.
 - **Examples**: the Examples menu lists the designs and circuits that
   come with the app, by subject: a chest that opens, three gears that
   drive one another and a walking mannequin (Game), and the Grogu
