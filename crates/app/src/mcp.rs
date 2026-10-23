@@ -34,7 +34,9 @@ for PrusaSlicer. For electronics, `library_parts` lists the parts and \
 `part_pins` their pins; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
-`circuit_bom` list its wires in order and its parts.";
+`circuit_bom` list its wires in order and its parts. To turn a mesh into \
+a design, `section` cuts it with a plane: its outlines give the sizes to \
+write it again with.";
 
 /// The picture's size when the agent gives none, and the largest it can ask.
 const IMAGE_SIZE: (u64, u64) = (800, 600);
@@ -142,6 +144,26 @@ fn tools() -> Value {
                 "view": { "type": "string", "enum": views, "default": "diagonal", "description": "Where the camera looks from." },
                 "width": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.0, "description": "In pixels." },
                 "height": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.1, "description": "In pixels." },
+            }), &[]),
+        },
+        {
+            "name": "section",
+            "title": "Cut a model",
+            "description": "Cuts the solid with a plane across `axis` at `at` (mm) and returns its outline at its real \
+                            size: each contour's points in the plane's two axes (x = at gives y, z; y = at gives x, z; \
+                            z = at gives x, y), outer ones counter-clockwise, holes clockwise, with its area and bounds. \
+                            Use it to measure a mesh (import(\"part.3mf\"), or one object of it with object = \"name\") \
+                            before writing it again as a parametric design: a cut through the axis of a turned part is \
+                            its profile, for rotate_extrude(); cuts at several heights show where a prism changes.",
+            "inputSchema": schema(json!({
+                "axis": { "type": "string", "enum": ["x", "y", "z"], "default": "z", "description": "The axis the plane is across." },
+                "at": { "type": "number", "default": 0, "description": "Where along the axis, in mm." },
+                "tolerance": {
+                    "type": "number",
+                    "minimum": 0,
+                    "default": 0.01,
+                    "description": "Points this close (mm) to the line through their neighbours are left out; 0 keeps them all.",
+                },
             }), &[]),
         },
         {
@@ -253,6 +275,7 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "parameters" => parameters_tool,
         "image" => image_tool,
         "export" => export_tool,
+        "section" => section_tool,
         _ => circuit::tool(name).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -325,6 +348,22 @@ fn view_and_size(args: &Value) -> Result<(f32, f32, usize, usize), String> {
         },
     };
     Ok((yaw, pitch, size("width", IMAGE_SIZE.0)?, size("height", IMAGE_SIZE.1)?))
+}
+
+fn section_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let axis = match args.get("axis").and_then(Value::as_str) {
+        None => c2f_geom::Axis::Z,
+        Some(name) => c2f_geom::Axis::named(name).ok_or_else(|| format!("unknown axis `{name}`: give x, y or z"))?,
+    };
+    let number = |key: &str, default: f64| match args.get(key) {
+        None => Ok(default),
+        Some(v) => v.as_f64().filter(|v| v.is_finite()).ok_or(format!("`{key}` must be a number")),
+    };
+    let (at, tolerance) = (number("at", 0.0)?, number("tolerance", 0.01)?.max(0.0));
+    let (rendered, mut report) = render(args)?;
+    let cut = rendered.section(axis, at).ok_or_else(|| format!("the model is empty or 2D: nothing to cut\n{}", pretty(&report)))?;
+    report["section"] = cut.json(axis, at, tolerance);
+    Ok(vec![text(pretty(&report))])
 }
 
 fn export_tool(args: &Value) -> Result<Vec<Value>, String> {

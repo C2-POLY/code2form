@@ -27,6 +27,9 @@ commands:
           the links' meshes go in a folder beside it
   json    the parts of the model as JSON: each part()'s place, joint,
           size, volume and colors, and the design's parameters
+  section the outline where a plane cuts the solid, as JSON (--axis,
+          --at, --tolerance): to measure a mesh before drawing it again;
+          through the axis of a turned part, its profile
   svg     evaluate, build the 2D geometry and print it as an SVG
   dxf     the same, as a DXF drawing; a 3D model seen from --view
   check   parse only and report syntax errors and badly written
@@ -65,6 +68,10 @@ options:
                   degrees (default top)
   --density <kg/m3>  urdf: what the links weigh by volume (default 1240,
                   PLA's)
+  --axis <x|y|z>  section: the axis the plane is across (default z)
+  --at <mm>       section: where along it (default 0)
+  --tolerance <mm>  section: points this close to a straight line are
+                  left out (default 0.01)
   --scale <m>     glb: meters per model unit (default 0.001: a model in
                   millimeters keeps its size; 1 makes each unit a meter)
   --duration <s>  glb of a model that reads $t: the seconds its parts take
@@ -104,6 +111,8 @@ struct Options {
     view: Option<(f64, f64)>,
     /// `--density`.
     density: Option<f64>,
+    /// `--axis`, `--at` and `--tolerance`, for `section`.
+    section: (c2f_geom::Axis, f64, f64),
 }
 
 impl Options {
@@ -113,12 +122,14 @@ impl Options {
         let mut gltf = c2f_geom::GltfOptions::default();
         let (mut still, mut animation_name) = (false, None);
         let (mut output, mut view, mut density) = (None, None, None);
+        let mut section = (c2f_geom::Axis::Z, 0.0, 0.01);
         while let Some((arg, tail)) = rest.split_first() {
             rest = tail;
             let animation = gltf.animation.get_or_insert_with(Default::default);
             let positive = |value: &String| value.parse().ok().filter(|v: &f64| v.is_finite() && *v > 0.0);
             match arg.as_str() {
-                "--scale" | "--duration" | "--fps" | "--animation" | "-o" | "--view" | "--density" => {
+                "--scale" | "--duration" | "--fps" | "--animation" | "-o" | "--view" | "--density" | "--axis" | "--at"
+                | "--tolerance" => {
                     let (value, tail) = rest.split_first()?;
                     rest = tail;
                     match arg.as_str() {
@@ -128,6 +139,9 @@ impl Options {
                         "-o" => output = Some(value.clone()),
                         "--view" => view = Some(parse_view(value)?),
                         "--density" => density = Some(positive(value)?),
+                        "--axis" => section.0 = c2f_geom::Axis::named(value)?,
+                        "--at" => section.1 = value.parse().ok().filter(|v: &f64| v.is_finite())?,
+                        "--tolerance" => section.2 = value.parse().ok().filter(|v: &f64| v.is_finite() && *v >= 0.0)?,
                         _ => animation_name = Some(value.clone()),
                     }
                     continue;
@@ -170,7 +184,7 @@ impl Options {
         if still {
             gltf.animation = None;
         }
-        Some(Options { command: command.clone(), path, defines, parameter_file, parameter_set, gltf, output, view, density })
+        Some(Options { command: command.clone(), path, defines, parameter_file, parameter_set, gltf, output, view, density, section })
     }
 
     /// The name of what is written: the output's stem, or the model's.
@@ -202,7 +216,7 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "obj", "step", "urdf", "json", "svg", "dxf"]
+    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "obj", "step", "urdf", "json", "section", "svg", "dxf"]
         .contains(&options.command.as_str())
     {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
@@ -261,6 +275,7 @@ fn run() -> ExitCode {
             0 => ExitCode::SUCCESS,
             _ => ExitCode::FAILURE,
         },
+        "section" => section(&program, &options),
         // `csg`, or an export format.
         command => csg(&mut program, &src, Export::named(command), &options),
     }
@@ -483,6 +498,34 @@ fn print_gltf(program: &mut c2f_eval::Program, options: &c2f_geom::GltfOptions, 
         Err(why) => eprintln!("WARNING: {why}"),
     }
     ExitCode::SUCCESS
+}
+
+/// Prints where a plane cuts the solid, as JSON.
+fn section(program: &c2f_eval::Program, options: &Options) -> ExitCode {
+    let output = c2f_eval::evaluate(program);
+    for warning in &output.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    if let Some(error) = &output.error {
+        eprintln!("ERROR: {error}");
+        return ExitCode::FAILURE;
+    }
+    let rendered = render(program, &output);
+    for warning in &rendered.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    let (axis, at, tolerance) = options.section;
+    match rendered.section(axis, at) {
+        Some(cut) => {
+            let json = serde_json::to_string_pretty(&cut.json(axis, at, tolerance)).unwrap_or_default();
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("error: the model is empty or 2D: nothing to cut");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Why the parts were not written: the model has none (a warning, as for
