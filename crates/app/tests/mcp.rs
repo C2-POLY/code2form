@@ -92,12 +92,12 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom"]
+        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
         let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
-        assert_eq!(takes_code, tool["name"] != "library_parts", "{tool}");
+        assert_eq!(takes_code, !["library_parts", "electrify"].contains(&tool["name"].as_str().unwrap()), "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);
@@ -312,6 +312,43 @@ fn export_writes_files_for_other_programs() {
     let (is_error, report) = server.report("export", json!({ "code": "cube([10, 20, 30]);", "output": dir.join("side.dxf"), "view": "front" }));
     assert!(!is_error, "{report}");
     assert!(std::fs::read_to_string(dir.join("side.dxf")).unwrap().contains("LINE"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prompts_lead_from_an_idea_to_its_electronics() {
+    let mut server = Server::start();
+    let init = server.request("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {} }));
+    assert!(init["result"]["capabilities"]["prompts"].is_object());
+    let list = server.request("prompts/list", json!({}));
+    let names: Vec<&str> = list["result"]["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["design_object", "add_electronics"]);
+    let got = server.request(
+        "prompts/get",
+        json!({ "name": "add_electronics", "arguments": { "design": "box.c2f", "components": "https://example.com/sensor" } }),
+    );
+    let text = got["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(text.contains("box.c2f") && text.contains("electrify") && text.contains("check_circuit"), "{text}");
+    // A required argument left out is an error.
+    assert!(server.request("prompts/get", json!({ "name": "design_object" }))["error"].is_object());
+}
+
+#[test]
+fn electrify_keeps_the_design_and_adds_its_circuit() {
+    let mut server = Server::start();
+    let dir = temp_dir("electrify");
+    let design = dir.join("box.c2f");
+    std::fs::write(&design, "// A box.\nwidth = 30; // [10:50]\ncube([width, 20, 10]);\n").unwrap();
+    let (is_error, report) = server.report("electrify", json!({ "path": design }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["volume_before"], report["volume_after"]);
+    assert_eq!(report["volume_after"], 6000.0);
+    let src = std::fs::read_to_string(&design).unwrap();
+    assert!(src.starts_with("// A box.\n// @circuit box.c2fc\n") && src.contains("module design() {"), "{src}");
+    assert!(std::fs::read_to_string(dir.join("box.c2fc")).unwrap().contains("enclosure = \"box.c2f\""));
+    // Twice is refused: the circuit exists, and the design names it.
+    let (is_error, _) = server.call("electrify", json!({ "path": design }));
+    assert!(is_error);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

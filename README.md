@@ -170,8 +170,14 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 | `render` | The error that stops the model, with its file, line and column; the echo output and warnings; whether it is 3D or 2D, its triangles, volume (area in 2D) and bounding box |
 | `parameters` | The customizer parameters: name, group, description, default and widget |
 | `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report |
+| `electrify` | Makes an approved design (`path`) ready for its electronics: its circuit file beside it, `// @circuit`, its drawing moved unchanged into `design()`, and empty `electronics_cuts()` and `electronics_mounts()`; reports the volume before and after |
 | `section` | Where a plane across `axis` (x, y or z) at `at` cuts the solid: its outlines at their real size, with area and bounds. To measure a mesh before writing it again as a design: a cut through the axis of a turned part is its profile |
 | `export` | Writes a solid as STL, 3MF, glTF (`.glb`, with `scale` in meters per unit), OBJ (and its `.mtl`), STEP, URDF (and its meshes, with `density`) or its parts as JSON, a 2D model as SVG or DXF, or a 3D model's outline seen from `view` as DXF, to `output`, in the `format` its extension gives |
+
+The server also offers two prompts that lead an agent from an idea to a
+printed object with its electronics: `design_object` (the model first,
+until you approve it) then `add_electronics` (see the
+[guide](docs/electronics.md#from-an-idea-to-a-build)).
 
 For electronics, the agent finds parts and describes a circuit (`.c2fc`).
 The circuit tools take the circuit's text as `code` (its part files

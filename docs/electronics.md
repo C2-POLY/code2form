@@ -632,3 +632,43 @@ ESP32-S3 that drives a DC motor through a DRV8833: look up the parts'
 pins, check the circuit until it has no errors, and show me the
 wiring." Then open `robot.c2fc` in the app and wire it in Assembly
 mode.
+
+### From an idea to a build
+
+The server offers two prompts, which Claude Code lists as
+`/mcp__code2form__design_object` and `/mcp__code2form__add_electronics`
+(Claude Desktop under the + button). They keep the work in order, each
+step ending on what you approve:
+
+1. **`design_object`** (a `description`, maybe `constraints` and a
+   `folder`): the agent writes a parametric design, renders it, looks
+   at it from every side, and shows it to you until you approve it. No
+   electronics yet.
+2. **`add_electronics`** (the approved `design` and its `components`,
+   as product page links or library names): the agent finds or creates
+   each part, tells you its wiring plan, then calls `electrify` on the
+   design, places the parts and wires them, checks the circuit, gives
+   the design what the parts need, and shows you the build.
+
+`electrify` makes an approved design ready for its electronics without
+rewriting it. It creates the circuit file beside the design, with the
+design as its `enclosure`, names the circuit in the design
+(`// @circuit`), and moves what the design draws, unchanged, into a
+module `design()`. Its assignments, modules and functions stay where
+they are, so it draws the same: the tool reports the volume before and
+after. Two empty modules take what the electronics need, and the design
+draws all three once:
+
+```scad
+difference() {
+    union() {
+        design();
+        electronics_mounts();   // standoffs_for(...)
+    }
+    electronics_cuts();         // cutout_for(...), holes_for(...)
+}
+```
+
+In the app, a design that names its circuit has an Electronics button
+on the top bar, and a circuit with an enclosure a Part button, to go
+from one to the other.

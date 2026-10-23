@@ -899,6 +899,21 @@ impl StudioApp {
         }
     }
 
+    /// The file this tab goes with, when it exists: a circuit's enclosure
+    /// design (`true`), or the circuit a design names in `// @circuit`.
+    fn linked_file(&self) -> Option<(PathBuf, bool)> {
+        if self.doc.is_circuit() {
+            let enclosure = self.doc.wiring.as_ref()?.circuit.enclosure.clone()?;
+            return enclosure.is_file().then_some((enclosure, true));
+        }
+        // A plain search: the toolbar asks every frame, and a design names
+        // its circuit at the start of a line.
+        let at = self.doc.text.find("// @circuit ")?;
+        let name = self.doc.text[at + "// @circuit ".len()..].lines().next()?.trim();
+        let path = self.doc.directory()?.join(name);
+        path.is_file().then_some((path, false))
+    }
+
     /// Shows a circuit just read, or none, and watches its part files.
     fn set_circuit(&mut self, found: Option<Arc<c2f_circuit::Circuit>>) {
         // The parts' files and the enclosure's: an edit to one renders again.
@@ -2300,6 +2315,16 @@ impl StudioApp {
                     let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
                     if ui.add(render).on_hover_text(tr!("Render now ({shortcut})", "Lancer le rendu ({shortcut})")).clicked() {
                         self.render_now();
+                    }
+                    if let Some((linked, is_part)) = self.linked_file() {
+                        let (label, hint) = if is_part {
+                            (tr("Part", "Pièce"), tr("Open the design this circuit sits in", "Ouvrir le design dans lequel ce circuit s'intègre"))
+                        } else {
+                            (tr("Electronics", "Électronique"), tr("Open this design's circuit: its parts and wires", "Ouvrir le circuit de ce design : ses composants et ses fils"))
+                        };
+                        if ui.button(label).on_hover_text(format!("{hint}\n{}", linked.display())).clicked() {
+                            self.open(ctx, linked);
+                        }
                     }
                     if self.doc.is_circuit() {
                         toolbar_separator(ui);

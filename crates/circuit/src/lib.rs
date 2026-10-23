@@ -28,6 +28,7 @@
 //! Wires are laid in the order the file lists them.
 
 pub mod check;
+pub mod electrify;
 pub mod route;
 
 use std::collections::{BTreeMap, HashMap};

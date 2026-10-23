@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::Export;
 
 mod circuit;
+mod prompts;
 
 /// The protocol versions this server speaks, the latest first.
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -34,7 +35,11 @@ for PrusaSlicer. For electronics, `library_parts` lists the parts and \
 `part_pins` their pins; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
-`circuit_bom` list its wires in order and its parts. To turn a mesh into \
+`circuit_bom` list its wires in order and its parts. To go from an \
+idea to a printed object with its electronics, follow the prompts \
+`design_object` (the model first, approved by the user) then \
+`add_electronics` (`electrify` makes the approved design ready for its \
+circuit). To turn a mesh into \
 a design, `section` cuts it with a plane: its outlines give the sizes to \
 write it again with.";
 
@@ -90,6 +95,8 @@ fn handle(line: &str) -> Option<Value> {
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
         "tools/call" => call(&params),
+        "prompts/list" => Ok(prompts::list()),
+        "prompts/get" => prompts::get(&params),
         _ => Err((-32601, format!("method not found: {method}"))),
     };
     Some(match result {
@@ -109,7 +116,7 @@ fn initialize(params: &Value) -> Value {
     let version = asked.filter(|v| PROTOCOL_VERSIONS.contains(v)).unwrap_or(PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": version,
-        "capabilities": { "tools": {} },
+        "capabilities": { "tools": {}, "prompts": {} },
         "serverInfo": { "name": "code2form", "title": "Code2Form", "version": env!("CARGO_PKG_VERSION") },
         "instructions": INSTRUCTIONS,
     })
@@ -145,6 +152,21 @@ fn tools() -> Value {
                 "width": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.0, "description": "In pixels." },
                 "height": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.1, "description": "In pixels." },
             }), &[]),
+        },
+        {
+            "name": "electrify",
+            "title": "Make a design ready for its electronics",
+            "description": "Prepares an approved design (`path`, a .c2f file) for its electronics without \
+                            rewriting it: creates its circuit file beside it (`circuit`, by default the design's \
+                            name with .c2fc), whose enclosure is the design; names the circuit in the design \
+                            (// @circuit); moves the design's drawing, unchanged, into a module design(); and adds \
+                            empty modules electronics_cuts() (subtracted: cutout_for, holes_for, channel_for) and \
+                            electronics_mounts() (added: standoffs_for). Then place the parts and wires in the \
+                            circuit, and fill the two modules. Reports the volume before and after, which match.",
+            "inputSchema": schema_of(json!({
+                "path": { "type": "string", "description": "The design's .c2f file; it is rewritten." },
+                "circuit": { "type": "string", "description": "The circuit file's name, beside the design (default: <design>.c2fc)." },
+            }), &["path"]),
         },
         {
             "name": "section",
@@ -276,6 +298,7 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "image" => image_tool,
         "export" => export_tool,
         "section" => section_tool,
+        "electrify" => electrify_tool,
         _ => circuit::tool(name).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -348,6 +371,37 @@ fn view_and_size(args: &Value) -> Result<(f32, f32, usize, usize), String> {
         },
     };
     Ok((yaw, pitch, size("width", IMAGE_SIZE.0)?, size("height", IMAGE_SIZE.1)?))
+}
+
+fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let path = PathBuf::from(args.get("path").and_then(Value::as_str).ok_or("`path` names the design's .c2f file")?);
+    let src = std::fs::read_to_string(&path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+    let design_file = path.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("`path` names no file")?;
+    let circuit_file = match args.get("circuit").and_then(Value::as_str) {
+        Some(name) if name.ends_with(".c2fc") && !name.contains(['/', '\\']) => name.to_string(),
+        Some(name) => return Err(format!("`circuit` must be a file name ending in .c2fc, beside the design: {name}")),
+        None => format!("{}.c2fc", path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()),
+    };
+    let circuit_path = path.with_file_name(&circuit_file);
+    if circuit_path.exists() {
+        return Err(format!("{} exists already: name another with `circuit`", circuit_path.display()));
+    }
+    let before = render(&json!({ "path": path }))?.1;
+    let done = c2f_circuit::electrify::electrify(&src, &design_file, &circuit_file)?;
+    std::fs::write(&circuit_path, &done.circuit).map_err(|err| format!("cannot write {}: {err}", circuit_path.display()))?;
+    std::fs::write(&path, &done.design).map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+    let after = render(&json!({ "path": path }))?.1;
+    let report = json!({
+        "ok": true,
+        "design": path.display().to_string(),
+        "circuit": circuit_path.display().to_string(),
+        "volume_before": before.get("volume"),
+        "volume_after": after.get("volume"),
+        "warnings": after.get("warnings"),
+        "next": "Place the parts and wires in the circuit file, check them with check_circuit and fit, \
+                 then fill electronics_cuts() and electronics_mounts() in the design.",
+    });
+    Ok(vec![text(pretty(&report))])
 }
 
 fn section_tool(args: &Value) -> Result<Vec<Value>, String> {
