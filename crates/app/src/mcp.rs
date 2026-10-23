@@ -34,7 +34,8 @@ for PrusaSlicer. For electronics, `library_parts` lists the parts and \
 `part_pins` their pins; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
-`circuit_bom` list its wires in order and its parts. To turn a mesh into \
+`circuit_bom` list its wires in order and its parts, `fit` says how its \
+parts fit in their enclosure. To turn a mesh into \
 a design, `section` cuts it with a plane: its outlines give the sizes to \
 write it again with.";
 

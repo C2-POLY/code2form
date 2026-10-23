@@ -141,8 +141,8 @@ they are. Written in Rust, it renders as you type.
   glTF, an OBJ, a STEP, the parts' JSON, an SVG or a DXF (or writes them,
   and a URDF, with `-o file`), and takes `-D name=value`, `-p presets.json`
   and `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
-  checks a circuit, prints its wiring list and bill of materials, and
-  exports its assembled parts (see the
+  checks a circuit, prints its wiring list and bill of materials, how
+  its parts fit in their enclosure, and exports its assembled parts (see the
   [guide](docs/electronics.md#6-from-the-command-line)).
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
@@ -186,6 +186,7 @@ resolving from `working_dir`, then the library folders) or a file as
 | `circuit_image` | A PNG picture of the circuit, its parts placed and its wires as tubes in their colors, from `view`, `width` by `height` pixels; `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others |
 | `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
 | `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
+| `fit` | How each part fits in the enclosure: its least clearance, its gaps to the enclosure and the nearest part with where, the ports no cutout opens and the mount holes no standoff holds, and the wires that run into the enclosure; `clearance` sets the room wanted (0.5 mm) |
 
 For example, ask Claude Code: "With the Code2Form tools, build a
 `robot.c2fc` circuit for a XIAO ESP32-S3 that drives a DC motor through

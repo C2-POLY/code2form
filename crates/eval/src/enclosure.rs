@@ -1,16 +1,17 @@
 //! Built-in modules for an enclosure made for a circuit, not in the
 //! reference: a file that names its circuit (`// @circuit robot.c2fc`)
 //! gets standoffs, screw holes and cutouts where the circuit's parts
-//! declare their mount holes and ports, and the parts themselves. They are
-//! in the circuit's coordinates, so moving a part in the circuit moves them
-//! at the next render.
+//! declare their mount holes and ports, channels along its wires, and the
+//! parts themselves. They are in the circuit's coordinates, so moving a
+//! part in the circuit moves them at the next render.
 //!
 //! ```text
 //! difference() { plate(); cutout_for("xiao", "usb_c", clearance = 0.5); }
 //! standoffs_for("driver", height = 4, screw = "M2");
+//! difference() { lid(); channel_for(3, d = 2.5); }
 //! ```
 
-use c2f_circuit::Instance;
+use c2f_circuit::{Circuit, Instance, route};
 use c2f_lang::annotations::{MountHole, PortSize};
 
 use crate::interp::Interp;
@@ -27,9 +28,8 @@ const SCREWS: [(&str, f64, f64, f64); 3] = [("M2", 1.6, 2.4, 4.5), ("M2.5", 2.1,
 /// touching the part cleanly.
 const BEHIND: f64 = 1.0;
 
-/// The part the call names, placed in the circuit; `None` after a warning
-/// when there is no circuit or no such part.
-fn instance<'a>(interp: &mut Interp<'a>, module: &str, p: &Params) -> Option<&'a Instance> {
+/// The circuit the file names; `None` after a warning when there is none.
+fn circuit<'a>(interp: &mut Interp<'a>, module: &str) -> Option<&'a Circuit> {
     let program = interp.program();
     let Some(circuit) = &program.circuit else {
         let why = match &program.circuit_path {
@@ -39,6 +39,13 @@ fn instance<'a>(interp: &mut Interp<'a>, module: &str, p: &Params) -> Option<&'a
         interp.warn(format!("Ignoring {module}(): {why}"));
         return None;
     };
+    Some(circuit)
+}
+
+/// The part the call names, placed in the circuit; `None` after a warning
+/// when there is no circuit or no such part.
+fn instance<'a>(interp: &mut Interp<'a>, module: &str, p: &Params) -> Option<&'a Instance> {
+    let circuit = circuit(interp, module)?;
     let name = match p.get("part") {
         Value::Str(name) => name.to_string(),
         other => {
@@ -139,6 +146,43 @@ pub(crate) fn cutout(interp: &mut Interp, p: &Params) -> Option<Node> {
         PortSize::Round(d) => cylinder(length, d + 2.0 * clearance, -BEHIND, p.segments(true)),
     };
     Some(transform(part.matrix(), transform(frame(port.position, port.direction), prism)))
+}
+
+/// `channel_for(wire, d)`: a tube `d` across (3 mm unless given) along the
+/// curve the views draw a wire on, its `via` points included, to subtract
+/// from the enclosure so that the wire passes through. `wire` is the
+/// wire's number, from 1 in the circuit's order (as the app names it,
+/// `wire:7`), or a label: every wire with that label, as a bundle. The
+/// tube is a chain of spheres hulled two by two, so it turns with the wire
+/// and is round at its two ends; they take `$fn` as any sphere does, and a
+/// low one keeps the many hulls quick.
+pub(crate) fn channel(interp: &mut Interp, p: &Params) -> Option<Node> {
+    let circuit = circuit(interp, "channel_for")?;
+    let count = circuit.wires.len();
+    let wires: Vec<usize> = match p.get("wire") {
+        Value::Number(n) if n.fract() == 0.0 && n >= 1.0 && n <= count as f64 => vec![n as usize - 1],
+        Value::Str(label) => (0..count).filter(|&i| circuit.wires[i].label.as_deref() == Some(&*label)).collect(),
+        other => {
+            let why = format!("is not a wire's number (1 to {count}) or label");
+            interp.warn(format!("Ignoring channel_for(): wire = {} {why}", other.repr()));
+            return None;
+        }
+    };
+    if wires.is_empty() {
+        interp.warn(format!("Ignoring channel_for(): no wire has the label {}", p.get("wire").repr()));
+        return None;
+    }
+    let d = positive(interp, "channel_for", p, "d", Some(3.0))?;
+    let segments = p.segments(true);
+    let sphere = |at: [f64; 3]| transform(translation(at), Node::new(NodeKind::Sphere { r: d / 2.0, segments }, Vec::new()));
+    let links = wires
+        .into_iter()
+        .flat_map(|wire| {
+            let path = route::path(circuit, wire);
+            path.windows(2).map(|pair| Node::new(NodeKind::Hull, vec![sphere(pair[0]), sphere(pair[1])])).collect::<Vec<_>>()
+        })
+        .collect();
+    Some(Node::group(links))
 }
 
 /// `circuit_part(part)`: the part itself, with its parameters, where the

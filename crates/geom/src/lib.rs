@@ -3,11 +3,13 @@
 //! into triangles a viewer can draw; it also writes solids as STL, 3MF and
 //! glTF (for game engines), and 2D models as SVG and DXF; and it draws
 //! pictures of a model as PNG, without a window. It also finds where
-//! placed solids collide.
+//! placed solids collide, and how the parts of a circuit fit in their
+//! enclosure.
 
 mod build;
 mod collide;
 mod explode;
+mod fit;
 mod export;
 mod gltf;
 mod image;
@@ -27,6 +29,7 @@ mod wavefront;
 pub use build::{DEFAULT_COLOR, Model, render, render_in};
 pub use explode::{Explode, Exploded, exploded};
 pub use collide::{Placement, TOUCHING, collisions};
+pub use fit::{CLEARANCE, Crossing, Gap, PartFit, SEARCH, crossings, fit};
 pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
 pub use image::VIEWS;
 pub use import::objects as mesh_objects;

@@ -6,7 +6,8 @@
 //! to the circuit re-renders only the parts it changed.
 //!
 //! The enclosure the circuit names shows around the parts, see-through,
-//! and a part that runs into it or into another part shows in red.
+//! and a part that runs into it or into another part shows in red; one
+//! that comes closer than [`c2f_geom::CLEARANCE`] to them, in amber.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use c2f_circuit::{Circuit, Instance};
-use c2f_geom::{Model, RenderMesh, Stats};
+use c2f_geom::{Model, PartFit, RenderMesh, Stats};
 
 use crate::console::{Level, Line};
 use crate::worker::Scene;
@@ -183,8 +184,27 @@ pub struct PartCache {
     parts: HashMap<Key, Arc<PartRender>>,
     enclosure: Option<(EnclosureKey, Arc<PartRender>)>,
     collisions: Option<(CollisionKey, Vec<Collision>)>,
+    fits: Option<(CollisionKey, Vec<PartFit>)>,
     /// How many times collisions were computed, for tests.
     collision_runs: usize,
+}
+
+/// The parts placed by `circuit`, and its enclosure, as the collisions and
+/// fits know them.
+fn collision_key(circuit: &Circuit, parts: &[Arc<PartRender>], enclosure: Option<&Arc<PartRender>>) -> CollisionKey {
+    let placed = parts.iter().zip(&circuit.parts).map(|(part, instance)| (part.clone(), instance.matrix())).collect();
+    (placed, enclosure.cloned())
+}
+
+/// Whether two keys hold the same renders, by identity, at the same places.
+fn same_key(a: &CollisionKey, b: &CollisionKey) -> bool {
+    a.0.len() == b.0.len()
+        && a.0.iter().zip(&b.0).all(|(a, b)| Arc::ptr_eq(&a.0, &b.0) && a.1 == b.1)
+        && match (&a.1, &b.1) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
 }
 
 impl PartCache {
@@ -290,25 +310,36 @@ impl PartCache {
         parts: &[Arc<PartRender>],
         enclosure: Option<&Arc<PartRender>>,
     ) -> Vec<Collision> {
-        let placed = parts.iter().zip(&circuit.parts).map(|(part, instance)| (part.clone(), instance.matrix())).collect();
-        let key: CollisionKey = (placed, enclosure.cloned());
-        let same = |known: &CollisionKey| {
-            known.0.len() == key.0.len()
-                && known.0.iter().zip(&key.0).all(|(a, b)| Arc::ptr_eq(&a.0, &b.0) && a.1 == b.1)
-                && match (&known.1, &key.1) {
-                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                    (None, None) => true,
-                    _ => false,
-                }
-        };
+        let key = collision_key(circuit, parts, enclosure);
         if let Some((known, found)) = &self.collisions {
-            if same(known) {
+            if same_key(known, &key) {
                 return found.clone();
             }
         }
         self.collision_runs += 1;
         let found = collisions(circuit, parts, enclosure.map(|e| &**e));
         self.collisions = Some((key, found.clone()));
+        found
+    }
+
+    /// How each part fits ([`c2f_geom::fit`]), computed again when the
+    /// collisions are.
+    pub fn fits(
+        &mut self,
+        circuit: &Circuit,
+        parts: &[Arc<PartRender>],
+        enclosure: Option<&Arc<PartRender>>,
+    ) -> Vec<PartFit> {
+        let key = collision_key(circuit, parts, enclosure);
+        if let Some((known, found)) = &self.fits {
+            if same_key(known, &key) {
+                return found.clone();
+            }
+        }
+        let solids: Vec<(&Model, c2f_geom::Placement)> =
+            circuit.parts.iter().zip(parts).map(|(instance, part)| (&part.model, instance.matrix())).collect();
+        let found = c2f_geom::fit(circuit, &solids, enclosure.map(|e| &e.model));
+        self.fits = Some((key, found.clone()));
         found
     }
 }
@@ -356,18 +387,21 @@ pub fn collision_lines(circuit: &Circuit, collisions: &[Collision]) -> Vec<Line>
 
 /// A part that collides, as it shows.
 const COLLIDING: [f32; 4] = [0.95, 0.16, 0.14, 1.0];
+/// A part closer to the enclosure or another part than the clearance.
+const TIGHT: [f32; 4] = [0.98, 0.62, 0.10, 1.0];
 /// An uncolored enclosure, and how much of it shows through.
 const ENCLOSURE: [f32; 4] = [0.74, 0.80, 0.88, 1.0];
 const ENCLOSURE_ALPHA: f32 = 0.28;
 
 /// The scene of a circuit: its parts placed, and where each one's
 /// triangles are in the solid. The console gets each part file's lines
-/// once.
+/// once, then the collisions and what `fits` finds besides.
 pub fn scene(
     circuit: &Circuit,
     parts: &[Arc<PartRender>],
     enclosure: Option<&PartRender>,
     collisions: &[Collision],
+    fits: &[PartFit],
     source: &str,
     console: &mut Vec<Line>,
 ) -> Scene {
@@ -381,9 +415,14 @@ pub fn scene(
         let matrix = instance.matrix();
         let start = solid.positions.len();
         place(&mut solid, &part.solid, &matrix, Some(part_tint(instance, index)));
-        if collisions.iter().any(|c| c.part == index || c.other == Some(index)) {
+        let tint = if collisions.iter().any(|c| c.part == index || c.other == Some(index)) {
+            Some(COLLIDING)
+        } else {
+            fits.get(index).filter(|fit| fit.tight(c2f_geom::CLEARANCE)).map(|_| TIGHT)
+        };
+        if let Some(tint) = tint {
             for color in &mut solid.colors[start..] {
-                *color = std::array::from_fn(|i| color[i] * 0.3 + COLLIDING[i] * 0.7);
+                *color = std::array::from_fn(|i| color[i] * 0.3 + tint[i] * 0.7);
             }
         }
         ranges.push(start..solid.positions.len());
@@ -407,6 +446,10 @@ pub fn scene(
     }
     let enclosure_range = start..solid.positions.len();
     console.extend(collision_lines(circuit, collisions));
+    for (index, fit) in fits.iter().enumerate() {
+        let warnings = fit.warnings(circuit, index, c2f_geom::CLEARANCE, false);
+        console.extend(warnings.into_iter().map(|warning| Line::new(Level::Warning, warning)));
+    }
     let vertices = solid.positions.len();
     Scene {
         solid,
@@ -510,7 +553,7 @@ to = "b.B"
         assert_eq!(cache.len(), 3);
 
         let mut console = Vec::new();
-        let scene = scene(&circuit, &parts, None, &[], CIRCUIT, &mut console);
+        let scene = scene(&circuit, &parts, None, &[], &[], CIRCUIT, &mut console);
         assert_eq!(scene.parts.len(), 4);
         let bounds = |i: usize| {
             let r = scene.parts[i].clone();
@@ -544,9 +587,9 @@ to = "b.B"
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// The collisions of Grogu, its circuit's text changed by `edit`, in
-    /// its plate.
-    fn grogu_collisions(edit: impl Fn(&str) -> String) -> (Circuit, Vec<Collision>) {
+    /// Grogu, its circuit's text changed by `edit`: the circuit, its parts
+    /// rendered and its plate.
+    fn grogu(edit: impl Fn(&str) -> String) -> (Circuit, Vec<Arc<PartRender>>, Arc<PartRender>) {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grogu/grogu.c2fc");
         let path = std::fs::canonicalize(path).unwrap();
         let source = edit(&std::fs::read_to_string(&path).unwrap());
@@ -563,8 +606,32 @@ to = "b.B"
             })
             .expect("Grogu has an enclosure");
         assert!(enclosure.triangles > 0, "{:?}", enclosure.console);
+        (circuit, parts, enclosure)
+    }
+
+    /// The collisions of Grogu, its circuit's text changed by `edit`, in
+    /// its plate.
+    fn grogu_collisions(edit: impl Fn(&str) -> String) -> (Circuit, Vec<Collision>) {
+        let (circuit, parts, enclosure) = grogu(edit);
         let found = collisions(&circuit, &parts, Some(&enclosure));
         (circuit, found)
+    }
+
+    #[test]
+    fn grogu_parts_closer_than_the_clearance_show_in_amber() {
+        let (circuit, parts, enclosure) = grogu(str::to_string);
+        let fits = PartCache::default().fits(&circuit, &parts, Some(&enclosure));
+        let index = |name: &str| circuit.parts.iter().position(|p| p.name == name).unwrap();
+        // The XIAO sits 0.3 mm inside its fence; the touch plate has 1 mm.
+        let (xiao, touch) = (index("xiao"), index("touch"));
+        assert!(fits[xiao].tight(c2f_geom::CLEARANCE) && !fits[touch].tight(c2f_geom::CLEARANCE), "{fits:?}");
+        let mut console = Vec::new();
+        let tinted = scene(&circuit, &parts, Some(&enclosure), &[], &fits, "", &mut console);
+        let plain = scene(&circuit, &parts, Some(&enclosure), &[], &[], "", &mut Vec::new());
+        let colors = |scene: &Scene, part: usize| scene.solid.colors[scene.parts[part].clone()].to_vec();
+        assert_ne!(colors(&tinted, xiao), colors(&plain, xiao));
+        assert_eq!(colors(&tinted, touch), colors(&plain, touch));
+        assert!(console.iter().any(|l| l.level == Level::Warning && l.text.starts_with("`xiao` is 0.30 mm from the enclosure at [")));
     }
 
     #[test]

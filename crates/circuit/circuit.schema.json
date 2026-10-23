@@ -94,6 +94,11 @@
           "description": "What the wire carries, as shown next to it.",
           "type": "string"
         },
+        "via": {
+          "description": "Points the wire passes through, in order, between its two pins.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/vector" }
+        },
         "allow": {
           "description": "Warnings about the pins at its two ends that are accepted, with the reason in a comment.",
           "type": "array",

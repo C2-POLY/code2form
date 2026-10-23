@@ -207,3 +207,47 @@ fn grogu_parts_sit_apart_on_the_plate() {
         assert!(shared.stats.volume < 1e-6, "{part} is {} mm³ into the plate", shared.stats.volume);
     }
 }
+
+#[test]
+fn a_channel_carves_a_passage_the_wire_no_longer_touches() {
+    // Two boards either side of a wall, a wire between them over its top.
+    let circuit = "[parts.a]\npart = \"board.c2f\"\n[parts.b]\npart = \"board.c2f\"\nat = [30, 0, 0]\n\n\
+                   [[wires]]\nfrom = \"a.A\"\nto = \"b.A\"\nlabel = \"signal\"\n";
+    let folder = Folder::new("channel", &[("board.c2f", BOARD), ("test.c2fc", circuit)]);
+    let loaded = c2f_circuit::load(&folder.0.join("test.c2fc"), &[]).unwrap();
+    let wall = "translate([13, -10, 0]) cube([4, 20, 20]);";
+    let enclosure = |src: &str| {
+        let output = folder.evaluate(&format!("{HEAD}{src}"));
+        assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+        c2f_geom::render_in(&output.nodes, &folder.0).model
+    };
+    // The wall stops it: where it first meets it, on the face towards a.
+    let crossings = c2f_geom::crossings(&loaded, &enclosure(wall));
+    assert_eq!(crossings.len(), 1, "{crossings:?}");
+    assert!((crossings[0].at[0] - 13.0).abs() < 1e-6 && crossings[0].facing == [-1.0, 0.0, 0.0], "{crossings:?}");
+    assert!(crossings[0].message(&loaded).starts_with("wire 1 (a.A -> b.A) runs into the enclosure at [13.0, "));
+    // A channel along it, by number or by label, lets it through, clear of
+    // the wire's own radius (0.5 mm) all along.
+    for channel in ["channel_for(1)", "channel_for(\"signal\", d = 2)"] {
+        let carved = enclosure(&format!("difference() {{ {wall} {channel}; }}"));
+        assert!(c2f_geom::crossings(&loaded, &carved).is_empty(), "{channel}");
+        let c2f_geom::Model::Solid(carved) = carved else { panic!("{channel}: not a solid") };
+        let path = c2f_circuit::route::path(&loaded, 0);
+        for pair in path.windows(2) {
+            for side in [[0.0, 0.0, 0.5], [0.0, 0.0, -0.5], [0.0, 0.5, 0.0], [0.0, -0.5, 0.0]] {
+                let v = |p: [f64; 3]| manifold_rust::linalg::Vec3::new(p[0] + side[0], p[1] + side[1], p[2] + side[2]);
+                assert!(carved.ray_cast(v(pair[0]), v(pair[1])).is_empty(), "{channel}: the wire's side {side:?} touches");
+            }
+        }
+    }
+    // What is not a wire of the circuit.
+    let output = folder.evaluate(&format!("{HEAD}channel_for(2);\nchannel_for(\"power\");\nchannel_for(1, d = 0);\n"));
+    assert_eq!(
+        output.warnings,
+        [
+            "Ignoring channel_for(): wire = 2 is not a wire's number (1 to 1) or label",
+            "Ignoring channel_for(): no wire has the label \"power\"",
+            "Ignoring channel_for(): d = 0 is not a positive size",
+        ]
+    );
+}

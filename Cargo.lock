@@ -533,6 +533,7 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "manifold-rust",
  "serde",
  "serde_json",
  "toml",
@@ -563,6 +564,7 @@ dependencies = [
 name = "c2f-geom"
 version = "0.3.0"
 dependencies = [
+ "c2f-circuit",
  "c2f-eval",
  "c2f-lang",
  "clipper2-rust",
