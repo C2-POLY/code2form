@@ -486,7 +486,7 @@ fn wires_text(rows: &[Vec<String>]) -> String {
 }
 
 /// Rows as aligned columns, those in `right` aligned to the right.
-fn text_table(rows: &[Vec<String>], right: &[usize]) -> String {
+pub fn text_table(rows: &[Vec<String>], right: &[usize]) -> String {
     let widths: Vec<usize> =
         (0..rows[0].len()).map(|c| rows.iter().map(|row| row[c].chars().count()).max().unwrap_or(0)).collect();
     let mut out = String::new();

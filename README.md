@@ -143,7 +143,11 @@ they are. Written in Rust, it renders as you type.
   and `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
   checks a circuit, prints its wiring list and bill of materials, how
   its parts fit in their enclosure, and exports its assembled parts (see the
-  [guide](docs/electronics.md#6-from-the-command-line)).
+  [guide](docs/electronics.md#6-from-the-command-line)); `c2f mass`
+  weighs a design or a circuit as printed (`--material`, `--infill`,
+  `--wall`) and gives its center of gravity and the angle it tips at.
+  `c2f loads scenario.json` computes the torque a motor must give a shaft
+  and what its supports take ([loads](docs/electronics.md#loads-on-a-shaft)).
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window; and describes a
@@ -181,10 +185,13 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 | `section` | Where a plane across `axis` (x, y or z) at `at` cuts the solid: its outlines at their real size, with area and bounds. To measure a mesh before writing it again as a design: a cut through the axis of a turned part is its profile |
 | `export` | Writes a solid as STL, 3MF, glTF (`.glb`, with `scale` in meters per unit), OBJ (and its `.mtl`), STEP, URDF (and its meshes, with `density`) or its parts as JSON, a 2D model as SVG or DXF, or a 3D model's outline seen from `view` as DXF, to `output`, in the `format` its extension gives |
 
-The server also offers two prompts that lead an agent from an idea to a
-printed object with its electronics: `design_object` (the model first,
-until you approve it) then `add_electronics` (see the
-[guide](docs/electronics.md#from-an-idea-to-a-build), and
+The server also offers three prompts that lead an agent from an idea to a
+printed object with its electronics: `plan_object` (questions that follow
+your answers, a mechanical review of masses, balance, forces, torque and
+material, and a brief you approve), `design_object` (the model, held to
+the brief, until you approve it) then `add_electronics` (see the
+[guide](docs/electronics.md#from-an-idea-to-a-build),
+[the plan on a watch winder](docs/plan-mode.md), and
 [a night light](docs/idea-to-build.md) made that way, step by step).
 
 For electronics, the agent finds parts and describes a circuit (`.c2fc`).
@@ -201,6 +208,11 @@ resolving from `working_dir`, then the library folders) or a file as
 | `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
 | `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
 | `fit` | How each part fits in the enclosure: its least clearance, its gaps to the enclosure and the nearest part with where, the ports no cutout opens and the mount holes no standoff holds, and the wires that run into the enclosure; `clearance` sets the room wanted (0.5 mm) |
+| `mass_properties` | What a design or a circuit weighs printed in `material` (PLA, PETG, ABS, ASA, TPU, nylon or a density) with `infill` and `wall`, per part (`parts`): each part's volume, mass and center, the circuit's parts by their sheet's `mass`, the `extra` masses, the total and center of gravity, and the stability: whether it stands, and the least angle it tips at, toward which side |
+| `loads` | For a shaft a motor turns (its `axis`, `loads`, `supports`, `motor`, `shaft`, `ratio`): the torque it needs, each support's radial and axial reaction and moment, the shaft's deflection, the margins against the motor's and bearings' figures (given or read from their parts' `@spec`), a `suggested_ratio` when the torque falls short, warnings (an overhung motor, a margin under `target_margin`) and a `summary`; see the [guide](docs/electronics.md#loads-on-a-shaft) |
+| `save_brief` | Writes the brief the plan ends on (`path`, `text`): refused without a title or without a requirement a tool measures |
+| `read_brief` | A brief's text, its requirements and its `mass` and `loads` blocks |
+| `check_brief` | Measures a design (`design`) and its circuit against their `brief`: each requirement holds, fails or is unmeasured, with the value measured |
 
 For example, ask Claude Code: "With the Code2Form tools, build a
 `robot.c2fc` circuit for a XIAO ESP32-S3 that drives a DC motor through

@@ -118,6 +118,9 @@ const PHRASES: &[(&[&str], &str)] = &[
     (&["h", "bridge"], "hbridge"),
     (&["h", "bridges"], "hbridge"),
     (&["wi", "fi"], "wifi"),
+    (&["roue", "dentee"], "gear"),
+    (&["roues", "dentees"], "gear"),
+    (&["heat", "set"], "insert"),
 ];
 
 /// Each word and the one it is searched as: French and English words of
@@ -180,6 +183,26 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("cable", "wire"),
     ("cuivre", "copper"),
     ("plaque", "plate"),
+    ("roulement", "bearing"),
+    ("palier", "bearing"),
+    ("pignon", "gear"),
+    ("engrenage", "gear"),
+    ("reducteur", "gear"),
+    ("vis", "screw"),
+    ("boulon", "screw"),
+    ("bolt", "screw"),
+    ("ecrou", "nut"),
+    ("taraudage", "insert"),
+    ("accouplement", "coupling"),
+    ("coupleur", "coupling"),
+    ("manchon", "coupling"),
+    ("axe", "shaft"),
+    ("arbre", "shaft"),
+    ("axle", "shaft"),
+    ("poid", "mass"),
+    ("weight", "mass"),
+    ("couple", "torque"),
+    ("vitesse", "speed"),
 ];
 
 /// Words that say nothing of a part.
@@ -332,22 +355,25 @@ mod tests {
         assert_eq!(names("  de la  "), [0, 1, 2]);
     }
 
-    /// The library's parts, as the catalogue lists them: by name.
+    /// The library's parts, as the catalogue lists them: the electronics,
+    /// then the mechanical parts, by name.
     fn library() -> (Vec<String>, Vec<Document>) {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library/electronics");
-        let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
-        files.retain(|p| p.extension().is_some_and(|e| e == "c2f"));
-        files.sort();
         let mut names = Vec::new();
         let mut documents = Vec::new();
-        for path in files {
-            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let source = std::fs::read_to_string(&path).unwrap();
-            let (annotations, errors) = c2f_lang::annotations::read(&source);
-            assert!(errors.is_empty(), "{name}: {errors:?}");
-            let description = annotations.description.as_ref().map(|d| d.text.clone()).expect("a description");
-            documents.push(Document::new(&name, &format!("electronics/{name}.c2f"), &description, &annotations));
-            names.push(name);
+        for folder in ["electronics", "mechanical"] {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library").join(folder);
+            let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+            files.retain(|p| p.extension().is_some_and(|e| e == "c2f"));
+            files.sort();
+            for path in files {
+                let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+                let source = std::fs::read_to_string(&path).unwrap();
+                let (annotations, errors) = c2f_lang::annotations::read(&source);
+                assert!(errors.is_empty(), "{name}: {errors:?}");
+                let description = annotations.description.as_ref().map(|d| d.text.clone()).expect("a description");
+                documents.push(Document::new(&name, &format!("{folder}/{name}.c2f"), &description, &annotations));
+                names.push(name);
+            }
         }
         (names, documents)
     }
@@ -380,10 +406,37 @@ mod tests {
         };
         assert_eq!(sorted("carte ESP32-S3"), ["esp32s3_devkitc1", "xiao_esp32s3"]);
         assert_eq!(sorted("condensateurs"), ["capacitor_ceramic", "capacitor_radial"]);
-        // The library has no stepper motor: only the driver that can run
-        // one answers, not the DC motor.
-        assert_eq!(found("moteur pas à pas"), ["drv8833"]);
-        // Nor a temperature sensor.
+        // The stepper first, then the driver that can run one, not the DC
+        // motor.
+        assert_eq!(found("moteur pas à pas"), ["stepper_28byj48", "drv8833"]);
+        // The library has no temperature sensor.
         assert_eq!(found("capteur de température"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn the_library_finds_mechanical_parts_in_french_and_english() {
+        let (names, documents) = library();
+        let found = |query: &str| -> Vec<&str> {
+            rank(&documents, query).into_iter().map(|(i, _)| names[i].as_str()).collect()
+        };
+        let first = |query: &str| found(query).first().copied();
+        assert_eq!(first("roulement 8 mm"), Some("bearing_608"));
+        assert_eq!(first("bearing 608"), Some("bearing_608"));
+        let bearings = found("roulements");
+        for bearing in ["bearing_608", "bearing_625", "bearing_6800", "bearing_6001", "bearing_seat"] {
+            assert!(bearings.contains(&bearing), "{bearing}: {bearings:?}");
+        }
+        // A gear, and the helper that pairs two.
+        for query in ["pignon", "engrenage", "roue dentée", "réducteur"] {
+            let mut two = found(query)[..2].to_vec();
+            two.sort();
+            assert_eq!(two, ["gear_pair", "spur_gear"], "{query}");
+        }
+        assert_eq!(found("vis M3"), ["socket_screw", "hex_nut"]);
+        assert_eq!(first("écrous"), Some("hex_nut"));
+        assert_eq!(first("insert M3"), Some("heat_set_insert"));
+        assert_eq!(found("accouplement"), ["rigid_coupling"]);
+        assert_eq!(first("axe"), Some("shaft"));
+        assert_eq!(first("arbre"), Some("shaft"));
     }
 }

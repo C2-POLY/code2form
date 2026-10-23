@@ -1,0 +1,60 @@
+// 28BYJ-48 5 V DC stepper motor with its gearbox (ELEGOO FR-EL-SM-003
+// kit), in its own frame: the shaft at the origin along +z, the flange's
+// face at z = 0, the body 8 mm off the shaft towards +y. The silver can
+// carries the two flange ears; the blue cover on its side, away from the
+// shaft, lets out the five wires (blue, pink, yellow, orange, red) that
+// end in a white 5-pin plug for the ULN2003 board: the pins here are where
+// the cable leaves the cover.
+//
+// From the common datasheet and the seller's photos (not measured): the
+// can 28 mm across and 19 mm deep, the ears' 4.2 mm holes 35 mm apart,
+// the shaft 5 mm with two flats 3 mm apart, 9.5 mm past the flange with
+// its 9 mm boss, the cover about 15 mm wide.
+
+// @description 28BYJ-48 5 V unipolar stepper with a 1/64 gearbox: slow,
+// @description quiet and strong for its size, driven by a ULN2003 board.
+// @spec supply: 5 V
+// @spec torque: 300 gf·cm pull-in
+// @spec holding torque: 34.3 mN·m
+// @spec speed: 15 rpm at 5 V, half steps (estimated)
+// @spec mass: 35 g (estimated)
+// @source https://pdf.direnc.net/upload/28byj-48-reduktorlu-step-motor-datasheet.pdf datasheet (Kiatronics)
+// @source https://components101.com/motors/28byj-48-stepper-motor Components101
+
+// @pin blue [-5, 25, -9] passive "coil D"
+// @pin pink [-2.5, 25, -9] passive "coil C"
+// @pin yellow [0, 25, -9] passive "coil B"
+// @pin orange [2.5, 25, -9] passive "coil A"
+// @pin red [5, 25, -9] power_in 5V "the coils' common, 5 V"
+// @mount_hole [-17.5, 8, 0] d=4.2 +z
+// @mount_hole [17.5, 8, 0] d=4.2 +z
+// @port shaft [0, 0, 0] +z d=9 "shaft and its boss"
+
+$fn = 48;
+
+// The can, with its seam and the label's printed face at the back.
+color("Silver") translate([0, 8, -19]) cylinder(r = 14, h = 19);
+color("Gainsboro") translate([0, 8, -19.3]) cylinder(r = 13.6, h = 0.3);
+
+// The flange, its two ears drilled.
+color("Silver") translate([0, 8, -1]) difference() {
+    hull() {
+        cylinder(r = 7, h = 1);
+        for (x = [-17.5, 17.5]) translate([x, 0, 0]) cylinder(r = 3.5, h = 1);
+    }
+    for (x = [-17.5, 17.5]) translate([x, 0, -1]) cylinder(d = 4.2, h = 3, $fn = 16);
+}
+
+// The shaft's boss and the shaft with its two flats.
+color("Gold") {
+    cylinder(r = 4.5, h = 1.5);
+    translate([0, 0, 1.5]) intersection() {
+        cylinder(r = 2.5, h = 8, $fn = 24);
+        cube([3, 6, 20], center = true);
+    }
+}
+
+// The blue plastic cover on the side, the wires leaving it.
+color("RoyalBlue") translate([-7.5, 19.5, -17]) cube([15, 5, 15]);
+for (i = [0:4]) translate([-5 + i * 2.5, 24.5, -9]) rotate([-90, 0, 0])
+    color(["Blue", "HotPink", "Gold", "DarkOrange", "Red"][i]) cylinder(d = 1.6, h = 6, $fn = 12);

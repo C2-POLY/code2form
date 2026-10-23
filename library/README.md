@@ -28,7 +28,9 @@ file's name taking the same parameters as its customizer.
 | `capacitor_radial.c2f` | Radial electrolytic capacitor (diameter and height as parameters) |
 | `capacitor_ceramic.c2f` | 100 nF through-hole ceramic capacitor |
 | `speaker.c2f` | 28 mm 8 ohm speaker |
-| `dc_motor.c2f` | Size 130 DC motor |
+| `dc_motor.c2f` | Size 130 DC motor (Mabuchi FA-130RA) |
+| `n20_gear_motor.c2f` | N20 micro metal gear motor, 6 V, 100:1 (ratio as a parameter) |
+| `stepper_28byj48.c2f` | 28BYJ-48 5 V geared stepper, with its 5-pin plug for a ULN2003 board |
 | `touch_plate.c2f` | Copper plate for a capacitive touch pad |
 | `neopixel_ring_12.c2f` | Adafruit NeoPixel Ring 12 (12 RGB LEDs) |
 
@@ -38,7 +40,44 @@ against your part before printing a tight fit. Pins carry their
 silkscreen name, a label with their function, their type and the most
 they take in volts; the ESP32-S3's strapping pins (GPIO0, GPIO3, GPIO45,
 GPIO46) are marked `reserved`. Annotations are plain numbers: they stay
-where the file's default parameters put them.
+where the file's default parameters put them. Every part's sheet gives
+its mass (`// @spec mass: 17 g`), and the motors their torque and speed,
+which the mechanical checks read as quantities; the opening comment says
+which come from the maker and which are estimated.
+
+## Mechanical
+
+`mechanical/` holds the parts that carry and pass on a motion, drawn to
+scale with their sheet: what they are, their key figures (size, mass,
+load ratings) and the standard or the maker's page they come from. They
+have no pins; a design `use`s them as the electronics:
+
+```
+use <mechanical/bearing_seat.c2f>
+use <mechanical/gear_pair.c2f>
+bearing_seat("608", fit = "press") cube([40, 40, 10]);
+gear_pair(ratio = 3, mod = 1, thickness = 6);
+```
+
+| File | Part | Key figures |
+|---|---|---|
+| `bearing_608.c2f` | Ball bearing 608 | 8 x 22 x 7 mm, C 3.45 kN, C0 1.37 kN, 12.1 g (SKF) |
+| `bearing_625.c2f` | Ball bearing 625 | 5 x 16 x 5 mm, C 1.14 kN, C0 0.38 kN, 4.7 g (SKF) |
+| `bearing_6800.c2f` | Ball bearing 6800 | 10 x 19 x 5 mm, C 1.89 kN, C0 0.84 kN, 5 g (NSK) |
+| `bearing_6001.c2f` | Ball bearing 6001 | 12 x 28 x 8 mm, C 5.4 kN, C0 2.36 kN, 21 g (SKF) |
+| `shaft.c2f` | Plain round shaft | diameter, length and material (steel, stainless, aluminium, brass) as parameters |
+| `socket_screw.c2f` | Socket head cap screw ISO 4762 | M2 to M5, the length as a parameter |
+| `hex_nut.c2f` | Hexagon nut ISO 4032 | M2 to M5 |
+| `heat_set_insert.c2f` | Brass heat-set insert | M2 to M5, with the hole to print (M3: 4 mm) |
+| `rigid_coupling.c2f` | Rigid shaft coupling | bores 3 to 12 mm (5 to 8 mm by default), 20 x 25 mm |
+| `spur_gear.c2f` | Involute spur gear | module, teeth, thickness, bore, pressure angle 20° |
+| `bearing_seat.c2f` | Helper: a bearing's seat | `bearing_seat(bearing, fit, depth)`: press (+0.1 mm) or slide (+0.3 mm) fit for FDM printing |
+| `gear_pair.c2f` | Helper: a gear reduction | `gear_pair(ratio, mod, teeth, thickness, center)`: two gears at m·(z1 + z2)/2, the actual ratio echoed |
+
+`mod` is the gears' module: the language keeps the word `module` for
+itself. The screws, nuts and inserts echo their mass for the parameters
+set, as the shaft and the coupling do; `lib/` holds the
+bearings' sizes and drawing, which the bearings and `bearing_seat` share.
 
 ## Licence
 

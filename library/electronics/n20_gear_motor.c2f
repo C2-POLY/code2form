@@ -1,0 +1,77 @@
+// N20 micro metal gear motor, 6 V (as Pololu's 100:1 HP 6V micro metal
+// gearmotor and its many copies): the gearbox's plates and pillars, the
+// can with its two flats, the black end cap and its two terminals, the
+// 3 mm D shaft. The shaft along +z from the gearbox's face at z = 0, the
+// motor below it, its flats facing ±y.
+// https://www.pololu.com/product/1101/specs
+//
+// From Pololu's page for the 100:1 HP 6V: a 100.37:1 gearbox, 310 rpm
+// with no load and 1.7 kg·cm stalled at 6 V, 1.6 A stalled, 9.5 g, a
+// 10 x 12 mm section, 25 mm long without its shaft, the shaft 3 mm with a
+// flat, 9 mm long. Estimated, from the copies' drawings: the gearbox's
+// length (9 mm), the two M1.6 holes in its face 9 mm apart, and the
+// terminals. `ratio` changes nothing drawn, as the gearbox is the same
+// length for the common ratios: the file echoes the speed and the stall
+// torque scaled from the 100:1's, the gearbox's losses aside.
+
+// @description Micro metal gear motor N20, 6 V, 100:1 by default, 10 x 12 mm
+// @description with a 3 mm D shaft: a small, strong, slow motor for a
+// @description robot's wheel or a mechanism, driven by an H-bridge.
+// @spec motor: brushed DC, N20 (micro metal gearmotor), 6 V
+// @spec ratio: 100.37:1 (the sheet's figures; 30 to 298:1 as a parameter)
+// @spec speed: 310 rpm with no load at 6 V
+// @spec stall torque: 1.7 kgf·cm at 6 V
+// @spec stall current: 1.6 A at 6 V
+// @spec mass: 9.5 g
+// @spec size: 10 x 12 x 25 mm without its shaft
+// @spec shaft: 3 mm with a flat (D), 9 mm long
+// @source https://www.pololu.com/product/1101/specs Pololu, 100:1 Micro Metal Gearmotor HP 6V
+// @source https://www.pololu.com/file/0J949/micro-metal-gearmotors-dimensions.pdf Pololu, dimension drawing
+
+/* [Motor] */
+// The gearbox's ratio.
+ratio = 100; // [30, 50, 100, 150, 210, 298]
+
+// @pin + [-2.5, 0, -25] -z passive 6V "terminal marked + or red"
+// @pin - [2.5, 0, -25] -z passive 6V
+// @mount_hole [-4.5, 0, 0] d=1.6 +z
+// @mount_hole [4.5, 0, 0] d=1.6 +z
+// @port shaft [0, 0, 0] +z d=4 "shaft and its bushing"
+
+module n20_gear_motor(ratio = 100) {
+    echo(str("n20_gear_motor: ", ratio, ":1, about ", round(310 * 100 / ratio), " rpm with no load and ",
+             round(17 * ratio / 100) / 10, " kgf·cm stalled at 6 V (scaled from the 100:1)"));
+    $fn = 32;
+    gearbox = 9;
+    steel = [0.80, 0.81, 0.83];
+    brass = [0.85, 0.68, 0.38];
+
+    // The gearbox: its two plates and the four pillars between them, the
+    // gears' brass seen through.
+    color(steel) for (z = [-gearbox, -0.8]) translate([-6, -5, z]) difference() {
+        cube([12, 10, 0.8]);
+        for (x = [-4.5, 4.5]) translate([x + 6, 5, -1]) cylinder(d = 1.6, h = 3, $fn = 12);
+    }
+    color(steel) for (x = [-5.4, 5.4], y = [-4.4, 4.4]) translate([x, y, -gearbox]) cylinder(d = 1.2, h = gearbox, $fn = 12);
+    color(brass) translate([0, 0, -gearbox + 0.8]) cylinder(d = 9, h = gearbox - 1.6);
+    // The bushing and the D shaft.
+    color(brass) cylinder(d = 4, h = 1);
+    color(steel) intersection() {
+        cylinder(d = 3, h = 10, $fn = 24);
+        translate([-1.5, -1.5, 0]) cube([3, 2.5, 10]);
+    }
+
+    // The can, a 12 mm circle with two flats 10 mm apart, and its end cap.
+    color(steel) translate([0, 0, -gearbox - 15]) intersection() {
+        cylinder(d = 12, h = 15);
+        translate([-6, -5, 0]) cube([12, 10, 15]);
+    }
+    color([0.12, 0.12, 0.13]) translate([0, 0, -25]) intersection() {
+        cylinder(d = 11, h = 1);
+        translate([-6, -4.5, 0]) cube([12, 9, 1]);
+    }
+    // The terminals, out of the end cap.
+    color(brass) for (x = [-2.5, 2.5]) translate([x - 0.75, -0.2, -26]) cube([1.5, 0.4, 1.5]);
+}
+
+n20_gear_motor(ratio);

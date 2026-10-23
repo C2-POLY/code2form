@@ -5,7 +5,12 @@
 // bearing boss, the brass terminals and the red dot by the + one. Lying
 // on a flat along x, shaft towards +x, the back's center under the shaft
 // axis at the origin.
-// https://www.mabuchi-motor.com (the FA-130RA product page and drawing)
+// https://product.mabuchi-motor.com/detail.html?id=9
+//
+// From Mabuchi's FA-130RA product page, at its nominal 1.5 V: 9100 rpm
+// with no load (0.20 A), 0.59 mN·m at its best efficiency (6990 rpm,
+// 0.66 A), 2.55 mN·m stalled (2.2 A), and about 17 g. Run at 3 V, the top
+// of its range, the no-load speed and the stall torque about double.
 //
 // From Mabuchi's FA-130RA drawing, as remembered and to check against it:
 // the motor is 20.1 mm wide, 15.1 mm thick and 25.1 mm long without its
@@ -24,7 +29,11 @@
 // @spec size: 20.1 x 15.1 x 25.1 mm without its boss
 // @spec shaft: 2 mm across
 // @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
-// @source https://www.mabuchi-motor.com Mabuchi Motor (the FA-130RA product page and drawing)
+// @spec torque: 0.59 mN·m at 1.5 V, at its best efficiency (6990 rpm)
+// @spec stall torque: 2.55 mN·m at 1.5 V
+// @spec speed: 9100 rpm with no load at 1.5 V
+// @spec mass: 17 g
+// @source https://product.mabuchi-motor.com/detail.html?id=9 Mabuchi FA-130RA product page (ratings, mass, drawing)
 
 /* [Build] */
 // Length of shaft out of the boss.

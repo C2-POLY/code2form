@@ -1,0 +1,59 @@
+{
+  "axis": {
+    "at": [
+      0,
+      0,
+      78
+    ],
+    "direction": [
+      0,
+      -0.866,
+      0.5
+    ]
+  },
+  "loads": [
+    {
+      "name": "drum and cushion",
+      "mass_g": 160,
+      "at": [
+        0,
+        -39,
+        100.5
+      ]
+    },
+    {
+      "name": "watch case, off the axis",
+      "mass_g": 100,
+      "at": [
+        0,
+        -39,
+        118
+      ]
+    },
+    {
+      "name": "bracelet",
+      "mass_g": 50,
+      "at": [
+        0,
+        -39,
+        100.5
+      ]
+    }
+  ],
+  "supports": [
+    {
+      "name": "motor",
+      "at_mm": 0,
+      "kind": "motor"
+    }
+  ],
+  "shaft": {
+    "d_mm": 5,
+    "material": "steel"
+  },
+  "motor": {
+    "torque_mNm": 29.4,
+    "holding_torque_mNm": 34.3,
+    "speed_rpm": 15
+  }
+}

@@ -174,24 +174,42 @@ default parameters put it.
 
 `library/electronics` holds annotated parts ready to use: the XIAO
 ESP32-S3 and the ESP32-S3-DevKitC-1, DRV8833, MAX98357A and INMP441
-modules, capacitors, a speaker, a DC motor and a touch plate (see
-`library/README.md`). Read their pins the same way:
+modules, capacitors, a speaker, a DC motor, an N20 gear motor, a
+28BYJ-48 stepper and a touch plate (see `library/README.md`). Each sheet
+gives the part's mass, and a motor's torque and speed, from its maker
+where one gives them. Read their pins the same way:
 
 ```console
 $ c2f pins library/electronics/dc_motor.c2f
-19: @description Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies): the motor of toys and small robots, run from a few volts.
-22: @spec motor: brushed DC, size 130
-23: @spec voltage: up to 6 V as annotated; Mabuchi's FA-130RA is rated 1.5 to 3 V, check your copy
-24: @spec size: 20.1 x 15.1 x 25.1 mm without its boss
-25: @spec shaft: 2 mm across
-26: @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
-27: @source https://www.mabuchi-motor.com Mabuchi Motor (the FA-130RA product page and drawing)
-33: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
-34: @pin - [0, 5, 7.55] -x passive 6V
-35: @mount_hole [25.1, -6, 7.55] d=2 +x
-36: @mount_hole [25.1, 6, 7.55] d=2 +x
-37: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
+24: @description Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies): the motor of toys and small robots, run from a few volts.
+27: @spec motor: brushed DC, size 130
+28: @spec voltage: up to 6 V as annotated; Mabuchi's FA-130RA is rated 1.5 to 3 V, check your copy
+29: @spec size: 20.1 x 15.1 x 25.1 mm without its boss
+30: @spec shaft: 2 mm across
+31: @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
+32: @spec torque: 0.59 mN·m at 1.5 V, at its best efficiency (6990 rpm)
+33: @spec stall torque: 2.55 mN·m at 1.5 V
+34: @spec speed: 9100 rpm with no load at 1.5 V
+35: @spec mass: 17 g
+36: @source https://product.mabuchi-motor.com/detail.html?id=9 Mabuchi FA-130RA product page (ratings, mass, drawing)
+42: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
+43: @pin - [0, 5, 7.55] -x passive 6V
+44: @mount_hole [25.1, -6, 7.55] d=2 +x
+45: @mount_hole [25.1, 6, 7.55] d=2 +x
+46: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
 ```
+
+What turns and holds the motor's work is in `library/mechanical`: ball
+bearings (608, 625, 6800, 6001, with their load ratings), a shaft, ISO
+4762 screws and ISO 4032 nuts from M2 to M5, brass heat-set inserts with
+the hole to print for each, a rigid shaft coupling and a parametric
+involute spur gear, each with its mass and its sources. Two helpers model
+what a mechanical review asks for: `bearing_seat("608", fit = "press")`
+cuts a bearing's pocket with clearances chosen for FDM printing, and
+`gear_pair(ratio = 3, mod = 1)` places two meshing gears at their center
+distance and echoes the ratio they give. `library_parts` and the
+catalogue list them after the electronics, and find them in French or
+English (`roulement 8 mm`, `pignon`, `vis M3`).
 
 ## 2. Write a circuit
 
@@ -751,6 +769,9 @@ c2f circuit fit grogu.c2fc              # each part's room in the enclosure, and
 c2f circuit fit --clearance 1 grogu.c2fc
 c2f circuit stl grogu.c2fc > grogu.stl  # the parts assembled (not the wires)
 c2f circuit 3mf grogu.c2fc > grogu.3mf
+c2f mass grogu.c2fc                     # its masses, center of gravity and tipping angle
+c2f mass --material petg --infill 30 --wall 1.2 grogu_plate.c2f
+c2f loads winder.json                   # the loads on a shaft and its motor (section 7)
 ```
 
 The wiring list, to print and solder from (the first rows of Grogu's):
@@ -805,6 +826,11 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 | `fit` | how each part fits in the enclosure, as [`c2f circuit fit`](#does-it-fit) says it; `clearance` sets the room wanted |
 | `check_part` | a part's annotations checked against its rendered shape (see below) |
 | `save_part` | writes a part into your parts folder, then checks it (see below) |
+| `mass_properties` | what a design or a circuit weighs printed, its center of gravity, and how far it leans before it tips (see below) |
+| `loads` | the torque a motor must give a shaft, what each support takes, the shaft's deflection and the margins against the motor's and bearings' sheets (see below) |
+| `save_brief` | writes the brief the plan ends on; refused without a requirement a tool measures |
+| `read_brief` | a brief's text, requirements and `mass` and `loads` blocks |
+| `check_brief` | measures a design and its circuit against their brief: each requirement holds, fails or is unmeasured |
 
 The circuit tools take the circuit as `code` (its parts found from
 `working_dir`, then the library) or as a file `path`. `check_circuit`
@@ -824,6 +850,27 @@ ESP32-S3 that drives a DC motor through a DRV8833: look up the parts'
 pins, check the circuit until it has no errors, and show me the
 wiring." Then open `robot.c2fc` in the app and wire it in Assembly
 mode.
+
+`mass_properties` measures, rather than guesses, what a mechanical
+review needs. It takes a design (`code` or `path`, with `parameters`)
+or a circuit, and prints each `part()` (`root` for what is outside any)
+in `material` (PLA by default, PETG, ABS, ASA, TPU, nylon, or a density
+in g/cm³) with `infill` percent (20) and walls `wall` millimeters thick
+(0.8); `parts` sets them per part, as `{"lid": {"material": "PETG"}}`.
+A part's mass estimates a slicer's: its surface times the wall, plus the
+infill's share of the rest; its center is the solid's centroid. A
+circuit adds the enclosure's parts and each part it places, at its
+bounding box's center, by the mass its sheet gives
+(`// @spec mass: 3.3 g`; without one, `mass_g` is null and a warning
+says so). `extra` adds what the model carries without drawing it, as
+`[{"name": "watch", "mass_g": 150, "at": [0, 0, 60]}]`. It answers with
+`parts` (`name`, `volume_mm3`, `mass_g`, `material`, `infill`, `wall`,
+`center`), `components` for a circuit, `extra`, the `total` mass and
+`center` of gravity, and `stability`: the `base` it stands on (the
+convex hull of the points within 0.2 mm of its lowest), whether the
+center of gravity is `inside` it, and `min_tipping_deg`, how far it
+leans before it tips over, toward `direction`. `c2f mass` prints the
+same as a table.
 
 ### Create a part from its product page
 
@@ -855,18 +902,66 @@ datasheet, write it as a Code2Form part with its pins, mount holes and
 sheet, check it until it has no errors, and save it as
 `bme280_breakout`." Then **⟳** in the catalogue lists it.
 
+### Loads on a shaft
+
+`loads` (and `c2f loads scenario.json` on the command line, the same
+JSON) weighs a design's moving parts with numbers: static engineering
+estimates, with margins for what they leave out, not a simulation. The
+scenario gives the shaft's `axis` (`at` and `direction`; gravity is
+along -z, the axis may be tilted), the `loads` (`name`, `mass_g`, `at`
+their center of mass), the `supports` along the axis (`at_mm`, `kind`
+`motor`, `bearing` or `bushing` for a printed hole, a `part` whose sheet
+gives its figures, `coupling` true for a motor on a flexible coupling,
+which holds nothing up), the `motor` (its `part`, or `torque_mNm`,
+`stall_torque_mNm`, `speed_rpm`, `max_radial_load_N`,
+`max_axial_load_N`), the `shaft` (`d_mm` and `material`, or `E_GPa`),
+the `ratio` (1) and the `target_margin` (2). A motor's or a bearing's
+figures come from its sheet when the scenario leaves them out:
+`// @spec torque: 34 mN·m`, `stall torque`, `holding torque`, `speed`,
+`max radial load`, `max axial load`, `static load`.
+
+It answers the torque the shaft needs (the loads' unbalance in the
+worst position of a turn, plus friction: 0.0015 in a ball bearing, 0.3
+in a printed hole or a gear motor's sleeve), each support's radial and
+axial reaction and moment, the shaft's deflection at each load, the
+margins, a `suggested_ratio` when the torque falls short, `warnings`
+and a `summary` to quote. One support holds the loads and their
+overhang's moment, which loads a motor's front bearing with the moment
+over its bearings' span (8 mm); two are solved exactly; more share the
+load as on springs of one stiffness.
+
+A watch winder: a 150 g watch whose center sits 20 mm off a horizontal
+5 mm steel shaft, 35 mm in front of a gear motor's face (34 mN·m, 10 N
+of radial load). On the motor alone, the shaft needs 40.2 mN·m (29.4
+for the watch, 10.8 of friction in the motor's sleeve): a torque margin
+of 0.85, and a 3:1 reduction suggested; the watch's 1.47 N hangs 35 mm
+past the motor, 51.5 N·mm that put 7.91 N on its front bearing, a radial
+margin of 1.26 and an overhung-load warning. A ball bearing 5 mm behind
+the watch takes 1.72 N and leaves the motor 0.25 N: friction falls to
+0.19 mN·m, the torque needed to 29.6 mN·m, and a 2:1 reduction reaches
+the margin of 2. With `coupling` true, the motor takes no radial load
+at all, and the bearing alone holds the overhang's 7.4 N·mm.
+
 ### From an idea to a build
 
-The server offers two prompts, which Claude Code lists as
-`/mcp__code2form__design_object` and `/mcp__code2form__add_electronics`
-(Claude Desktop under the + button). They keep the work in order, each
-step ending on what you approve:
+The server offers three prompts, which Claude Code lists as
+`/mcp__code2form__plan_object`, `/mcp__code2form__design_object` and
+`/mcp__code2form__add_electronics` (Claude Desktop under the + button).
+They keep the work in order, each step ending on what you approve:
 
-1. **`design_object`** (a `description`, maybe `constraints` and a
-   `folder`): the agent writes a parametric design, renders it, looks
-   at it from every side, and shows it to you until you approve it. No
+1. **`plan_object`** (an `idea`, maybe a `folder`): the agent draws
+   nothing. It asks what the object must do, in short rounds that follow
+   your answers, reviews its mechanics (masses, balance, forces and
+   supports, torque, material, fastening, assembly, energy) with
+   `mass_properties` and `loads`, and writes a brief with `save_brief`:
+   its decisions, and requirements a tool measures. See
+   [the watch winder](plan-mode.md).
+2. **`design_object`** (a `brief` or a `description`, maybe
+   `constraints` and a `folder`): the agent writes a parametric design,
+   renders it, looks at it from every side, checks it against the brief
+   with `check_brief`, and shows it to you until you approve it. No
    electronics yet.
-2. **`add_electronics`** (the approved `design` and its `components`,
+3. **`add_electronics`** (the approved `design` and its `components`,
    as product page links or library names): the agent finds or creates
    each part, tells you its wiring plan, then calls `electrify` on the
    design, places the parts and wires them, checks the circuit, gives

@@ -1,0 +1,9 @@
+# The mass tests' circuit: a 10 g cube (ballast.c2f) on a plate.
+
+version = 1
+
+enclosure = "plate.c2f"
+
+[parts.weight]
+part = "ballast.c2f"
+at = [30, 30, 5]

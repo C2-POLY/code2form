@@ -1,0 +1,69 @@
+// Brass heat-set threaded insert for 3D printed parts, M2 to M5, as CNC
+// Kitchen's standard inserts: a knurled brass sleeve pressed with a
+// soldering iron into a hole printed a little smaller, where the melted
+// plastic grips its knurls. Its axis along z, its top at z = 0 (flush
+// with the face it goes into), its body below.
+// https://www.3djake.com/cnc-kitchen/threaded-inserts-set-standard
+//
+// From CNC Kitchen's table of its standard inserts (at 3DJake): the
+// insert's outside diameter, its length, the hole to print for it and the
+// least wall around that hole. The knurls are drawn as twelve straight
+// ridges, not their real pattern. Estimated: the mass, from brass's
+// density (8.5 g/cm³) and the drawn volume, about 0.4 g for M3; the file
+// echoes it for the size set.
+
+// @description Brass heat-set threaded insert M2, M2.5, M3, M4 or M5 (CNC
+// @description Kitchen's standard ones), melted into a printed hole with a
+// @description soldering iron: a metal thread in a plastic part.
+// @spec insert: brass, knurled, heat-set or ultrasonic
+// @spec sizes: M2, M2.5, M3, M4, M5
+// @spec hole diameter: M2 3.2, M2.5 4.0, M3 4.0, M4 5.6, M5 6.4 mm, at least the insert's length deep
+// @spec outside diameter: M2 3.6, M2.5 4.6, M3 4.6, M4 6.3, M5 7.1 mm
+// @spec length: M2 3, M2.5 4, M3 5.7, M4 8.1, M5 9.5 mm
+// @spec wall: at least M2 1.3, M2.5 1.6, M3 1.6, M4 2.1, M5 2.6 mm around the hole
+// @spec mass: 0.4 g for M3 (estimated from its volume)
+// @source https://www.3djake.com/cnc-kitchen/threaded-inserts-set-standard CNC Kitchen standard inserts at 3DJake (table of sizes and holes)
+
+/* [Insert] */
+// The thread's size.
+size = "M3"; // [M2, M2.5, M3, M4, M5]
+
+// CNC Kitchen's standard inserts: name, thread diameter, outside
+// diameter, length, hole diameter, least wall.
+function heat_set_insert_sizes() = [
+    ["M2", 2, 3.6, 3.0, 3.2, 1.3],
+    ["M2.5", 2.5, 4.6, 4.0, 4.0, 1.6],
+    ["M3", 3, 4.6, 5.7, 4.0, 1.6],
+    ["M4", 4, 6.3, 8.1, 5.6, 2.1],
+    ["M5", 5, 7.1, 9.5, 6.4, 2.6],
+];
+
+// The row of `size`, undef for a size the file does not know.
+function heat_set_insert_size(size) =
+    let (found = [for (s = heat_set_insert_sizes()) if (s[0] == size) s]) len(found) > 0 ? found[0] : undef;
+
+// The hole to print for an insert of `size`: its diameter and the depth
+// it needs, the insert's length plus 1 mm for the plastic it pushes down.
+function heat_set_insert_hole(size) = let (s = heat_set_insert_size(size)) [s[4], s[3] + 1];
+
+// An insert of `size` (M2 to M5), its top at z = 0.
+module heat_set_insert(size = "M3") {
+    s = heat_set_insert_size(size);
+    assert(s != undef, str("heat_set_insert: the size is M2, M2.5, M3, M4 or M5, not \"", size, "\""));
+    d = s[1];
+    od = s[2];
+    l = s[3];
+    volume = PI / 4 * (od * od - d * d) * l * 0.9;
+    echo(str("heat_set_insert: ", size, ", a hole ", s[4], " mm across and ", l + 1, " mm deep, about ",
+             round(volume * 8.5 / 100) / 10, " g"));
+    color([0.85, 0.68, 0.38]) translate([0, 0, -l]) difference() {
+        union() {
+            // The core, and the knurled ridges around it.
+            cylinder(d = od - 0.5, h = l, $fn = 32);
+            for (i = [0 : 11]) rotate(30 * i) translate([od / 2 - 0.35, 0, 0.3]) cylinder(d = 0.7, h = l - 0.6, $fn = 8);
+        }
+        translate([0, 0, -1]) cylinder(d = d, h = l + 2, $fn = 24);
+    }
+}
+
+heat_set_insert(size);

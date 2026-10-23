@@ -1,0 +1,6 @@
+// The mass tests' enclosure: a plate 40 × 40 × 5 mm, its corner at the
+// origin.
+//
+// @circuit ballast.c2fc
+
+cube([40, 40, 5]);

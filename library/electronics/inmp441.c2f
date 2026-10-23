@@ -14,6 +14,8 @@
 // (1.2 mm) and which row carries which pins. It has no mount holes.
 //
 // Annotations are plain numbers. The board sits 0.04 mm up, on its pads.
+//
+// Its mass is estimated, about 2 g without headers, as sellers list it.
 
 // @description Omnidirectional MEMS microphone with an I2S digital output, on
 // @description a round 14 mm board, for a microcontroller's I2S input.
@@ -25,6 +27,7 @@
 // @spec frequency response: 60 Hz to 15 kHz
 // @spec channel: L/R to GND for the left channel, to VDD for the right
 // @spec size: 14 mm across
+// @spec mass: 2 g without headers (estimated)
 // @source https://invensense.tdk.com/products/digital/inmp441/ product page
 // @source https://invensense.tdk.com/wp-content/uploads/2015/02/INMP441.pdf datasheet
 
