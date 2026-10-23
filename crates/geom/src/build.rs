@@ -144,7 +144,7 @@ impl Builder {
     /// `model`, built in the frame of the node being built, in the
     /// model's frame.
     fn placed(&self, model: Model) -> Model {
-        self.placement.iter().rev().fold(model, |model, m| transform(model, m))
+        self.placement.iter().rev().fold(model, transform)
     }
 
     fn children(&mut self, node: &Node, ctx: Ctx) -> Vec<Model> {
