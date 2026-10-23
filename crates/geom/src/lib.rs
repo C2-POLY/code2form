@@ -28,6 +28,7 @@ pub use explode::{Explode, Exploded, exploded};
 pub use collide::{Placement, TOUCHING, collisions};
 pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
 pub use image::VIEWS;
+pub use import::objects as mesh_objects;
 pub use inventory::{PartsOptions, parts_json};
 pub use mesh::{Rendered, RenderMesh, Stats};
 pub use primitives::fragments;

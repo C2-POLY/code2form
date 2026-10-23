@@ -1718,7 +1718,7 @@ impl StudioApp {
         if !self.doc.is_blank() {
             self.add_tab();
         }
-        let text = insert::mesh_design(path);
+        let text = insert::mesh_design(path, &c2f_geom::mesh_objects(path));
         // Nothing to save until it is changed.
         self.doc.text = text.clone();
         self.doc.saved_text = text;

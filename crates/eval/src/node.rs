@@ -103,7 +103,18 @@ pub enum NodeKind {
     Polygon { points: Points, paths: Points, convexity: u32 },
     Text(TextParams),
     Surface { file: String, center: bool, invert: bool, timestamp: i64 },
-    Import { file: String, layer: String, origin: [f64; 2], scale: f64, convexity: u32, segments: Segments, timestamp: i64 },
+    /// `object` (not in the reference) keeps one object, by its name, of
+    /// a 3MF or OBJ file; empty for all.
+    Import {
+        file: String,
+        layer: String,
+        origin: [f64; 2],
+        scale: f64,
+        convexity: u32,
+        segments: Segments,
+        timestamp: i64,
+        object: String,
+    },
 
     Transform(Matrix),
     Color([f64; 4]),
@@ -280,13 +291,14 @@ impl NodeKind {
                 "surface(file = {}, center = {center}, invert = {invert}, timestamp = {timestamp})",
                 string(file)
             ),
-            NodeKind::Import { file, layer, origin, scale, convexity, segments, timestamp } => format!(
-                "import(file = {}, layer = {}, origin = {}, scale = {}, convexity = {convexity}, {}, timestamp = {timestamp})",
+            NodeKind::Import { file, layer, origin, scale, convexity, segments, timestamp, object } => format!(
+                "import(file = {}, layer = {}, origin = {}, scale = {}, convexity = {convexity}, {}, {}timestamp = {timestamp})",
                 string(file),
                 string(layer),
                 vector(origin),
                 c_g(*scale),
-                segments.csg()
+                segments.csg(),
+                if object.is_empty() { String::new() } else { format!("object = {}, ", string(object)) }
             ),
             NodeKind::Transform(m) => {
                 let rows: Vec<String> = m.iter().map(|row| value_vector(row)).collect();

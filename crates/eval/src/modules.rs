@@ -284,7 +284,7 @@ pub fn instantiate<'p>(
             leaf(NodeKind::Surface { file, center: p.flag("center"), invert: p.flag("invert"), timestamp })
         }
         "import" | "import_stl" | "import_off" | "import_dxf" => {
-            let p = bind!(["file", "layer", "convexity", "origin", "scale"], ["filename", "layername"]);
+            let p = bind!(["file", "layer", "convexity", "origin", "scale"], ["filename", "layername", "object"]);
             // `filename`/`layername` are deprecated spellings; anything that
             // is not a string is written as text.
             let text = |value: Value, fallback: Value| match value {
@@ -304,6 +304,7 @@ pub fn instantiate<'p>(
                 scale: p.number("scale").filter(|s| *s > 0.0).unwrap_or(1.0),
                 convexity: convexity(p.number("convexity"), 1),
                 segments: p.segments(false),
+                object: text(p.get("object"), Value::Undef),
             })
         }
 

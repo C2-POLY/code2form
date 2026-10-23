@@ -14,10 +14,58 @@ pub fn is_mesh(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| MESH_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// What a design that shows the mesh at `path` holds.
-pub fn mesh_design(path: &Path) -> String {
+/// The design a mesh opens as, ready to change: its size, turn and place
+/// in the customizer, each of `objects` (the names its file gives them) a
+/// `part()`, and where to add or cut material. A mesh holds triangles,
+/// not the shapes it was drawn with, so it is changed around, not inside.
+pub fn mesh_design(path: &Path, objects: &[String]) -> String {
     let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    format!("// {name}\nimport(\"{}\");\n", escaped(&slashes(path)))
+    let mut objects: Vec<&String> = objects.iter().filter(|o| !o.trim().is_empty()).collect();
+    objects.dedup();
+    let model = if objects.len() > 1 {
+        let parts: Vec<String> = objects
+            .iter()
+            .map(|o| format!("    part(\"{0}\") import(file, object = \"{0}\");", escaped(o)))
+            .collect();
+        format!("// The mesh, each of its objects a part.\nmodule model() {{\n{}\n}}\n", parts.join("\n"))
+    } else {
+        "// The mesh.\nmodule model() import(file);\n".to_string()
+    };
+    format!(
+        "// {name}, opened as a design. A mesh holds triangles, not the shapes it\n\
+         // was drawn with: size, turn and place it with the parameters, and add or\n\
+         // cut material below.\n\
+         \n\
+         /* [Placement] */\n\
+         // Size, in percent.\n\
+         size = 100; // [10:400]\n\
+         // Turn about Z, in degrees.\n\
+         turn = 0; // [-180:180]\n\
+         // Move along X, in mm.\n\
+         move_x = 0; // [-200:200]\n\
+         // Move along Y, in mm.\n\
+         move_y = 0; // [-200:200]\n\
+         // Move along Z, in mm.\n\
+         move_z = 0; // [-200:200]\n\
+         \n\
+         /* [Hidden] */\n\
+         file = \"{}\";\n\
+         \n\
+         translate([move_x, move_y, move_z]) rotate([0, 0, turn]) scale(size / 100) {{\n\
+         \x20   model();\n\
+         \x20   // Add material here, as:\n\
+         \x20   // translate([20, 0, 0]) cube(10);\n\
+         }}\n\
+         \n\
+         // To cut material away, take the model's place in a difference():\n\
+         // difference() {{\n\
+         //     model();\n\
+         //     translate([0, 0, 10]) cylinder(r = 3, h = 50);\n\
+         // }}\n\
+         \n\
+         {model}",
+        escaped(&slashes(path))
+    )
 }
 
 /// `file` as the design at `design` names it: relative to its folder when
@@ -122,9 +170,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_mesh_opens_as_a_design_that_imports_it() {
-        assert_eq!(mesh_design(Path::new("/parts/motor \"17\".stl")), "// motor \"17\".stl\nimport(\"/parts/motor \\\"17\\\".stl\");\n");
+    fn a_mesh_opens_as_a_design_to_change() {
+        let one = mesh_design(Path::new("/parts/motor \"17\".stl"), &[]);
+        assert!(one.starts_with("// motor \"17\".stl, opened as a design."), "{one}");
+        assert!(one.contains("file = \"/parts/motor \\\"17\\\".stl\";"), "{one}");
+        assert!(one.contains("module model() import(file);") && !one.contains("part("), "{one}");
+        let names = ["Body".to_string(), "Lid".to_string()];
+        let two = mesh_design(Path::new("/parts/box.3mf"), &names);
+        assert!(two.contains("    part(\"Body\") import(file, object = \"Body\");\n    part(\"Lid\") import(file, object = \"Lid\");"), "{two}");
         assert!(is_mesh(Path::new("a.STL")) && is_mesh(Path::new("a.step")) && !is_mesh(Path::new("a.c2f")));
+    }
+
+    #[test]
+    fn the_design_renders_its_parts_and_parameters() {
+        let dir = std::env::temp_dir().join(format!("c2f-mesh-design-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("box.obj");
+        let tetra = |o: &str, x: f64| {
+            format!("o {o}\nv {x} 0 0\nv {} 0 0\nv {x} 1 0\nv {x} 0 1\nf -4 -2 -3\nf -4 -3 -1\nf -4 -1 -2\nf -3 -2 -1\n", x + 1.0)
+        };
+        std::fs::write(&file, format!("{}{}", tetra("Body", 0.0), tetra("Lid", 5.0))).unwrap();
+        let names = c2f_geom::mesh_objects(&file);
+        let src = mesh_design(&file, &names);
+        let program = c2f_eval::Program::load(&src, &dir.join("box.c2f"), &[]).unwrap();
+        assert_eq!(program.parameters(&src).iter().filter(|p| p.group == "Placement").count(), 5);
+        let output = c2f_eval::evaluate(&program);
+        assert!(output.error.is_none() && output.warnings.is_empty(), "{:?} {:?}", output.error, output.warnings);
+        let rendered = c2f_geom::render_in(&output.nodes, &dir);
+        assert!((rendered.stats.volume - 2.0 / 6.0).abs() < 1e-9, "{:?} {:?}", rendered.stats, rendered.warnings);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -65,11 +65,18 @@ they are. Written in Rust, it renders as you type.
   [Other programs](#other-programs-obj-step-urdf-json)), `surface()`
   from `.dat` and PNG.
 - **Meshes**: Open… takes an STL, 3MF, OBJ, OFF, AMF or STEP file (or one
-  dropped on the window or opened from the Finder) as a design that
-  imports it, to look at it and build on it; Insert > Mesh… imports one on
-  the cursor's line, and Insert > Design's Modules or Whole Design adds a
-  `use <…>` or `include <…>` line at the top, its path relative to the
-  design.
+  dropped on the window or opened from the Finder) as a design to change:
+  its size, turn and place are parameters in the customizer, each object
+  of a 3MF or OBJ file a `part()` (`import("box.3mf", object = "Lid")`
+  reads one), and comments show where to add or cut material. A mesh
+  holds triangles, not the shapes it was drawn with, so it is changed
+  around, not inside. A mesh that is not a closed solid (small holes,
+  faces turned the wrong way or listed twice, as many downloads have) is
+  repaired when it is imported, with a warning saying what was done;
+  what cannot be repaired is shown, but left out of the model. Insert >
+  Mesh… imports one on the cursor's line, and Insert > Design's Modules
+  or Whole Design adds a `use <…>` or `include <…>` line at the top, its
+  path relative to the design.
 - **Export** of solids to STL and 3MF (in millimeters), checked with
   PrusaSlicer's own loader, and of 2D models to SVG and DXF, laid out as
   the reference implementation (release 2021.01) writes them. Export >

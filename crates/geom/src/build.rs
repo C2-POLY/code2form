@@ -327,14 +327,21 @@ impl Builder {
                 }
                 section.map_or(Model::Empty, Model::Flat)
             }
-            NodeKind::Import { file, layer, origin, scale, segments, .. } => {
+            NodeKind::Import { file, layer, origin, scale, segments, object, .. } => {
                 let params = DxfParams { layer, origin: *origin, scale: *scale, segments: *segments };
                 let mut warnings = Vec::new();
-                let imported = import::import(&self.base_dir.join(file), file, &params, &mut warnings);
+                let imported = import::import(&self.base_dir.join(file), file, &params, object, &mut warnings);
                 warnings.into_iter().for_each(|w| self.warn(w));
                 match imported {
                     Some(Imported::Flat(section)) => Model::Flat(section),
-                    Some(Imported::Solid(meshes)) => self.meshes(meshes, ctx, &format!("import(\"{file}\")")),
+                    Some(Imported::Solid(meshes)) => {
+                        let what = if object.is_empty() {
+                            format!("import(\"{file}\")")
+                        } else {
+                            format!("import(\"{file}\", object = \"{object}\")")
+                        };
+                        self.meshes(meshes, ctx, &what)
+                    }
                     None => Model::Empty,
                 }
             }
@@ -522,13 +529,37 @@ impl Builder {
     }
 
     /// Imported meshes as one solid painted `ctx`'s color; imperfect ones
-    /// go through Manifold's robust import.
+    /// are mended (see [`import::repair`]), then go through Manifold's
+    /// robust import.
     fn meshes(&mut self, meshes: Vec<TriMesh>, ctx: Ctx, what: &str) -> Model {
         let mut solids = Vec::new();
         for triangles in &meshes {
             let mesh = mesh_gl(triangles, ctx.paint());
-            let strict = Manifold::from_mesh_gl64(&mesh);
-            let solid = if strict.is_empty() { Manifold::from_mesh_gl64_robust(&mesh) } else { strict };
+            let mut solid = Manifold::from_mesh_gl64(&mesh);
+            if solid.is_empty() {
+                let (shells, repairs) = import::repair::repair(triangles);
+                let mut mended = Vec::new();
+                let mut lost = false;
+                for shell in &shells {
+                    let mesh = mesh_gl(shell, ctx.paint());
+                    let mut part = Manifold::from_mesh_gl64(&mesh);
+                    if part.is_empty() {
+                        part = Manifold::from_mesh_gl64_robust(&mesh);
+                    }
+                    // Shells of a few faces, flat once filled, are specks
+                    // the repair drops; a larger one lost loses the mesh.
+                    lost |= part.is_empty() && shell.triangles.len() * 100 > triangles.triangles.len();
+                    if !part.is_empty() {
+                        mended.push(Model::Solid(part));
+                    }
+                }
+                if let Some(united) = solid_of(combine(mended, OpType::Add)).filter(|_| !lost) {
+                    solid = united;
+                    let done = repairs.describe();
+                    let done = if done.is_empty() { "its shells taken apart".to_string() } else { done };
+                    self.warn(format!("{what} was not a closed solid; repaired: {done}"));
+                }
+            }
             if solid.is_empty() {
                 self.warn(format!("{what} is not a closed solid: it is shown, but left out of the model and its exports"));
                 self.show_loose(triangles, ctx.paint());
