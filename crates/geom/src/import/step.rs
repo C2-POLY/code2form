@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use c2f_eval::node::Segments;
 
@@ -36,7 +37,8 @@ pub(super) fn read(path: &Path, name: &str, segments: &Segments, warnings: &mut 
     let angular = if segments.fn_ >= 3.0 { 360.0 / segments.fn_ } else { segments.fa.clamp(1.0, 45.0) }.to_radians();
     let linear = 0.0;
     let modified = metadata.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // Not canonicalized: on Windows that gives `\\?\` paths.
+    let canonical = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let key = format!(
         "{}|{}|{:?}|{}|{}",
         canonical.display(),
@@ -47,7 +49,12 @@ pub(super) fn read(path: &Path, name: &str, segments: &Segments, warnings: &mut 
     );
     let cache = cache_dir().join(format!("{:016x}.stl", fnv(key.as_bytes())));
     if let Ok(data) = std::fs::read(&cache) {
-        return super::stl::read(&data, name, warnings);
+        let mut ignored = Vec::new();
+        if let Some(mesh) = super::stl::read(&data, name, &mut ignored) {
+            return Some(mesh);
+        }
+        // Not a mesh after all: made again below.
+        let _ = std::fs::remove_file(&cache);
     }
     let Some(freecad) = freecad() else {
         warnings.push(format!(
@@ -56,8 +63,11 @@ pub(super) fn read(path: &Path, name: &str, segments: &Segments, warnings: &mut 
         return None;
     };
     let _ = std::fs::create_dir_all(cache_dir());
-    let partial = cache.with_extension(format!("{}.stl", std::process::id()));
-    let script = cache.with_extension(format!("{}.py", std::process::id()));
+    // Renders on other threads may convert the same file meanwhile.
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let call = format!("{}-{}", std::process::id(), CALLS.fetch_add(1, Ordering::Relaxed));
+    let partial = cache.with_extension(format!("{call}.stl"));
+    let script = cache.with_extension(format!("{call}.py"));
     if std::fs::write(&script, SCRIPT).is_err() {
         warnings.push(format!("import(\"{name}\"): can't write FreeCAD's script in {}", cache_dir().display()));
         return None;
@@ -86,10 +96,14 @@ pub(super) fn read(path: &Path, name: &str, segments: &Segments, warnings: &mut 
         warnings.push(format!("import(\"{name}\"): FreeCAD could not read the STEP: {why}"));
         return None;
     }
-    let data = std::fs::read(&partial).ok()?;
-    // Moved in place whole, so that another render never reads half.
-    let _ = std::fs::rename(&partial, &cache);
-    super::stl::read(&data, name, warnings)
+    let data = std::fs::read(&partial).ok();
+    let mesh = data.and_then(|data| super::stl::read(&data, name, warnings));
+    // Kept only when it is a mesh, moved in place whole so that another
+    // render never reads half of it.
+    if mesh.is_none() || std::fs::rename(&partial, &cache).is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    mesh
 }
 
 /// FreeCAD's command-line program, if it is installed.

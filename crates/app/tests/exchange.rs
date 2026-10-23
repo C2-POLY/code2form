@@ -24,11 +24,12 @@ const ARM: &str = "cube(10); translate([0, 0, 10]) part(\"elbow\", joint = \"rev
 #[test]
 fn obj_goes_with_its_materials() {
     let dir = dir("obj");
-    let target = dir.join("arm.obj");
+    let target = dir.join("my arm.obj");
     let output = c2f(&dir, &["obj", "-o", target.to_str().unwrap()], ARM);
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert!(std::fs::read_to_string(&target).unwrap().starts_with("# Code2Form\nmtllib arm.mtl\n"));
-    assert!(dir.join("arm.mtl").exists());
+    // `mtllib` takes no spaces.
+    assert!(std::fs::read_to_string(&target).unwrap().starts_with("# Code2Form\nmtllib my_arm.mtl\n"));
+    assert!(dir.join("my_arm.mtl").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -55,6 +56,11 @@ fn urdf_needs_a_file_for_its_meshes() {
     assert_eq!(String::from_utf8_lossy(&output.stderr), "2 links, 1 moving joints\n");
     // The root is named after the file written.
     assert!(dir.join("arm_meshes/arm.stl").exists() && dir.join("arm_meshes/elbow.stl").exists());
+    // A file that cannot be written fails.
+    let nowhere = dir.join("missing/arm.urdf");
+    std::fs::write(dir.join("missing"), "a file, not a folder").unwrap();
+    let output = c2f(&dir, &["urdf", "-o", nowhere.to_str().unwrap()], ARM);
+    assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

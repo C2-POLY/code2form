@@ -34,6 +34,9 @@ impl Default for ObjOptions {
 pub struct Obj {
     pub obj: String,
     pub mtl: String,
+    /// The `.mtl` file's name, which the `.obj` gives: the name, its
+    /// spaces made `_`, which `mtllib` would read as two files.
+    pub mtl_file: String,
     pub warnings: Vec<String>,
     pub triangles: usize,
 }
@@ -43,8 +46,8 @@ pub struct Obj {
 pub fn obj(nodes: &[Node], base_dir: &Path, options: &ObjOptions) -> Result<Obj, String> {
     let split = pieces(nodes, base_dir, &options.name);
     let mut warnings = split.warnings;
-    let mut out = Obj::default();
-    let _ = writeln!(out.obj, "# Code2Form\nmtllib {}.mtl", options.name);
+    let mut out = Obj { mtl_file: format!("{}.mtl", options.name.replace(char::is_whitespace, "_")), ..Obj::default() };
+    let _ = writeln!(out.obj, "# Code2Form\nmtllib {}", out.mtl_file);
     out.mtl.push_str("# Code2Form\n");
     let mut materials: Vec<[f32; 4]> = Vec::new();
     let mut written = 0;

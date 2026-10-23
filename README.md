@@ -331,7 +331,9 @@ Each is in Export, `c2f <format>` and the MCP `export` tool.
   The mesh is cached, so the design renders again at once.
 - **URDF** (ROS, RViz, Gazebo, MuJoCo, PyBullet, Isaac Sim): the root and
   each `part()` are links, their geometry a binary STL in meters in a
-  folder beside the `.urdf`, their mass, center of mass and inertia
+  folder beside the `.urdf`, named relative to it (PyBullet, MuJoCo and
+  URDF viewers read that as it is; in a ROS package, make them
+  `package://` paths), their mass, center of mass and inertia
   from their volume and a density (PLA's, 1240 kg/m³, by default:
   `--density`). A part is joined to the part it is written in at the
   origin of its own frame, fixed unless `part()` says how it moves:

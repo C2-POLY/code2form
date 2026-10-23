@@ -485,20 +485,30 @@ fn print_gltf(program: &mut c2f_eval::Program, options: &c2f_geom::GltfOptions, 
     ExitCode::SUCCESS
 }
 
+/// Why the parts were not written: the model has none (a warning, as for
+/// the other exports), or a file could not be written (a failure).
+enum Unwritten {
+    Model(String),
+    Io(String),
+}
+
 /// Writes the parts as OBJ (and its `.mtl` with `-o`), as a robot (its
 /// meshes beside it) or as JSON, then their size on stderr.
 fn print_parts(program: &c2f_eval::Program, src: &str, output: &c2f_eval::Output, export: Export, options: &Options) -> ExitCode {
     let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
     let name = options.stem();
     let target = options.output.as_deref().map(Path::new);
+    let write = |path: &Path, bytes: &[u8]| write_file(path, bytes).map_err(Unwritten::Io);
+    let print = |bytes: &[u8]| emit(options.output.as_deref(), bytes).map_err(|err| Unwritten::Io(format!("cannot write the {}: {err}", export.name())));
     let written = match export {
         Export::Obj => c2f_geom::obj(&output.nodes, base_dir, &c2f_geom::ObjOptions { name: name.clone(), ..Default::default() })
+            .map_err(Unwritten::Model)
             .and_then(|obj| {
                 match target {
-                    Some(target) => write_file(&target.with_extension("mtl"), obj.mtl.as_bytes())?,
-                    None => eprintln!("WARNING: the colors' {name}.mtl is only written with -o"),
+                    Some(target) => write(&target.with_file_name(&obj.mtl_file), obj.mtl.as_bytes())?,
+                    None => eprintln!("WARNING: the colors' {} is only written with -o", obj.mtl_file),
                 }
-                emit(options.output.as_deref(), obj.obj.as_bytes()).map_err(|err| err.to_string())?;
+                print(obj.obj.as_bytes())?;
                 Ok((obj.warnings, format!("{} triangles", obj.triangles)))
             }),
         Export::Urdf => {
@@ -506,26 +516,30 @@ fn print_parts(program: &c2f_eval::Program, src: &str, output: &c2f_eval::Output
             let folder = format!("{name}_meshes");
             let urdf_options =
                 c2f_geom::UrdfOptions { name: name.clone(), mesh_folder: folder, density: options.density.unwrap_or(1240.0), ..Default::default() };
-            c2f_geom::urdf(&output.nodes, base_dir, &urdf_options).and_then(|urdf| {
+            c2f_geom::urdf(&output.nodes, base_dir, &urdf_options).map_err(Unwritten::Model).and_then(|urdf| {
                 let dir = target.parent().unwrap_or(Path::new(""));
                 for (file, bytes) in &urdf.meshes {
                     let path = dir.join(file);
                     if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent).map_err(|err| format!("cannot create {}: {err}", parent.display()))?;
+                        std::fs::create_dir_all(parent)
+                            .map_err(|err| Unwritten::Io(format!("cannot create {}: {err}", parent.display())))?;
                     }
-                    write_file(&path, bytes)?;
+                    write(&path, bytes)?;
                 }
-                write_file(target, urdf.urdf.as_bytes())?;
+                write(target, urdf.urdf.as_bytes())?;
                 Ok((urdf.warnings, format!("{} links, {} moving joints", urdf.links, urdf.moving)))
             })
         }
         _ => {
-            let parameters = program.parameters(src).into_iter()
+            let parameters = program
+                .parameters(src)
+                .into_iter()
                 .filter(|p| p.group != c2f_eval::customizer::HIDDEN_GROUP)
-                .map(|p| (p.name, p.default)).collect();
+                .map(|p| (p.name, p.default))
+                .collect();
             let parts_options = c2f_geom::PartsOptions { name: name.clone(), parameters, ..Default::default() };
-            c2f_geom::parts_json(&output.nodes, base_dir, &parts_options).and_then(|(json, warnings)| {
-                emit(options.output.as_deref(), json.as_bytes()).map_err(|err| err.to_string())?;
+            c2f_geom::parts_json(&output.nodes, base_dir, &parts_options).map_err(Unwritten::Model).and_then(|(json, warnings)| {
+                print(json.as_bytes())?;
                 let parts = json.matches("\"parent\":").count();
                 Ok((warnings, format!("{parts} parts")))
             })
@@ -539,9 +553,13 @@ fn print_parts(program: &c2f_eval::Program, src: &str, output: &c2f_eval::Output
             eprintln!("{size}");
             ExitCode::SUCCESS
         }
-        Err(why) => {
+        Err(Unwritten::Model(why)) => {
             eprintln!("WARNING: {why}");
             ExitCode::SUCCESS
+        }
+        Err(Unwritten::Io(why)) => {
+            eprintln!("error: {why}");
+            ExitCode::FAILURE
         }
     }
 }

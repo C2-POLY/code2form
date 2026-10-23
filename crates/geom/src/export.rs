@@ -129,10 +129,9 @@ fn view_basis(yaw: f64, pitch: f64) -> [[f64; 3]; 3] {
     let (sp, cp) = pitch.sin_cos();
     let back = [cp * cy, cp * sy, sp];
     let forward = back.map(|c| -c);
-    // forward × Z, or X when looking straight up or down.
-    let right = [forward[1], -forward[0], 0.0];
-    let length = right[0].hypot(right[1]);
-    let right = if length > 1e-9 { [right[0] / length, right[1] / length, 0.0] } else { [1.0, 0.0, 0.0] };
+    // forward × Z, made of length 1: still the yaw's when looking straight
+    // down, as the app keeps it.
+    let right = [-sy, cy, 0.0];
     // right × forward
     let up = [
         right[1] * forward[2] - right[2] * forward[1],

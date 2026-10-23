@@ -9,7 +9,7 @@
 //! prism of facets. Each closed shell of the mesh is a solid, a shell
 //! inside another (a cavity) its void. Faces keep their colors.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 use crate::build::{CUT_COLOR, DEFAULT_COLOR, Model};
@@ -117,8 +117,9 @@ fn loops(
     vertices: &[[f64; 3]],
     normal: [f64; 3],
 ) -> Vec<Vec<usize>> {
-    // Edges whose other side is in another face, by where they start.
-    let mut from: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Edges whose other side is in another face, by where they start, in
+    // order, so that the same model always gives the same file.
+    let mut from: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut count = 0;
     for &t in members {
         let [a, b, c] = triangles[t];
@@ -221,37 +222,15 @@ fn write(name: &str, vertices: &[[f64; 3]], faces: &[Face]) -> String {
             }
         }
     }
-    // Each cavity goes in the smallest solid around it.
-    let bounds = |shell: &[usize]| {
-        let mut lo = [f64::INFINITY; 3];
-        let mut hi = [f64::NEG_INFINITY; 3];
-        for &f in shell {
-            for &v in faces[f].loops.iter().flatten() {
-                for k in 0..3 {
-                    lo[k] = lo[k].min(vertices[v][k]);
-                    hi[k] = hi[k].max(vertices[v][k]);
-                }
-            }
-        }
-        (lo, hi)
-    };
+    // Each cavity goes in the innermost solid around one of its corners.
     let mut cavities: Vec<Vec<usize>> = vec![Vec::new(); solids.len()];
     for (closed, shell) in &voids {
-        let (lo, hi) = bounds(shell);
+        let corner = vertices[faces[shell[0]].loops[0][0]];
         let around = solids
             .iter()
             .enumerate()
-            .filter(|(_, (_, solid))| {
-                let (slo, shi) = bounds(solid);
-                (0..3).all(|k| slo[k] <= lo[k] && hi[k] <= shi[k])
-            })
-            .min_by(|(_, (_, a)), (_, (_, b))| {
-                let size = |s: &[usize]| {
-                    let (lo, hi) = bounds(s);
-                    (0..3).map(|k| hi[k] - lo[k]).product::<f64>()
-                };
-                size(a).total_cmp(&size(b))
-            });
+            .filter(|(_, (_, solid))| encloses(vertices, faces, solid, corner))
+            .min_by(|(_, (_, a)), (_, (_, b))| volume(vertices, faces, a).total_cmp(&volume(vertices, faces, b)));
         if let Some((index, _)) = around {
             let oriented = out.add(format!("ORIENTED_CLOSED_SHELL('',*,#{closed},.F.)"));
             cavities[index].push(oriented);
@@ -331,6 +310,50 @@ fn shells(faces: &[Face]) -> Vec<Vec<usize>> {
         shells.push(members);
     }
     shells
+}
+
+/// Whether `point` is inside the closed shell: a ray from it crosses its
+/// faces an odd number of times. The ray leans off every axis, so that it
+/// misses the edges of faces built on a grid.
+fn encloses(vertices: &[[f64; 3]], faces: &[Face], shell: &[usize], point: [f64; 3]) -> bool {
+    let ray = [1.0, 0.000_731_9, 0.001_284_3];
+    let mut crossings = 0;
+    for &f in shell {
+        let face = &faces[f];
+        let n = face.normal;
+        let along = dot(ray, n);
+        if along.abs() < 1e-12 {
+            continue;
+        }
+        let t = dot(sub(vertices[face.loops[0][0]], point), n) / along;
+        if t <= 0.0 {
+            continue;
+        }
+        let hit = add(point, ray.map(|c| c * t));
+        // Even-odd across the face's loops, in the plane's two widest axes.
+        let axis = (0..3).max_by(|&a, &b| n[a].abs().total_cmp(&n[b].abs())).unwrap_or(2);
+        let (u, v) = match axis {
+            0 => (1, 2),
+            1 => (2, 0),
+            _ => (0, 1),
+        };
+        let mut inside = false;
+        for contour in &face.loops {
+            for (i, &a) in contour.iter().enumerate() {
+                let (p, q) = (vertices[a], vertices[contour[(i + 1) % contour.len()]]);
+                if (p[v] > hit[v]) != (q[v] > hit[v]) {
+                    let x = p[u] + (hit[v] - p[v]) / (q[v] - p[v]) * (q[u] - p[u]);
+                    if x > hit[u] {
+                        inside = !inside;
+                    }
+                }
+            }
+        }
+        if inside {
+            crossings += 1;
+        }
+    }
+    crossings % 2 == 1
 }
 
 /// The volume a shell encloses, negative for a cavity's.
@@ -548,6 +571,26 @@ mod tests {
         assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 1);
         assert_eq!(count(&text, "BREP_WITH_VOIDS"), 1);
         assert_eq!(count(&text, "ORIENTED_CLOSED_SHELL"), 1);
+    }
+
+    #[test]
+    fn a_cavity_goes_in_the_solid_around_it_not_a_ring_around_that() {
+        // The ring's box holds the bar's cavity, but the ring does not.
+        let text = step(
+            "difference() { translate([-50, -5, -5]) cube([100, 10, 10]); cube(4, center = true); }
+            rotate([0, 90, 0]) difference() { cylinder(r = 20, h = 4, center = true); cylinder(r = 15, h = 5, center = true); }",
+        );
+        let line = text.lines().find(|l| l.contains("=BREP_WITH_VOIDS(")).expect("a solid with a void");
+        let outer: usize = line.split(",#").nth(1).unwrap().split(',').next().unwrap().parse().unwrap();
+        let shell = text.lines().find(|l| l.starts_with(&format!("#{outer}="))).unwrap();
+        // The bar's shell has 6 faces, the ring's many more.
+        assert_eq!(shell.matches('#').count() - 1, 6, "{shell}");
+    }
+
+    #[test]
+    fn the_same_model_gives_the_same_file() {
+        let src = "difference() { cube(10); translate([5, 5, -1]) cylinder(r = 2, h = 12, $fn = 8); translate([2, 2, -1]) cube([1, 1, 12]); }";
+        assert_eq!(step(src), step(src));
     }
 
     #[test]

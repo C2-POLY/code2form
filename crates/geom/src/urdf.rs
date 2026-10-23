@@ -6,7 +6,8 @@
 //! `translate()` and `rotate()` put it at, as it does in an animation.
 //!
 //! Each link's geometry is a binary STL in its own frame, in meters, in a
-//! folder beside the `.urdf`; its mass, center of mass and inertia come
+//! folder beside the `.urdf`, named relative to it (PyBullet, MuJoCo and
+//! urdf viewers read it as it is; ROS wants a `package://` path); its mass, center of mass and inertia come
 //! from its volume and a density.
 
 use std::fmt::Write;
@@ -58,18 +59,21 @@ pub struct Urdf {
 pub fn urdf(nodes: &[Node], base_dir: &Path, options: &UrdfOptions) -> Result<Urdf, String> {
     let split = pieces(nodes, base_dir, &options.name);
     let mut out = Urdf { warnings: split.warnings, ..Urdf::default() };
-    let names: Vec<String> = split.pieces.iter().map(|p| xml_name(&p.name)).collect();
+    // Unique once cleaned, and so are their meshes' files.
+    let names = crate::gltf::unique(split.pieces.iter().map(|p| xml_name(&p.name)).collect::<Vec<_>>().iter().map(String::as_str));
+    let files = crate::gltf::unique(names.iter().map(|n| file_name(n)).collect::<Vec<_>>().iter().map(String::as_str));
+    let files: Vec<String> = files.iter().map(|f| file_name(f)).collect();
     let mut xml = String::new();
     let _ = writeln!(xml, "<?xml version=\"1.0\"?>\n<!-- Code2Form -->\n<robot name=\"{}\">", names[0]);
     let mut solid = false;
     let mut flat = false;
-    for (piece, name) in split.pieces.iter().zip(&names) {
+    for ((piece, name), stem) in split.pieces.iter().zip(&names).zip(&files) {
         let _ = writeln!(xml, "  <link name=\"{name}\">");
         match &piece.model {
             Model::Solid(manifold) if !manifold.is_empty() => {
                 solid = true;
                 let mesh = colored_mesh(manifold);
-                let file = format!("{}/{}.stl", options.mesh_folder.trim_end_matches('/'), file_name(name));
+                let file = format!("{}/{}.stl", options.mesh_folder.trim_end_matches('/'), stem);
                 out.meshes.push((file.clone(), stl(&mesh.vertices, &mesh.triangles)));
                 let [r, g, b, a] = main_color(&mesh.colors, options.color);
                 let mass = Mass::of(&mesh.vertices, &mesh.triangles, options.density);
@@ -412,6 +416,21 @@ mod tests {
         let mut mirrored = rotation(0.0, 0.0, 0.0);
         mirrored[0][0] = -1.0;
         assert!(origin(&mirrored).2);
+    }
+
+    #[test]
+    fn names_stay_apart_once_cleaned() {
+        let out = write("part(\"arm\") cube(1); part(\"arm\") cube(1); part(\"arm_2\") cube(1); part(\"a<b\") cube(1); part(\"ab\") cube(1);");
+        let mut files: Vec<&String> = out.meshes.iter().map(|(file, _)| file).collect();
+        let count = files.len();
+        files.dedup();
+        files.sort();
+        files.dedup();
+        assert_eq!(files.len(), count, "{files:?}");
+        let mut links: Vec<&str> = out.urdf.lines().filter(|l| l.contains("<link name=")).collect();
+        links.sort();
+        links.dedup();
+        assert_eq!(links.len(), 6, "{links:?}");
     }
 
     #[test]

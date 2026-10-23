@@ -129,6 +129,9 @@ impl Default for ExportOptions {
 struct Shown {
     rendered: Rendered,
     program: c2f_eval::Program,
+    /// The text it was read from, as the editor holds it, where the
+    /// parts' JSON reads the parameters' annotations.
+    source: String,
 }
 
 /// The file formats a model exports to: STL, 3MF, glTF, OBJ, STEP, URDF
@@ -350,7 +353,7 @@ fn render_source(
                 enclosure: 0..0,
                 exploded: exploded.map(Arc::new),
             };
-            (Ok(scene), Some(Shown { rendered, program }))
+            (Ok(scene), Some(Shown { rendered, program, source: source.to_string() }))
         }
         Err(line) => (Err(line), None),
     };
@@ -582,10 +585,10 @@ fn pipeline(
 }
 
 fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
-    let Shown { rendered, program } = shown.ok_or_else(|| tr("there is no model to export yet", "il n’y a pas encore de modèle à exporter").to_string())?;
+    let Shown { rendered, program, source } = shown.ok_or_else(|| tr("there is no model to export yet", "il n’y a pas encore de modèle à exporter").to_string())?;
     match format {
         Format::Glb => return export_gltf(program, target, &options.gltf),
-        Format::Obj | Format::Urdf | Format::Json => return export_parts(program, target, format, options),
+        Format::Obj | Format::Urdf | Format::Json => return export_parts(program, source, target, format, options),
         _ => {}
     }
     let name = target.file_stem().map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned());
@@ -628,7 +631,7 @@ fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &Ex
 
 /// Writes the program's parts: as OBJ and its `.mtl`, as a URDF and its
 /// meshes in a folder beside it, or as JSON.
-fn export_parts(program: &c2f_eval::Program, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
+fn export_parts(program: &c2f_eval::Program, src: &str, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
     let name = target.file_stem().map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned());
     let base_dir = program.files[0].path.parent().unwrap_or(Path::new("")).to_path_buf();
     let color = options.gltf.color;
@@ -643,7 +646,7 @@ fn export_parts(program: &c2f_eval::Program, target: &Path, format: Format, opti
         match format {
             Format::Obj => {
                 let obj = c2f_geom::obj(&output.nodes, &base_dir, &c2f_geom::ObjOptions { name: name.clone(), color })?;
-                write(&target.with_extension("mtl"), obj.mtl.as_bytes())?;
+                write(&target.with_file_name(&obj.mtl_file), obj.mtl.as_bytes())?;
                 write(target, obj.obj.as_bytes())?;
                 let message = tr!("Exported {} triangles to {}", "{} triangles exportés dans {}", group_digits(obj.triangles), target.display());
                 Ok((message, obj.warnings))
@@ -676,9 +679,8 @@ fn export_parts(program: &c2f_eval::Program, target: &Path, format: Format, opti
                 Ok((message, urdf.warnings))
             }
             _ => {
-                let src = c2f_eval::read_source(&program.files[0].path).unwrap_or_default();
                 let parameters = program
-                    .parameters(&src)
+                    .parameters(src)
                     .into_iter()
                     .filter(|p| p.group != c2f_eval::customizer::HIDDEN_GROUP)
                     .map(|p| (p.name, p.default))

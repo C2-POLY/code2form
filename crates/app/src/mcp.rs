@@ -375,7 +375,7 @@ fn export_parts(args: &Value, output: &str, export: Export) -> Result<Vec<Value>
         Export::Obj => {
             let obj = c2f_geom::obj(&evaluated.nodes, base_dir, &c2f_geom::ObjOptions { name: name.clone(), ..Default::default() })
                 .map_err(|why| fail(why, &report))?;
-            let mtl = target.with_extension("mtl");
+            let mtl = target.with_file_name(&obj.mtl_file);
             write(&mtl, obj.mtl.as_bytes())?;
             write(target, obj.obj.as_bytes())?;
             report["triangles"] = json!(obj.triangles);
