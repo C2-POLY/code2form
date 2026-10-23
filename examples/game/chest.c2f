@@ -1,0 +1,65 @@
+// A treasure chest for a game: its lid opens and closes, and a gem on the
+// lid turns. Export it as glTF (File > Export > glTF…, or
+// `c2f glb chest.c2f > chest.glb`): Godot and Unity open it with three
+// nodes, chest, lid and gem, and an animation that loops.
+//
+// What moves is in part("…"): the lid turns about its hinge, and the gem,
+// a part of the lid, follows it while it turns on itself. Their movement
+// follows $t, from 0 to 1: press play under the view to see it.
+
+/* [Chest] */
+// Outside width, depth and height of the box, without the lid.
+width = 60; // [30:120]
+depth = 40; // [20:80]
+height = 30; // [15:60]
+// Height of the lid.
+lid_height = 14; // [8:30]
+// How far the lid opens, in degrees.
+opening = 100; // [30:120]
+
+/* [Hidden] */
+wall = 3;
+band = 4;
+wood = "SaddleBrown";
+metal = "Gold";
+$fn = 48;
+
+// Open and closed again: 0 at $t = 0 and 1, all the way at $t = 0.5.
+function swing(t) = (1 - cos(360 * t)) / 2;
+
+// The box, open at the top, with two metal bands around it.
+module box() {
+    color(wood) difference() {
+        cube([width, depth, height]);
+        translate([wall, wall, wall]) cube([width - 2 * wall, depth - 2 * wall, height]);
+    }
+    for (x = [width / 4, 3 * width / 4])
+        color(metal) difference() {
+            translate([x - band / 2, -0.5, -0.5]) cube([band, depth + 1, height + 0.5]);
+            translate([wall, wall, wall]) cube([width - 2 * wall, depth - 2 * wall, height]);
+        }
+}
+
+// The lid, its hinge along its back edge on the x axis: a rounded top,
+// `grow` larger all round for the bands that wrap it.
+module lid(grow = 0) {
+    intersection() {
+        translate([-grow, -depth - grow, 0]) cube([width + 2 * grow, depth + 2 * grow, lid_height + grow]);
+        translate([-grow, -depth / 2, 0]) rotate([0, 90, 0]) scale([(lid_height + grow) / (depth / 2 + grow), 1, 1])
+            cylinder(r = depth / 2 + grow, h = width + 2 * grow);
+    }
+}
+
+box();
+// The hinge, at the box's top back edge.
+translate([0, depth, height]) rotate([-opening * swing($t), 0, 0]) part("lid") {
+    color(wood) lid();
+    for (x = [width / 4, 3 * width / 4])
+        color(metal) intersection() {
+            translate([x - band / 2, -depth - 1, 0]) cube([band, depth + 2, lid_height + 1]);
+            lid(0.5);
+        }
+    // On top of the lid, a gem that turns, a full turn a loop.
+    translate([width / 2, -depth / 2, lid_height]) rotate([0, 0, 360 * $t]) part("gem")
+        color("DeepSkyBlue", 0.85) translate([0, 0, 4]) scale([1, 1, 1.4]) sphere(r = 4, $fn = 8);
+}

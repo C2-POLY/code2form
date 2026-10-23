@@ -569,6 +569,7 @@ dependencies = [
  "manifold-rust",
  "miniz_oxide 0.8.9",
  "rustybuzz",
+ "serde_json",
  "ttf-parser",
 ]
 

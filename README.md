@@ -12,12 +12,25 @@ they are. Written in Rust, it renders as you type.
   Open Recent lists the last ten files opened or saved; each file opens in
   a tab of its own, with its view, console and undo history, and the tabs
   come back at the next launch.
+- **Examples**: the Examples menu lists the designs and circuits that
+  come with the app, by subject: a chest that opens, three gears that
+  drive one another and a walking mannequin (Game), and the Grogu
+  circuit with its plate. One opens as a copy in
+  `~/Documents/Code2Form/Examples`, its folder with it, to change and
+  save; opened again, the copy keeps its changes.
 - **Settings** (⌘,): the app icon in ten tints (graphite by default,
   shown in the Dock and the Finder), the code's size, whether to render
   as you type and after what pause, and folders searched for libraries
   and for `text()`'s fonts before the default ones, a light or a dark
   theme (or the system's, as it changes), and the keys of each shortcut.
   The grid, the axes and the layer height are kept as left.
+- **Animation**: a design that reads `$t`, the animation time from 0 to
+  1 as in the reference implementation, gets a bar under the view to
+  play it: play and pause, the time's slider, frames a second and steps
+  from 0 to 1. Each frame renders once and stays in memory, so the second
+  time round plays at full speed; an edit renders the frames again.
+  `c2f -D '$t=0.25'` and the MCP tools' `parameters` (`{"$t": 0.25}`)
+  set the time.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text
   fields, grouped by `/* [Group] */`; presets are saved next to the design
@@ -28,6 +41,9 @@ they are. Written in Rust, it renders as you type.
 - **Export** of solids to STL and 3MF (in millimeters), checked with
   PrusaSlicer's own loader, and of 2D models to SVG and DXF, laid out as
   the reference implementation (release 2021.01) writes them.
+- **Game engines**: solids export to glTF 2.0 (`.glb`), which Godot 4
+  imports as it is and Unity through glTFast or UnityGLTF, with their
+  colors as materials (see [Game engines](#game-engines-gltf)).
 - **Print pauses**: `pause(z, message);` asks the 3D print to stop once it
   is done up to height `z`, before the layer that covers it, to drop
   magnets, nuts or weights into closed cavities. The 3MF carries the
@@ -70,8 +86,8 @@ they are. Written in Rust, it renders as you type.
   (`// @circuit grogu.c2fc`) gets `standoffs_for()`, `holes_for()`,
   `cutout_for()` and `circuit_part()`, which follow the circuit's parts,
   as `examples/grogu/grogu_plate.c2f` does.
-- **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, an
-  SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
+- **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, a
+  glTF, an SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
   `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
   checks a circuit, prints its wiring list and bill of materials, and
   exports its assembled parts (see the
@@ -102,7 +118,7 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 | `render` | The error that stops the model, with its file, line and column; the echo output and warnings; whether it is 3D or 2D, its triangles, volume (area in 2D) and bounding box |
 | `parameters` | The customizer parameters: name, group, description, default and widget |
 | `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report |
-| `export` | Writes a solid as STL or 3MF, or a 2D model as SVG or DXF, to `output`, in the `format` its extension gives |
+| `export` | Writes a solid as STL, 3MF or glTF (`.glb`, with `scale` in meters per unit), or a 2D model as SVG or DXF, to `output`, in the `format` its extension gives |
 
 For electronics, the agent finds parts and describes a circuit (`.c2fc`).
 The circuit tools take the circuit's text as `code` (its part files
@@ -132,6 +148,128 @@ no screen or GPU: the app's colors, lighting and framing, with outlines
 and creases drawn darker. A 2D model shows as the 1 mm slab the app
 draws, best seen from `top`.
 
+## Game engines (glTF)
+
+File > Export > glTF… (or `c2f glb design.c2f > design.glb`, or the MCP
+`export` tool) writes the model as a binary glTF 2.0 file, the open
+format Godot 4 imports as it is and Unity through the glTFast or
+UnityGLTF packages. The file passes the Khronos glTF-Validator.
+
+- **Size**: glTF counts in meters. By default a millimeter stays a
+  millimeter, so a 40 mm cube is 4 cm in the engine. Settings > Export >
+  glTF models (or `--scale 1`, the `scale` argument of the MCP tool)
+  makes each unit a meter instead, for levels and scenery modeled in
+  meters.
+- **Axes**: glTF has Y up where a design has Z up. The model is turned a
+  quarter turn about X: the design's Z is the engine's Y, and its Y the
+  engine's -Z, so the model stands as in the app.
+- **Colors**: each `color()` becomes a material (PBR, not metallic), and
+  a color with an alpha below 1 blends. The parts without `color()` take
+  the model color picked in the settings, as do the faces a
+  `difference()` cuts, which the preview shows in green.
+- **Shading**: normals are smoothed across the facets of a curved surface
+  and kept apart where faces meet at more than 35°, so a cylinder reads
+  round and a cube keeps its edges.
+
+### Parts
+
+STL and 3MF exports unite the whole model into one solid. `part("name")`
+keeps what it holds apart from the rest: in a glTF it is a node of its
+own, named, that a game moves or animates.
+
+```
+cube([40, 40, 5]);
+translate([20, 20, 5]) rotate([0, 0, 45]) part("turret") {
+    cylinder(h = 10, r = 12);
+    translate([0, 8, 5]) part("barrel") rotate([-90, 0, 0]) cylinder(h = 25, r = 2);
+}
+```
+
+- A part's geometry is in its own frame; the `translate()`, `rotate()`,
+  `scale()` and `mirror()` written around it become the node's
+  translation, rotation and scale. A shear has no glTF equivalent: the
+  node takes the nearest rotation, with a warning.
+- A part in a part is a child node, and follows its parent. What is
+  outside any part is the root node, named after the file. Names stay
+  unique: a second part named `lid` is `lid 2`.
+- A part inside `difference()`, `intersection()`, `hull()`,
+  `minkowski()` and the other operations that reshape it is merged into
+  the geometry around it, with a warning. `union()` and `color()` keep
+  it apart; it takes the color it is drawn in.
+- A part without geometry is an empty node, a pivot to hang other parts
+  on.
+- STL, 3MF and the app's view draw the parts as the rest of the model,
+  and `c2f csg` prints them as `group()`. The reference implementation
+  ignores `part()` and what it holds, with a warning; a file that defines
+  `module part(name) children();` opens there whole. A module of your own
+  named `part` wins over the built-in one.
+
+### Animation
+
+A design that reads `$t` exports animated: its parts move as `$t` goes
+from 0 to 1, as the app's playback bar shows them.
+
+```
+cube([40, 40, 5]);
+translate([20, 20, 5]) rotate([0, 0, 360 * $t]) part("turret") {
+    cylinder(h = 10, r = 12);
+    translate([0, 8, 5]) part("barrel") rotate([-90, 0, 0]) cylinder(h = 25, r = 2);
+}
+```
+
+- Each part's geometry is built once, at `$t = 0`. The program is then
+  evaluated at each frame, without building any geometry, for where each
+  part is: its translation, rotation and scale become a track of the
+  glTF animation, interpolated linearly, for each part that moves.
+- The animation lasts 2 seconds, sampled 30 times a second, both ends
+  included (Settings > Export > glTF models, `--duration` and `--fps`,
+  or the MCP tool's `duration` and `fps`). It is named after the file
+  (`--animation`, `animation`), and loops: its name then ends in `-loop`,
+  which Godot reads to play it over and over (`--no-loop`, `"loop":
+  false` play it once). `--still` (`"animate": false`) writes the model
+  still, at `$t = 0` or at the `$t` set with `-D` or `parameters`. An
+  animation has at most 10,000 frames, each an evaluation of the
+  program.
+- For the loop to be seamless, a part should be where it started at
+  `$t = 1`, as `360 * $t` or `sin(360 * $t)` are.
+- Only movement is animated. A part whose shape changes with `$t`, or
+  geometry outside any part that does, keeps its shape at `$t = 0`, with
+  a warning; so do parts that come and go. A model that reads `$t`
+  without any `part()` exports still, with a warning.
+
+### In Godot 4 and Unity
+
+`examples/game/chest.c2f` is a treasure chest whose lid opens and closes
+while a gem on it turns: three nodes (`chest`, `lid`, `gem`), two
+materials and a transparent one, and an animation that loops. Next to it,
+`gears.c2f` has three gears of 12, 24 and 18 teeth, each turning at the
+speed its teeth set, and `walker.c2f` a mannequin whose limbs are parts
+in the parts they hang from (hips, chest, upper arm, forearm...), walking
+on the spot.
+
+**Godot 4** (checked with 4.7): copy the `.glb` into the project. Godot
+imports it as a scene: open it, or drag it into another scene. The nodes
+keep their names and hierarchy, the materials their colors, and an
+`AnimationPlayer` holds the animation, set to loop, under the file's name
+without `-loop` (`$AnimationPlayer.play("chest")`). Godot simplifies
+animation tracks on import with tolerances counted in meters: a movement
+of a few millimeters comes out rounded (a 2 mm rise of a real-size part
+came out 1.2 mm high), while turns and movements of a centimeter or more
+keep their shape. For a small object with small movements, export with a
+unit as a meter and scale the node in Godot.
+
+**Unity**: install the glTFast package (Package Manager > Add package by
+name > `com.unity.cloud.gltfast`) or UnityGLTF, then drop the `.glb` into
+`Assets`. The model comes in as a prefab with its nodes and materials,
+and its animation as a clip; in glTFast's import settings, *Animation
+Method: Mecanim* makes it a clip an `Animator` plays. This path is not
+yet checked in Unity itself.
+
+**Triangles**: a game draws every triangle every frame. Curves are split
+as `$fn`, `$fa` and `$fs` say; the export prints the count (and the app
+shows it under the view). Keep `$fn` low on small curves: `$fn = 8` for a
+gem, 24 to 48 for a wheel or a barrel.
+
 ## Compatibility
 
 Code2Form opens `.scad` files. Its parser, evaluator and geometry are
@@ -157,6 +295,7 @@ Rust 1.85 or later.
 cargo run --release -p code2form -- design.c2f   # the desktop app
 cargo run --release -p c2f-cli -- stl design.c2f > design.stl
 cargo run --release -p c2f-cli -- 3mf design.c2f > design.3mf
+cargo run --release -p c2f-cli -- glb design.c2f > design.glb  # game engines
 cargo run --release -p c2f-cli -- svg plate.c2f > plate.svg     # 2D models
 cargo run --release -p c2f-cli -- dxf plate.c2f > plate.dxf
 cargo run --release -p c2f-cli -- circuit check examples/grogu/grogu.c2fc
@@ -184,7 +323,7 @@ names.
 |---|---|
 | `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, electronics annotations, AST dump |
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
-| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, SVG and DXF exports, PNG pictures |
+| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, glTF, SVG and DXF exports, PNG pictures |
 | `crates/circuit` (`c2f-circuit`) | Circuit files: parts placed in space and the wires between their pins |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |

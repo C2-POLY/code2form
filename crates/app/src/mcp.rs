@@ -22,7 +22,8 @@ program's text (`code`) or a file (`path`). `render` reports errors with \
 their line, echo output, warnings, the triangle count, the volume and the \
 bounding box; `image` returns a picture of the model from a view; \
 `parameters` lists the customizer parameters, which every tool can set \
-with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D). \
+with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D), \
+or glTF (.glb) for game engines such as Godot and Unity. \
 `pause(z, message);` pauses a 3D print once it is done up to height `z`, \
 to drop magnets or nuts into closed cavities: the 3MF carries the pauses \
 for PrusaSlicer. For electronics, `library_parts` lists the parts and \
@@ -142,11 +143,32 @@ fn tools() -> Value {
         {
             "name": "export",
             "title": "Export a model",
-            "description": "Renders a model and writes it to a file: a solid as STL or 3MF (in millimeters), \
+            "description": "Renders a model and writes it to a file: a solid as STL or 3MF (in millimeters) or as \
+                            glTF 2.0 binary (.glb, in meters with Y up, a material per color, for Godot and Unity), \
                             a 2D model as SVG or DXF. Returns the render report and the size written.",
             "inputSchema": schema(json!({
                 "output": { "type": "string", "description": "The file to write, absolute or relative to the server's current directory; it is replaced." },
-                "format": { "type": "string", "enum": ["stl", "3mf", "svg", "dxf"], "description": "Default: the output's extension." },
+                "format": { "type": "string", "enum": ["stl", "3mf", "glb", "svg", "dxf"], "description": "Default: the output's extension." },
+                "scale": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 0.001,
+                    "description": "glb: meters per model unit. 0.001 keeps a model in millimeters at its size; 1 makes each unit a meter.",
+                },
+                "duration": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 2,
+                    "description": "glb of a model that reads $t: the seconds its part() nodes take to move from $t = 0 to 1.",
+                },
+                "fps": { "type": "number", "exclusiveMinimum": 0, "default": 30, "description": "glb: animation frames sampled a second." },
+                "animation": { "type": "string", "description": "glb: the animation's name (default: the output file's name)." },
+                "loop": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "glb: the animation loops; its name then ends in -loop, which Godot reads. false plays it once.",
+                },
+                "animate": { "type": "boolean", "default": true, "description": "glb: false writes the model at $t = 0, without animation." },
             }), &["output"]),
         },
     ]);
@@ -163,7 +185,8 @@ fn schema(properties: Value, required: &[&str]) -> Value {
         "parameters": {
             "type": "object",
             "description": "Customizer parameter values to use instead of the file's, by name, as JSON values \
-                            (`{\"width\": 30, \"label\": \"A\", \"size\": [10, 20]}`); the `parameters` tool lists them.",
+                            (`{\"width\": 30, \"label\": \"A\", \"size\": [10, 20]}`); the `parameters` tool lists them. \
+                            `$t` sets the animation's time, from 0 to 1 (`{\"$t\": 0.25}`), which is 0 otherwise.",
         },
     });
     model_schema(merge(parameters, properties), required)
@@ -287,11 +310,58 @@ fn export_tool(args: &Value) -> Result<Vec<Value>, String> {
         Some(format) => format,
         None => Path::new(output).extension().and_then(|e| e.to_str()).unwrap_or(""),
     };
-    let export = Export::named(format).ok_or_else(|| format!("unknown format `{format}`: give `format` (stl, 3mf, svg or dxf)"))?;
+    let export =
+        Export::named(format).ok_or_else(|| format!("unknown format `{format}`: give `format` (stl, 3mf, glb, svg or dxf)"))?;
+    if let Export::Glb = export {
+        return export_gltf(args, output);
+    }
     let (rendered, mut report) = render(args)?;
     let bytes = export.write(&rendered).map_err(|why| format!("{why}\n{}", pretty(&report)))?;
     std::fs::write(output, &bytes).map_err(|err| format!("cannot write {output}: {err}"))?;
     report["written"] = json!({ "path": output, "format": export.name(), "bytes": bytes.len() });
+    Ok(vec![text(pretty(&report))])
+}
+
+/// Writes the model as a `.glb` to `output`.
+fn export_gltf(args: &Value, output: &str) -> Result<Vec<Value>, String> {
+    let mut options = c2f_geom::GltfOptions::default();
+    if let Some(scale) = args.get("scale") {
+        options.scale = scale.as_f64().filter(|s| s.is_finite() && *s > 0.0).ok_or("`scale` must be a positive number")?;
+    }
+    if let Some(stem) = Path::new(output).file_stem() {
+        options.name = stem.to_string_lossy().into_owned();
+    }
+    let positive = |key: &str| match args.get(key) {
+        None => Ok(None),
+        Some(v) => v.as_f64().filter(|v| v.is_finite() && *v > 0.0).map(Some).ok_or(format!("`{key}` must be a positive number")),
+    };
+    let mut animation = c2f_geom::GltfAnimation { name: options.name.clone(), ..Default::default() };
+    if let Some(duration) = positive("duration")? {
+        animation.duration = duration;
+    }
+    if let Some(fps) = positive("fps")? {
+        animation.fps = fps;
+    }
+    if let Some(name) = args.get("animation").and_then(Value::as_str) {
+        animation.name = name.to_string();
+    }
+    animation.looped = args.get("loop").and_then(Value::as_bool).unwrap_or(true);
+    let animate = args.get("animate").and_then(Value::as_bool).unwrap_or(true);
+    options.animation = animate.then_some(animation);
+    let (mut program, evaluated) = evaluate(args)?;
+    let mut report = json!({ "ok": true, "echo": evaluated.echo, "warnings": evaluated.warnings });
+    let glb = c2f_geom::program_glb(&mut program, &options).map_err(|why| format!("{why}\n{}", pretty(&report)))?;
+    if let Some(warnings) = report["warnings"].as_array_mut() {
+        warnings.extend(glb.warnings.iter().map(|w| json!(w)));
+    }
+    report["model"] = json!("3D");
+    report["triangles"] = json!(glb.triangles);
+    report["vertices"] = json!(glb.vertices);
+    if glb.frames > 0 {
+        report["animation"] = json!({ "name": options.animation.map(|a| a.written_name()), "frames": glb.frames });
+    }
+    std::fs::write(output, &glb.bytes).map_err(|err| format!("cannot write {output}: {err}"))?;
+    report["written"] = json!({ "path": output, "format": Export::Glb.name(), "bytes": glb.bytes.len() });
     Ok(vec![text(pretty(&report))])
 }
 
@@ -338,6 +408,10 @@ fn set_parameters(program: &mut c2f_eval::Program, src: &str, values: &Value) ->
     let values = values.as_object().ok_or("`parameters` must be an object of names and values")?;
     let parameters = program.parameters(src);
     for (name, value) in values {
+        if name == "$t" {
+            program.t = value.as_f64().filter(|t| t.is_finite()).ok_or("`$t` must be a number, the time from 0 to 1")?;
+            continue;
+        }
         let parameter = parameters
             .iter()
             .find(|p| p.name == *name)
@@ -359,20 +433,24 @@ fn set_parameters(program: &mut c2f_eval::Program, src: &str, values: &Value) ->
     Ok(())
 }
 
+/// Loads and evaluates the model. An error that stops the program is the
+/// report, as an error.
+fn evaluate(args: &Value) -> Result<(c2f_eval::Program, c2f_eval::Output), String> {
+    let (program, _) = load(args)?;
+    let output = c2f_eval::evaluate(&program);
+    if let Some(error) = &output.error {
+        let report = json!({ "ok": false, "error": error, "echo": output.echo, "warnings": output.warnings });
+        return Err(pretty(&report));
+    }
+    Ok((program, output))
+}
+
 /// Loads, evaluates and renders the model: its rendering and the report
 /// the tools return. An error that stops the program is the report, as an
 /// error.
 fn render(args: &Value) -> Result<(c2f_geom::Rendered, Value), String> {
-    let (program, _) = load(args)?;
-    let output = c2f_eval::evaluate(&program);
+    let (program, output) = evaluate(args)?;
     let mut report = Map::new();
-    if let Some(error) = &output.error {
-        report.insert("ok".into(), json!(false));
-        report.insert("error".into(), json!(error));
-        report.insert("echo".into(), json!(output.echo));
-        report.insert("warnings".into(), json!(output.warnings));
-        return Err(pretty(&Value::Object(report)));
-    }
     let rendered = crate::render(&program, &output);
     let warnings: Vec<&String> = output.warnings.iter().chain(&rendered.warnings).collect();
     let s = rendered.stats;

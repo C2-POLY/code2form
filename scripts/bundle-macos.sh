@@ -101,6 +101,10 @@ mkdir -p "$app/Contents/Resources/libraries"
 ditto "$root/library" "$app/Contents/Resources/libraries"
 cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$app/Contents/Resources/libraries/"
 
+# The examples the Examples menu lists, copied to the user's documents
+# before they open.
+ditto "$root/examples" "$app/Contents/Resources/examples"
+
 # The fonts text() defaults to (Liberation 2.00.1, SIL Open Font License,
 # with their licence), from the repository.
 mkdir -p "$app/Contents/Resources/fonts"

@@ -50,6 +50,8 @@ pub struct Interp<'p> {
     pub echo: Vec<String>,
     pub warnings: Vec<String>,
     pub pauses: Vec<crate::Pause>,
+    /// Whether the program read `$t`.
+    pub reads_t: bool,
     /// The `pause()` calls written in the main file, by the address of
     /// their instance.
     main_pauses: std::collections::HashMap<usize, crate::PauseSource>,
@@ -109,7 +111,7 @@ impl<'p> Interp<'p> {
             ("$fn", Value::Number(0.0)),
             ("$fa", Value::Number(12.0)),
             ("$fs", Value::Number(2.0)),
-            ("$t", Value::Number(0.0)),
+            ("$t", Value::Number(program.t)),
             // The reference evaluates in preview mode when exporting CSG.
             ("$preview", Value::Bool(true)),
             // The command-line camera, not the GUI's.
@@ -130,6 +132,7 @@ impl<'p> Interp<'p> {
             echo: Vec::new(),
             warnings: Vec::new(),
             pauses: Vec::new(),
+            reads_t: false,
             main_pauses: main_pauses(&program.files[0].ast.stmts),
             pause_call: None,
             module_stack: Vec::new(),
@@ -745,6 +748,10 @@ impl<'p> Interp<'p> {
             ExprKind::Number(n) => Value::Number(*n),
             ExprKind::Str(s) => Value::str(s),
             ExprKind::Ident(name) => match lookup_variable(env, name) {
+                Some(value) if name == "$t" => {
+                    self.reads_t = true;
+                    value
+                }
                 Some(value) => value,
                 None => {
                     self.warn(format!("Ignoring unknown variable '{name}'"));

@@ -16,6 +16,8 @@ commands:
           (echo output and warnings go to stderr)
   stl     evaluate, build the geometry and print it as an ASCII STL
   3mf     the same, as a 3MF package (binary: redirect it to a file)
+  glb     the same, as glTF 2.0 for game engines (Godot, Unity): in
+          meters with Y up, a material per color (binary too)
   svg     evaluate, build the 2D geometry and print it as an SVG
   dxf     the same, as a DXF drawing
   check   parse only and report syntax errors and badly written
@@ -47,7 +49,16 @@ options:
   -D name=value   sets a variable, as if assigned at the end of the file
                   (also written -Dname=value)
   -p file.json    reads customizer parameter sets from this file
-  -P name         applies this parameter set (with -p)";
+  -P name         applies this parameter set (with -p)
+  --scale <m>     glb: meters per model unit (default 0.001: a model in
+                  millimeters keeps its size; 1 makes each unit a meter)
+  --duration <s>  glb of a model that reads $t: the seconds its parts take
+                  to go from $t = 0 to 1 (default 2)
+  --fps <n>       glb: frames sampled a second (default 30)
+  --animation <name>  glb: the animation's name (default the file's name)
+  --no-loop       glb: an animation played once; it loops by default, its
+                  name ending in -loop, which Godot reads
+  --still         glb: the model at $t = 0, without animation";
 
 /// Reserved, not committed. Deeply nested programs recurse when printed.
 const STACK: usize = 1 << 30;
@@ -70,14 +81,42 @@ struct Options {
     /// `-p` and `-P`.
     parameter_file: Option<String>,
     parameter_set: Option<String>,
+    /// `--scale`, for `glb`.
+    gltf: c2f_geom::GltfOptions,
 }
 
 impl Options {
     fn parse(args: &[String]) -> Option<Options> {
         let (command, mut rest) = args.split_first()?;
         let (mut defines, mut parameter_file, mut parameter_set, mut path) = (Vec::new(), None, None, None);
+        let mut gltf = c2f_geom::GltfOptions::default();
+        let (mut still, mut animation_name) = (false, None);
         while let Some((arg, tail)) = rest.split_first() {
             rest = tail;
+            let animation = gltf.animation.get_or_insert_with(Default::default);
+            let positive = |value: &String| value.parse().ok().filter(|v: &f64| v.is_finite() && *v > 0.0);
+            match arg.as_str() {
+                "--scale" | "--duration" | "--fps" | "--animation" => {
+                    let (value, tail) = rest.split_first()?;
+                    rest = tail;
+                    match arg.as_str() {
+                        "--scale" => gltf.scale = positive(value)?,
+                        "--duration" => animation.duration = positive(value)?,
+                        "--fps" => animation.fps = positive(value)?,
+                        _ => animation_name = Some(value.clone()),
+                    }
+                    continue;
+                }
+                "--no-loop" => {
+                    animation.looped = false;
+                    continue;
+                }
+                "--still" => {
+                    still = true;
+                    continue;
+                }
+                _ => {}
+            }
             // `-D x=1` or `-Dx=1`: both are accepted.
             let (flag, value) = match ["-D", "-p", "-P"].into_iter().find(|f| arg.starts_with(f)) {
                 Some(flag) if arg.len() > flag.len() => (Some(flag), arg[flag.len()..].to_string()),
@@ -96,7 +135,17 @@ impl Options {
                 None => return None,
             }
         }
-        Some(Options { command: command.clone(), path: path?, defines, parameter_file, parameter_set })
+        let path = path?;
+        if let Some(stem) = Path::new(&path).file_stem() {
+            gltf.name = stem.to_string_lossy().into_owned();
+        }
+        if let Some(animation) = gltf.animation.as_mut() {
+            animation.name = animation_name.unwrap_or_else(|| gltf.name.clone());
+        }
+        if still {
+            gltf.animation = None;
+        }
+        Some(Options { command: command.clone(), path, defines, parameter_file, parameter_set, gltf })
     }
 }
 
@@ -112,13 +161,16 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "pins", "csg", "stl", "3mf", "svg", "dxf"].contains(&options.command.as_str()) {
+    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "svg", "dxf"].contains(&options.command.as_str()) {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
         return ExitCode::from(2);
     }
-    if options.command == "3mf" && std::io::stdout().is_terminal() {
-        eprintln!("error: a 3MF package is binary; redirect it to a file: c2f 3mf {} > model.3mf", options.path);
-        return ExitCode::from(2);
+    if let Some(export @ (Export::ThreeMf | Export::Glb)) = Export::named(&options.command) {
+        if std::io::stdout().is_terminal() {
+            let (name, ext) = (export.name(), export.extension());
+            eprintln!("error: a {name} file is binary; redirect it to a file: c2f {ext} {} > model.{ext}", options.path);
+            return ExitCode::from(2);
+        }
     }
     let path = Path::new(&options.path);
     let mut src = match c2f_eval::read_source(path) {
@@ -163,7 +215,7 @@ fn run() -> ExitCode {
             _ => ExitCode::FAILURE,
         },
         // `csg`, or an export format.
-        command => csg(&program, Export::named(command)),
+        command => csg(&mut program, Export::named(command), &options.gltf),
     }
 }
 
@@ -209,6 +261,9 @@ fn apply_parameter_set(program: &mut c2f_eval::Program, file: Option<&str>, name
 enum Export {
     Stl,
     ThreeMf,
+    /// Written from the evaluated nodes rather than the rendering: see
+    /// [`gltf`].
+    Glb,
     Svg,
     Dxf,
 }
@@ -219,6 +274,7 @@ impl Export {
         match name.to_ascii_lowercase().as_str() {
             "stl" => Some(Export::Stl),
             "3mf" => Some(Export::ThreeMf),
+            "glb" => Some(Export::Glb),
             "svg" => Some(Export::Svg),
             "dxf" => Some(Export::Dxf),
             _ => None,
@@ -229,8 +285,19 @@ impl Export {
         match self {
             Export::Stl => "STL",
             Export::ThreeMf => "3MF",
+            Export::Glb => "glTF",
             Export::Svg => "SVG",
             Export::Dxf => "DXF",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Export::Stl => "stl",
+            Export::ThreeMf => "3mf",
+            Export::Glb => "glb",
+            Export::Svg => "svg",
+            Export::Dxf => "dxf",
         }
     }
 
@@ -239,6 +306,7 @@ impl Export {
         let (bytes, other) = match self {
             Export::Stl => (rendered.stl().map(String::into_bytes), "2D"),
             Export::ThreeMf => (rendered.three_mf(), "2D"),
+            Export::Glb => return Err("a glTF is written from the evaluated nodes, not a rendering".into()),
             Export::Svg => (rendered.svg().map(String::into_bytes), "3D"),
             Export::Dxf => (rendered.dxf().map(String::into_bytes), "3D"),
         };
@@ -254,7 +322,7 @@ fn render(program: &c2f_eval::Program, output: &c2f_eval::Output) -> c2f_geom::R
 }
 
 /// Prints the CSG tree, or with `export` the geometry in that format.
-fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
+fn csg(program: &mut c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom::GltfOptions) -> ExitCode {
     let output = c2f_eval::evaluate(program);
     for line in &output.echo {
         eprintln!("{line}");
@@ -262,7 +330,12 @@ fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
     for warning in &output.warnings {
         eprintln!("WARNING: {warning}");
     }
-    if let Some(export) = export {
+    if let Some(Export::Glb) = export {
+        // A program stopped by an error has no glTF: the error says why.
+        if output.error.is_none() && print_gltf(program, gltf) != ExitCode::SUCCESS {
+            return ExitCode::FAILURE;
+        }
+    } else if let Some(export) = export {
         let rendered = render(program, &output);
         for warning in &rendered.warnings {
             eprintln!("WARNING: {warning}");
@@ -286,9 +359,7 @@ fn csg(program: &c2f_eval::Program, export: Option<Export>) -> ExitCode {
 fn print_export(rendered: &c2f_geom::Rendered, export: Export) -> ExitCode {
     match export.write(rendered) {
         Ok(bytes) => {
-            // Flushed here: the flush at exit would drop a write error.
-            let mut out = std::io::stdout().lock();
-            if let Err(err) = out.write_all(&bytes).and_then(|()| out.flush()) {
+            if let Err(err) = print_bytes(&bytes) {
                 eprintln!("error: cannot write the {}: {err}", export.name());
                 return ExitCode::FAILURE;
             }
@@ -302,4 +373,33 @@ fn print_export(rendered: &c2f_geom::Rendered, export: Export) -> ExitCode {
         eprintln!("{} triangles, {} vertices, volume {}", s.triangles, s.vertices, s.volume);
     }
     ExitCode::SUCCESS
+}
+
+/// Prints the program as a `.glb`, animated when it reads `$t`, then its
+/// size on stderr.
+fn print_gltf(program: &mut c2f_eval::Program, options: &c2f_geom::GltfOptions) -> ExitCode {
+    match c2f_geom::program_glb(program, options) {
+        Ok(glb) => {
+            for warning in &glb.warnings {
+                eprintln!("WARNING: {warning}");
+            }
+            if let Err(err) = print_bytes(&glb.bytes) {
+                eprintln!("error: cannot write the glTF: {err}");
+                return ExitCode::FAILURE;
+            }
+            match glb.frames {
+                0 => eprintln!("{} triangles, {} vertices", glb.triangles, glb.vertices),
+                frames => eprintln!("{} triangles, {} vertices, {frames} frames", glb.triangles, glb.vertices),
+            }
+        }
+        Err(why) => eprintln!("WARNING: {why}"),
+    }
+    ExitCode::SUCCESS
+}
+
+/// Writes `bytes` to stdout, flushed here: the flush at exit would drop a
+/// write error.
+fn print_bytes(bytes: &[u8]) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(bytes).and_then(|()| out.flush())
 }

@@ -1,9 +1,10 @@
 //! Compares evaluation with the reference implementation itself: the CSG
 //! tree (`-o x.csg`) and the ECHO output.
 //!
-//! `goldens` checks the committed corpus in `tests/oracle/eval`, and
-//! `parameter_sets` the customizer sets in `tests/oracle/params`
-//! (regenerate both with `scripts/oracle.sh`). `live_examples` runs the
+//! `goldens` checks the committed corpus in `tests/oracle/eval`,
+//! `parameter_sets` the customizer sets in `tests/oracle/params`, and
+//! `animation_times` the files of `tests/oracle/time` at fixed `$t`
+//! (regenerate them with `scripts/oracle.sh`). `live_examples` runs the
 //! installed reference on the examples and libraries shipped with it; it is
 //! ignored by default: `cargo test -p c2f-eval -- --include-ignored`.
 
@@ -140,6 +141,44 @@ fn parameter_sets() {
         }
     }
     assert!(failures.is_empty(), "{} of {count} sets disagree with the reference:\n\n{}", failures.len(), failures.join("\n"));
+}
+
+/// `case.scad` with `$t` set as the app sets it, against `case.T.csg` and
+/// `case.T.echo`, which the reference wrote with `-D '$t=T'`.
+#[test]
+fn animation_times() {
+    let dir = root().join("tests/oracle/time");
+    let mut goldens: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "csg"))
+        .collect();
+    goldens.sort();
+    assert!(!goldens.is_empty(), "no animation time cases");
+    let mut failures = Vec::new();
+    for golden in &goldens {
+        // `turret.0.25.csg`: the case, then the time.
+        let stem = golden.file_stem().unwrap().to_string_lossy().to_string();
+        let (case, time) = stem.split_once('.').expect("case.T.csg");
+        let scad = dir.join(format!("{case}.scad"));
+        let src = c2f_eval::read_source(&scad).unwrap();
+        let mut program = c2f_eval::Program::load(&src, &scad, &[]).unwrap();
+        program.t = time.parse().unwrap();
+        let output = c2f_eval::evaluate(&program);
+        assert!(output.animated, "{case} reads $t");
+        let mut echo = output.echo.join("\n");
+        if !echo.is_empty() {
+            echo.push('\n');
+        }
+        let expected_echo = std::fs::read_to_string(golden.with_extension("echo")).unwrap();
+        let expected_csg = std::fs::read_to_string(golden).unwrap();
+        let report: String =
+            [diff("csg", &expected_csg, &output.csg()), diff("echo", &expected_echo, &echo)].into_iter().flatten().collect();
+        if !report.is_empty() {
+            failures.push(format!("{case} at $t = {time}:\n{report}"));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} times disagree with the reference:\n\n{}", failures.len(), goldens.len(), failures.join("\n"));
 }
 
 #[test]

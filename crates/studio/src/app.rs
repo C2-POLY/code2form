@@ -14,12 +14,14 @@ use c2f_circuit::End;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::animation::{self, Animation, Step};
 use crate::catalogue::{self, Catalogue};
 use crate::circuit;
 use crate::app_icon::{self, Tint};
 use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
+use crate::examples;
 use crate::icon_setting;
 use crate::open_events;
 use crate::pause_edit;
@@ -28,7 +30,7 @@ use crate::recent::RecentFiles;
 use crate::tabs::{self, Owners, Session, Shelf};
 use crate::rewire::{self, Edit, Side};
 use crate::screenshot::Screenshot;
-use crate::settings::{self, Placement, Settings};
+use crate::settings::{self, GLTF_SCALES, Placement, Settings};
 use crate::shortcuts::{self, Action, Shortcuts};
 use crate::theme::{self, Appearance};
 use crate::viewer::{self, PauseEdit, Viewer};
@@ -38,7 +40,7 @@ use crate::pick::{self, Hit};
 use crate::prefs::WireMargin;
 use crate::window;
 use crate::wiring::{self, Emphasis, Look, Wiring};
-use crate::worker::{Format, Reply, Worker, group_digits};
+use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
@@ -241,6 +243,8 @@ struct Tab {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    /// Playing the design along `$t`, when it reads it.
+    animation: Animation,
 }
 
 impl Tab {
@@ -277,6 +281,7 @@ impl Tab {
             console: Console::default(),
             customizer: Customizer::default(),
             customizer_open: None,
+            animation: Animation::default(),
         }
     }
 
@@ -622,7 +627,9 @@ impl StudioApp {
         doc.editor.set_circuit(doc.is_circuit());
         doc.sent_source = Some(doc.text.clone());
         doc.sent_values = doc.customizer.values();
-        doc.sent = self.worker.render(doc.text.clone(), doc.source_path(), doc.sent_values.clone());
+        let t = doc.animation.t();
+        doc.sent = self.worker.render(doc.text.clone(), doc.source_path(), doc.sent_values.clone(), t);
+        doc.animation.sent(doc.sent);
         self.owners.claim(doc.sent, doc.id);
     }
 
@@ -698,6 +705,13 @@ impl StudioApp {
                     self.doc.customizer.set_parameters(parameters);
                 }
                 self.doc.console.set_render_output(outcome.console);
+                let source = (self.doc.sent_source.clone().unwrap_or_default(), self.doc.sent_values.clone());
+                let scene = outcome.result.as_ref().ok();
+                let on_screen = self.doc.animation.rendered(outcome.generation, outcome.animated, &source, scene);
+                let play = self.screenshot.as_ref().is_some_and(|s| s.select.as_deref() == Some("play"));
+                if play && shown && self.doc.animation.animated && self.doc.animation.cached() == 1 {
+                    self.doc.animation.play();
+                }
                 match outcome.result {
                     Ok(scene) => {
                         self.doc.failed = false;
@@ -720,7 +734,9 @@ impl StudioApp {
                             self.watch(outcome.watch.clone());
                         }
                         self.doc.part_boxes = part_boxes(&scene);
-                        self.doc.viewer.set_scene(scene, frame);
+                        if on_screen {
+                            self.doc.viewer.set_scene(scene, frame);
+                        }
                         // The new solid comes in its own colors.
                         self.update_overlay();
                         // A part still being dragged stays where the drag has it.
@@ -1046,6 +1062,62 @@ impl StudioApp {
             self.report_mount_problem();
             self.go_to_wire(0);
         }
+    }
+
+    // ---- Animation ----
+
+    /// What the code and the values are now: the frames rendered from
+    /// something else are out of date.
+    fn animation_source(&self) -> (String, Vec<(String, Literal)>) {
+        (self.doc.text.clone(), self.doc.customizer.values())
+    }
+
+    /// Moves the animation on when a frame is due.
+    fn animate(&mut self, ctx: &egui::Context) {
+        if !self.doc.animation.playing {
+            return;
+        }
+        let source = self.animation_source();
+        let step = self.doc.animation.tick(Instant::now(), self.doc.busy(), &source);
+        self.take_step(ctx, step);
+    }
+
+    fn take_step(&mut self, ctx: &egui::Context, step: Option<Step>) {
+        match step {
+            Some(Step::Wait(wait)) => ctx.request_repaint_after(wait),
+            Some(Step::Show(scene)) => {
+                self.doc.viewer.set_scene(*scene, false);
+                ctx.request_repaint();
+            }
+            Some(Step::Render) => self.render_now(),
+            // A reply wakes the window.
+            None => {}
+        }
+    }
+
+    /// Takes what was done in the animation bar.
+    fn animation_input(&mut self, ctx: &egui::Context, input: BarInput) {
+        let source = self.animation_source();
+        let animation = &mut self.doc.animation;
+        animation.set_fps(input.fps);
+        let mut step = None;
+        // The worker drops a render asked for before a newer one.
+        if input.steps != animation.steps {
+            animation.set_steps(input.steps);
+            step = Some(animation.seek(animation.frame, &source));
+        } else if input.frame != animation.frame {
+            animation.stop();
+            step = Some(animation.seek(input.frame, &source));
+        }
+        if input.toggle {
+            if animation.playing {
+                animation.stop();
+            } else {
+                animation.play();
+            }
+            ctx.request_repaint();
+        }
+        self.take_step(ctx, step);
     }
 
     /// Selects something of the circuit, or nothing; a wire also puts the
@@ -1582,7 +1654,7 @@ impl StudioApp {
             let why = match formats.first() {
                 None => "the model is empty".to_string(),
                 Some(other) if Format::FLAT.contains(other) => "the model is 2D; export it as SVG or DXF".to_string(),
-                Some(_) => "the model is 3D; export it as STL or 3MF".to_string(),
+                Some(_) => "the model is 3D; export it as STL, 3MF or glTF".to_string(),
             };
             self.doc.console.log(Level::Warning, format!("Nothing to export as {}: {why}", format.name()));
             return;
@@ -1609,7 +1681,20 @@ impl StudioApp {
             if self.exportable != Some(self.doc.id) {
                 self.render_now();
             }
-            self.worker.export(target, format, self.settings.binary_stl);
+            let [r, g, b] = self.settings.model_color.map(|c| f32::from(c) / 255.0);
+            let animation = c2f_geom::GltfAnimation {
+                duration: self.settings.gltf_duration,
+                fps: f64::from(self.settings.gltf_fps),
+                looped: self.settings.gltf_loop,
+                ..Default::default()
+            };
+            let gltf = c2f_geom::GltfOptions {
+                scale: self.settings.gltf_scale,
+                color: [r, g, b],
+                animation: Some(animation),
+                ..Default::default()
+            };
+            self.worker.export(target, format, ExportOptions { binary_stl: self.settings.binary_stl, gltf });
         }
     }
 
@@ -1643,6 +1728,7 @@ impl StudioApp {
             }
         }
         if !changed_parts.is_empty() {
+            self.doc.animation.forget();
             for file in &changed_parts {
                 self.doc.console.log(Level::Info, format!("Rendering again: {} changed on disk", file.display()));
             }
@@ -1832,6 +1918,7 @@ impl StudioApp {
                     self.open_dialog(ctx);
                 }
                 self.recent_menu(ui);
+                self.examples_menu(ui);
                 if tool_button(ui, "Save", "Save the file", Some(keys.get(Action::Save))).clicked() {
                     self.save();
                 }
@@ -1856,6 +1943,7 @@ impl StudioApp {
                         let entries = [
                             (Format::Stl, stl),
                             (Format::ThreeMf, "A 3MF package, in millimeters"),
+                            (Format::Glb, "A glTF model for game engines (Godot, Unity), with its colors"),
                             (Format::Svg, "An SVG drawing, in millimeters"),
                             (Format::Dxf, "A DXF drawing of line segments"),
                         ];
@@ -1976,6 +2064,44 @@ impl StudioApp {
         if clear {
             self.recent.clear();
             self.save_recent();
+        }
+    }
+
+    /// The examples that come with the app, a submenu for each subject;
+    /// one opens as a copy in the user's documents.
+    fn examples_menu(&mut self, ui: &mut egui::Ui) {
+        let mut chosen = None;
+        let source = examples::source_dir();
+        let response = ui.menu_button("Examples", |ui| {
+            let found = source.as_deref().map(examples::list).unwrap_or_default();
+            if found.is_empty() {
+                ui.label(RichText::new("No examples found").color(theme::palette().text_dim));
+            }
+            let mut subjects: Vec<&str> = found.iter().map(|e| e.subject.as_str()).collect();
+            subjects.dedup();
+            for subject in subjects {
+                ui.menu_button(subject, |ui| {
+                    for example in found.iter().filter(|e| e.subject == subject) {
+                        if ui.button(&example.file_name).on_hover_text(&example.summary).clicked() {
+                            chosen = Some(example.clone());
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+        response.response.on_hover_text("Open an example, as a copy in Documents/Code2Form/Examples");
+        let (Some(example), Some(source)) = (chosen, source) else { return };
+        let Some(user) = examples::user_dir() else {
+            self.doc.console.log(Level::Error, "Cannot open the example: no home folder");
+            return;
+        };
+        match examples::copy_out(&example, &source, &user) {
+            Ok(copy) => self.open(ui.ctx(), copy),
+            Err(err) => {
+                let message = format!("Cannot copy the example {} to {}: {err}", example.file_name, user.display());
+                self.doc.console.log(Level::Error, message);
+            }
         }
     }
 
@@ -2179,7 +2305,14 @@ impl StudioApp {
 
     fn view_panel(&mut self, ctx: &egui::Context) {
         let mut remove_part = None;
+        let mut bar = None;
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
+            if self.doc.animation.animated && !self.doc.is_circuit() {
+                let frame = Frame::new().fill(theme::palette().bg).inner_margin(Margin::symmetric(12, 6));
+                egui::TopBottomPanel::bottom(Id::new(("animation", self.doc.id)))
+                    .frame(frame)
+                    .show_inside(ui, |ui| bar = Some(animation_bar(ui, &self.doc.animation)));
+            }
             let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
             let status = viewer::Status {
                 rendering: self.doc.busy(),
@@ -2261,6 +2394,9 @@ impl StudioApp {
                 }
             }
         });
+        if let Some(input) = bar {
+            self.animation_input(ctx, input);
+        }
         if self.doc.mount.active {
             self.mount_bar(ctx, self.view_rect);
             // The pins of the wire on screen pulse.
@@ -2624,6 +2760,7 @@ impl eframe::App for StudioApp {
             }
         }
         self.receive();
+        self.animate(ctx);
         self.shortcuts(ctx);
         self.poll_disk(ctx);
 
@@ -2678,6 +2815,39 @@ impl eframe::App for StudioApp {
             }
         }
     }
+}
+
+/// What was set in the animation bar.
+struct BarInput {
+    frame: u32,
+    fps: u32,
+    steps: u32,
+    /// Play or pause was clicked.
+    toggle: bool,
+}
+
+/// The bar under the view of a design that reads `$t`: play or pause, the
+/// time and its slider, the frames a second and the frames from 0 to 1.
+fn animation_bar(ui: &mut egui::Ui, animation: &Animation) -> BarInput {
+    let mut input = BarInput { frame: animation.frame, fps: animation.fps, steps: animation.steps, toggle: false };
+    ui.horizontal(|ui| {
+        let (icon, hint) = if animation.playing { ("⏸", "Pause") } else { ("▶", "Play the model along $t") };
+        input.toggle = ui.button(icon).on_hover_text(hint).clicked();
+        let t = f64::from(input.frame) / f64::from(input.steps);
+        ui.label(RichText::new(format!("$t = {t:.3}")).monospace().color(theme::palette().text));
+        ui.spacing_mut().slider_width = (ui.available_width() - 210.0).max(60.0);
+        let last = input.steps - 1;
+        let frame = format!("Frame {} of {}", input.frame + 1, input.steps);
+        ui.add(egui::Slider::new(&mut input.frame, 0..=last).show_value(false)).on_hover_text(frame);
+        ui.add(egui::DragValue::new(&mut input.fps).range(animation::FPS).suffix(" fps")).on_hover_text("Frames shown a second");
+        ui.add(egui::DragValue::new(&mut input.steps).range(animation::STEPS).suffix(" steps"))
+            .on_hover_text("Frames from $t = 0 to 1, which it does not reach: the last frame leads back to the first");
+        let cached = RichText::new(format!("{}/{}", animation.cached(), animation.steps)).size(12.0);
+        ui.label(cached.color(theme::palette().text_dim)).on_hover_text(
+            "Frames rendered and kept in memory: once all of them are, the animation plays at full speed",
+        );
+    });
+    input
 }
 
 /// What a click on a tab asks.
@@ -2924,6 +3094,19 @@ fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolde
     section_heading(ui, "STL files", "3D printers' slicers read both.");
     ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
     ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
+    ui.add_space(14.0);
+    section_heading(ui, "glTF models", "For game engines: Godot, Unity. glTF counts in meters.");
+    ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[0], "Real size: a millimeter is a millimeter");
+    ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[1], "A unit is a meter: for levels and scenery");
+    ui.add_space(6.0);
+    ui.label(RichText::new("A design that reads $t moves its part()s along it:").color(theme::palette().text_dim));
+    ui.horizontal(|ui| {
+        ui.add(egui::DragValue::new(&mut settings.gltf_duration).range(settings::GLTF_DURATIONS).speed(0.1).suffix(" s"))
+            .on_hover_text("The seconds from $t = 0 to 1");
+        ui.add(egui::DragValue::new(&mut settings.gltf_fps).range(settings::GLTF_FPS).suffix(" fps"))
+            .on_hover_text("Frames sampled a second");
+        ui.checkbox(&mut settings.gltf_loop, "Loop").on_hover_text("Its name ends in -loop, which Godot plays over and over");
+    });
     ui.add_space(14.0);
     section_heading(ui, "Export folder", "Where Export… opens.");
     let mut edit = None;

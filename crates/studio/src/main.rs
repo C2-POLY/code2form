@@ -1,6 +1,7 @@
 //! Code2Form: an editor for 3D designs written as code, with a live
 //! 3D preview.
 
+mod animation;
 mod app;
 mod app_icon;
 mod camera;
@@ -9,6 +10,7 @@ mod circuit;
 mod console;
 mod customizer;
 mod editor;
+mod examples;
 mod find;
 mod highlight;
 mod icon_setting;

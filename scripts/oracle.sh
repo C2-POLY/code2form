@@ -48,4 +48,14 @@ for scad in "$root"/tests/oracle/params/*.scad; do
     "$root/scripts/echo-lines.awk" "$tmp/log" > "$name.$n.echo"
   done < <(python3 -c 'import json, sys; [print(k) for k in json.load(open(sys.argv[1]))["parameterSets"]]' "$name.json")
 done
+# tests/oracle/time (animation): case.T.csg and case.T.echo from
+# `-D '$t=T'`, at the times below.
+for scad in "$root"/tests/oracle/time/*.scad; do
+  name="${scad%.scad}"
+  for t in 0 0.25 0.7; do
+    (cd "$(dirname "$scad")" && "$reference" -D "\$t=$t" -o "$tmp/out.csg" "$(basename "$scad")" 2> "$tmp/log" || true)
+    mv "$tmp/out.csg" "$name.$t.csg"
+    "$root/scripts/echo-lines.awk" "$tmp/log" > "$name.$t.echo"
+  done
+done
 echo "goldens written under $root/tests/oracle"

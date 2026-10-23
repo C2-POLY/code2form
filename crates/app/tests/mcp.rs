@@ -223,6 +223,16 @@ fn image_is_a_png_of_the_model() {
 }
 
 #[test]
+fn parameters_set_the_time() {
+    let mut server = Server::start();
+    let (is_error, report) = server.report("render", json!({ "code": "echo($t);", "parameters": { "$t": 0.25 } }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["echo"], json!(["ECHO: 0.25"]));
+    let (is_error, _) = server.call("render", json!({ "code": "cube(1);", "parameters": { "$t": "soon" } }));
+    assert!(is_error);
+}
+
+#[test]
 fn export_writes_files() {
     let mut server = Server::start();
     let dir = temp_dir("export");
@@ -238,6 +248,26 @@ fn export_writes_files() {
     let bytes = std::fs::read(&package).unwrap();
     assert!(bytes.starts_with(b"PK\x03\x04"));
     assert_eq!(report["written"]["bytes"], bytes.len());
+
+    let gltf = dir.join("part.glb");
+    let (is_error, report) =
+        server.report("export", json!({ "code": "color(\"red\") cube(10);", "output": gltf, "scale": 1 }));
+    assert!(!is_error, "{report}");
+    assert_eq!((report["written"]["format"].clone(), report["triangles"].clone()), (json!("glTF"), json!(12)));
+    let bytes = std::fs::read(&gltf).unwrap();
+    assert!(bytes.starts_with(b"glTF"));
+    let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let document: Value = serde_json::from_slice(&bytes[20..20 + length]).unwrap();
+    assert_eq!(document["nodes"][0]["name"], "part");
+    assert_eq!(document["accessors"][0]["max"], json!([10.0, 10.0, 0.0]));
+    let (is_error, _) = server.call("export", json!({ "code": "cube(1);", "output": gltf, "scale": 0 }));
+    assert!(is_error);
+    let code = "rotate([0, 0, 360 * $t]) part(\"wheel\") cube(5);";
+    let (is_error, report) = server.report("export", json!({ "code": code, "output": gltf, "fps": 10, "loop": false }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["animation"], json!({ "name": "part", "frames": 21 }));
+    let (is_error, report) = server.report("export", json!({ "code": code, "output": gltf, "animate": false }));
+    assert!(!is_error && report.get("animation").is_none(), "{report}");
 
     let (is_error, report) = server.report("export", json!({ "code": "square(10);", "output": dir.join("plate.svg") }));
     assert!(!is_error, "{report}");

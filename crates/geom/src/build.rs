@@ -20,7 +20,7 @@ use crate::primitives::{self, TriMesh, fragments};
 pub const DEFAULT_COLOR: [f32; 4] = [0.976, 0.843, 0.173, 1.0];
 /// Surfaces cut by a `difference`. (0.318 is 81/255, not 1/π.)
 #[allow(clippy::approx_constant)]
-const CUT_COLOR: [f32; 4] = [0.616, 0.796, 0.318, 1.0];
+pub(crate) const CUT_COLOR: [f32; 4] = [0.616, 0.796, 0.318, 1.0];
 #[allow(clippy::approx_constant)]
 const HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.318, 0.318, 0.5];
 const BACKGROUND_COLOR: [f32; 4] = [0.706, 0.706, 0.706, 0.3];
@@ -142,7 +142,7 @@ impl Builder {
 
     fn node_inner(&mut self, node: &Node, ctx: Ctx) -> Model {
         match &node.kind {
-            NodeKind::Group | NodeKind::Union | NodeKind::Render { .. } => {
+            NodeKind::Group | NodeKind::Union | NodeKind::Render { .. } | NodeKind::Part { .. } => {
                 let parts = self.children(node, ctx);
                 self.union(parts)
             }

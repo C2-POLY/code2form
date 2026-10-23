@@ -1,0 +1,70 @@
+// A wooden mannequin that walks on the spot: each limb is a part() in the
+// part it hangs from, so that the forearm follows the arm, the arm the
+// chest, the chest the hips. Every joint turns with $t; press play under
+// the view, or export it as glTF for Godot and Unity.
+//
+// The mannequin faces -Y. A turn about X by a positive angle swings a
+// limb that hangs down towards +Y: backwards.
+
+/* [Walk] */
+// How far the legs swing, in degrees.
+stride = 25; // [5:45]
+// How far the arms swing, in degrees.
+arm_swing = 20; // [0:45]
+
+/* [Hidden] */
+skin = "BurlyWood";
+shirt = "SteelBlue";
+trousers = "DarkSlateGray";
+$fn = 24;
+
+// One step of each leg per loop: 1 forward, -1 back.
+step = sin(360 * $t);
+
+// A limb hanging down from its joint: a rounded rod `length` long.
+module limb(length, r) {
+    sphere(r = r);
+    translate([0, 0, -length]) cylinder(r = r, h = length);
+    translate([0, 0, -length]) sphere(r = r);
+}
+
+// The hips, bobbing twice a loop, once on each foot.
+translate([0, 0, 48 + 1.2 * cos(720 * $t)]) part("hips") {
+    color(trousers) scale([1, 0.6, 0.5]) sphere(r = 9);
+
+    // The chest, turning a little against the hips.
+    rotate([0, 0, -6 * step]) part("chest") {
+        color(shirt) translate([0, 0, 15]) scale([1, 0.6, 1.3]) sphere(r = 11);
+
+        translate([0, 0, 33]) rotate([0, 0, 4 * step]) part("head") {
+            color(skin) cylinder(r = 3, h = 4);
+            color(skin) translate([0, 0, 9]) scale([0.85, 0.95, 1.1]) sphere(r = 7);
+        }
+
+        // The arms swing against the legs; the elbows bend forwards.
+        for (side = [-1, 1]) {
+            name = side < 0 ? "right" : "left";
+            swing = -side * arm_swing * step;
+            translate([side * 13, 0, 25]) rotate([swing, 0, 0]) part(str("upper_arm_", name)) {
+                color(shirt) limb(14, 2.6);
+                translate([0, 0, -14]) rotate([-20 - 15 * (1 - side * step) / 2, 0, 0]) part(str("forearm_", name)) {
+                    color(skin) limb(13, 2.2);
+                    color(skin) translate([0, 0, -15]) sphere(r = 3);
+                }
+            }
+        }
+    }
+
+    // The legs: the knee bends while the leg is behind.
+    for (side = [-1, 1]) {
+        name = side < 0 ? "right" : "left";
+        swing = side * stride * step;
+        translate([side * 5, 0, -2]) rotate([swing, 0, 0]) part(str("thigh_", name)) {
+            color(trousers) limb(21, 3.4);
+            translate([0, 0, -21]) rotate([15 + 15 * side * step, 0, 0]) part(str("shin_", name)) {
+                color(trousers) limb(20, 3);
+                color("SaddleBrown") translate([0, -3, -23]) scale([1, 1.8, 0.6]) sphere(r = 3.5);
+            }
+        }
+    }
+}
