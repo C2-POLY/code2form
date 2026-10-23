@@ -684,7 +684,8 @@ light_sensor();
     let (is_error, report) = server.report("save_part", json!({ "name": "light_sensor.c2f", "code": part }));
     assert!(!is_error, "{report}");
     let path = folder.join("light_sensor.c2f");
-    assert_eq!(report["path"], path.display().to_string());
+    // By components: Windows takes `/` and `\` both as separators.
+    assert_eq!(std::path::Path::new(report["path"].as_str().unwrap()), path, "{report}");
     assert_eq!(report["part"], "electronics/light_sensor.c2f");
     assert_eq!((&report["check"]["ok"], &report["check"]["pins"], &report["check"]["warnings"]), (&json!(true), &json!(4), &json!([])), "{report}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), part);
