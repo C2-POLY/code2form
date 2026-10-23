@@ -4,6 +4,7 @@
 use c2f_circuit::{Circuit, End};
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
+use crate::i18n::tr;
 use crate::pick::{Hit, net};
 use crate::theme;
 
@@ -34,8 +35,9 @@ pub fn end_text(circuit: &Circuit, end: End) -> String {
 pub fn wire_title(circuit: &Circuit, index: usize) -> String {
     let wire = &circuit.wires[index];
     let mut text = match &wire.color {
+        Some(color) if crate::i18n::french() => format!("Fil {color}"),
         Some(color) => format!("{} wire", capitalize(color)),
-        None => "Wire".to_string(),
+        None => tr("Wire", "Fil").to_string(),
     };
     if let Some(label) = &wire.label {
         text.push_str(" · ");
@@ -71,7 +73,7 @@ pub fn bubble(circuit: &Circuit, hit: Hit, lengths: Lengths) -> String {
         Hit::Wire(index) => {
             let wire = &circuit.wires[index];
             let (title, from, to) = (wire_title(circuit, index), circuit.end_name(wire.from), circuit.end_name(wire.to));
-            format!("{title}: {from} ➡ {to} · {:.0} mm", lengths.of(index))
+            tr!("{}: {} ➡ {} · {:.0} mm", "{} : {} ➡ {} · {:.0} mm", title, from, to, lengths.of(index))
         }
         Hit::Part(index) => {
             let part = &circuit.parts[index];
@@ -88,19 +90,20 @@ pub fn card(circuit: &Circuit, hit: Hit, source: &str, lengths: Lengths) -> (Str
             let pin = circuit.pin(end);
             let mut kind = pin.kind.name().to_string();
             if let Some(volts) = pin.voltage {
-                kind.push_str(&format!(" · {volts} V max"));
+                kind.push_str(&tr!(" · {} V max", " · {} V max", volts));
             }
             if pin.reserved {
-                kind.push_str(" · reserved");
+                kind.push_str(tr(" · reserved", " · réservée"));
             }
             let (pins, wires) = net(circuit, end);
             let connected = if wires.is_empty() {
-                "Not wired".to_string()
+                tr("Not wired", "Non câblée").to_string()
             } else {
                 let mut others: Vec<String> =
                     pins.iter().filter(|&&e| e != end).map(|&e| circuit.end_name(e)).collect();
                 others.sort();
-                format!("Net: {} ({} wire{})", others.join(", "), wires.len(), if wires.len() == 1 { "" } else { "s" })
+                let plural = if wires.len() == 1 { "" } else { "s" };
+                tr!("Net: {} ({} wire{})", "Réseau : {} ({} fil{})", others.join(", "), wires.len(), plural)
             };
             (pin_name(circuit, end), vec![kind, connected])
         }
@@ -111,20 +114,21 @@ pub fn card(circuit: &Circuit, hit: Hit, source: &str, lengths: Lengths) -> (Str
                 .filter(|&&b| b == b'\n')
                 .count();
             let ends = format!("{} ➡ {}", end_text(circuit, wire.from), end_text(circuit, wire.to));
-            let length = format!(
+            let length = tr!(
                 "About {:.0} mm of wire: {:.0} mm routed + {} mm margin",
+                "Environ {:.0} mm de fil : {:.0} mm routés + {} mm de marge",
                 lengths.of(index),
                 lengths.routed.get(index).copied().unwrap_or(0.0),
                 crate::pause_edit::number(lengths.margin as f32)
             );
-            (wire_title(circuit, index), vec![ends, length, format!("Line {} of the circuit", line + 1)])
+            (wire_title(circuit, index), vec![ends, length, tr!("Line {} of the circuit", "Ligne {} du circuit", line + 1)])
         }
         Hit::Part(index) => {
             let part = &circuit.parts[index];
             let defines = part.defines();
-            let params = if defines.is_empty() { "No parameters".to_string() } else { defines.join(", ") };
+            let params = if defines.is_empty() { tr("No parameters", "Aucun paramètre").to_string() } else { defines.join(", ") };
             let file = part.path.file_name().map_or_else(|| part.part.clone(), |n| n.to_string_lossy().into_owned());
-            (format!("{} · {}", part.name, part.part), vec![params, format!("Double-click to open {file}")])
+            (format!("{} · {}", part.name, part.part), vec![params, tr!("Double-click to open {}", "Double-cliquez pour ouvrir {}", file)])
         }
     }
 }

@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, RichText, TextStyle};
 
+use crate::i18n::tr;
 use crate::theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,8 +61,8 @@ impl Console {
 
     fn push(&mut self, line: Line, from_render: bool) {
         let prefix = match line.level {
-            Level::Warning if !line.text.to_ascii_lowercase().starts_with("warning") => "WARNING: ",
-            Level::Error if !line.text.to_ascii_lowercase().starts_with("error") => "ERROR: ",
+            Level::Warning if !line.text.to_ascii_lowercase().starts_with("warning") => tr("WARNING: ", "ATTENTION : "),
+            Level::Error if !line.text.to_ascii_lowercase().starts_with("error") => tr("ERROR: ", "ERREUR : "),
             _ => "",
         };
         let text = line.text.trim_end();
@@ -92,7 +93,7 @@ impl Console {
         ui.spacing_mut().item_spacing.y = 2.0;
         if self.rows.is_empty() {
             ui.add_space(4.0);
-            ui.label(RichText::new("Nothing to report yet.").color(theme::palette().text_faint).font(font));
+            ui.label(RichText::new(tr("Nothing to report yet.", "Rien à signaler pour l'instant.")).color(theme::palette().text_faint).font(font));
             return;
         }
         egui::ScrollArea::both().auto_shrink(false).stick_to_bottom(true).show_rows(

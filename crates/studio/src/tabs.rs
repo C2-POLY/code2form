@@ -110,7 +110,8 @@ pub fn step(index: usize, count: usize, forward: bool) -> usize {
 /// has a file of the same name, or "Untitled".
 pub fn names(paths: &[Option<&Path>]) -> Vec<String> {
     let name = |path: Option<&Path>| {
-        path.and_then(Path::file_name).map_or_else(|| "Untitled".to_string(), |n| n.to_string_lossy().into_owned())
+        let untitled = || crate::i18n::tr("Untitled", "Sans titre").to_string();
+        path.and_then(Path::file_name).map_or_else(untitled, |n| n.to_string_lossy().into_owned())
     };
     let names: Vec<String> = paths.iter().map(|&p| name(p)).collect();
     paths

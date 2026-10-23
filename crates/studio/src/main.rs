@@ -1,6 +1,8 @@
 //! Code2Form: an editor for 3D designs written as code, with a live
 //! 3D preview.
 
+#[macro_use]
+mod i18n;
 mod animation;
 mod app;
 mod app_icon;
@@ -54,6 +56,7 @@ file CODE2FORM_RECENT_FILES names; screenshot runs without that variable
 neither read nor change it. The settings and the open tabs are kept in
 that folder too; screenshot runs leave them aside, and show the theme
 CODE2FORM_APPEARANCE names (system, light or dark), the system's by
+default, in the language CODE2FORM_LANGUAGE names (en or fr), English by
 default.";
 
 fn main() -> ExitCode {
@@ -70,7 +73,10 @@ fn main() -> ExitCode {
     if background {
         let appearance = std::env::var("CODE2FORM_APPEARANCE").ok().and_then(|a| theme::Appearance::from_id(&a));
         settings.appearance = appearance.unwrap_or_default();
+        let language = std::env::var("CODE2FORM_LANGUAGE").ok().and_then(|l| i18n::Language::from_id(&l));
+        settings.language = language.unwrap_or_default();
     }
+    i18n::set_language(settings.language);
 
     let saved = settings.window;
     let maximized = settings.window_maximized;

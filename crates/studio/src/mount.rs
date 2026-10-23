@@ -16,6 +16,7 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
+use crate::i18n::tr;
 use crate::inspect;
 
 const VERSION: u32 = 1;
@@ -75,10 +76,10 @@ impl Mount {
                     self.step = read.step;
                     self.done = read.done;
                 }
-                Err(err) => self.problem = Some(format!("Cannot read {}: {err}", file.display())),
+                Err(err) => self.problem = Some(tr!("Cannot read {}: {}", "Impossible de lire {} : {}", file.display(), err)),
             },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => self.problem = Some(format!("Cannot read {}: {err}", file.display())),
+            Err(err) => self.problem = Some(tr!("Cannot read {}: {}", "Impossible de lire {} : {}", file.display(), err)),
         }
     }
 
@@ -145,7 +146,14 @@ impl Mount {
         self.problem = std::fs::write(&temp, text)
             .and_then(|()| std::fs::rename(&temp, path))
             .err()
-            .map(|err| format!("Cannot save the assembly progress to {}: {err}", path.display()));
+            .map(|err| {
+                tr!(
+                    "Cannot save the assembly progress to {}: {}",
+                    "Impossible d’enregistrer la progression du montage dans {} : {}",
+                    path.display(),
+                    err
+                )
+            });
     }
 }
 
@@ -154,13 +162,14 @@ impl Mount {
 pub fn instruction(circuit: &Circuit, index: usize) -> String {
     let wire = &circuit.wires[index];
     let color = match &wire.color {
+        Some(color) if crate::i18n::french() => format!("Fil {color}"),
         Some(color) => {
             let mut chars = color.chars();
             chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect::<String>()) + " wire"
         }
-        None => "Wire".to_string(),
+        None => tr("Wire", "Fil").to_string(),
     };
-    format!("{color}: {} ➡ {}", inspect::end_text(circuit, wire.from), inspect::end_text(circuit, wire.to))
+    tr!("{}: {} ➡ {}", "{} : {} ➡ {}", color, inspect::end_text(circuit, wire.from), inspect::end_text(circuit, wire.to))
 }
 
 /// A camera looking at both ends of a wire from above, across the line

@@ -6,8 +6,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::app_icon::Tint;
+use crate::i18n::Language;
 use crate::shortcuts::Shortcuts;
 use crate::theme::Appearance;
+use crate::worker::Format;
 
 /// The range and default of the code's size, in points.
 pub const CODE_SIZES: std::ops::RangeInclusive<f32> = 10.0..=24.0;
@@ -78,6 +80,19 @@ pub struct Settings {
     pub appearance: Appearance,
     /// Each action's keys.
     pub shortcuts: Shortcuts,
+    /// The interface's language.
+    pub language: Language,
+    /// The tabs open when the app was last closed come back at launch.
+    pub reopen_tabs: bool,
+    /// Files with a name are saved as soon as typing pauses.
+    pub autosave: bool,
+    /// The format the Export shortcut writes a 3D model in; a 2D model
+    /// goes to SVG.
+    pub export_format: Format,
+    /// The Finder (or the file manager) shows each file exported.
+    pub reveal_export: bool,
+    /// Buttons and highlights take the app icon's color rather than blue.
+    pub accent_from_icon: bool,
 }
 
 /// Where the window is, in the screen's points: the top left corner of its
@@ -127,6 +142,12 @@ impl Default for Settings {
             window_maximized: false,
             appearance: Appearance::default(),
             shortcuts: Shortcuts::default(),
+            language: Language::default(),
+            reopen_tabs: true,
+            autosave: false,
+            export_format: Format::Stl,
+            reveal_export: false,
+            accent_from_icon: false,
         }
     }
 }
@@ -190,6 +211,15 @@ impl Settings {
                 "window" => set(&mut settings.window, Placement::parse(value).map(Some)),
                 "window-maximized" => set(&mut settings.window_maximized, value.parse().ok()),
                 "appearance" => set(&mut settings.appearance, Appearance::from_id(value)),
+                "language" => set(&mut settings.language, Language::from_id(value)),
+                "reopen-tabs" => set(&mut settings.reopen_tabs, value.parse().ok()),
+                "autosave" => set(&mut settings.autosave, value.parse().ok()),
+                "export-format" => {
+                    let format = Format::SOLID.iter().find(|f| f.extension() == value).copied();
+                    set(&mut settings.export_format, format)
+                }
+                "reveal-export" => set(&mut settings.reveal_export, value.parse().ok()),
+                "accent-from-icon" => set(&mut settings.accent_from_icon, value.parse().ok()),
                 key => {
                     if let Some(action) = key.strip_prefix("shortcut-") {
                         settings.shortcuts.read(action, value);
@@ -231,6 +261,12 @@ impl Settings {
         }
         text.push_str(&format!("window-maximized = {}\n", self.window_maximized));
         text.push_str(&format!("appearance = {}\n", self.appearance.id()));
+        text.push_str(&format!("language = {}\n", self.language.id()));
+        text.push_str(&format!("reopen-tabs = {}\n", self.reopen_tabs));
+        text.push_str(&format!("autosave = {}\n", self.autosave));
+        text.push_str(&format!("export-format = {}\n", self.export_format.extension()));
+        text.push_str(&format!("reveal-export = {}\n", self.reveal_export));
+        text.push_str(&format!("accent-from-icon = {}\n", self.accent_from_icon));
         self.shortcuts.write(&mut text);
         text
     }
@@ -337,6 +373,12 @@ mod tests {
             window_maximized: true,
             appearance: Appearance::Light,
             shortcuts,
+            language: Language::French,
+            reopen_tabs: false,
+            autosave: true,
+            export_format: Format::Glb,
+            reveal_export: true,
+            accent_from_icon: true,
         };
         settings.save(Some(&store)).unwrap();
         assert_eq!(Settings::load(Some(&store)), settings);
@@ -394,6 +436,14 @@ mod tests {
         assert_eq!(settings.shortcuts, shortcuts, "only F6: K alone types text");
         assert_eq!(Settings::parse("appearance = dark\n").appearance, Appearance::Dark);
         assert!(!Settings::default().format().contains("shortcut-"), "the default keys are not written");
+    }
+
+    #[test]
+    fn check_the_language_and_the_export_format() {
+        let settings = Settings::parse("language = de\nexport-format = svg\nautosave = yes\n");
+        assert_eq!(settings, Settings::default(), "a language, a 2D format and a word it does not know");
+        let settings = Settings::parse("language = fr\nexport-format = 3mf\n");
+        assert_eq!((settings.language, settings.export_format), (Language::French, Format::ThreeMf));
     }
 
     #[test]

@@ -12,10 +12,13 @@ use c2f_eval::customizer::{
     DEFAULT_GROUP, HIDDEN_GROUP, Literal, Parameter, ParameterSets, Widget, parse_typed, set_text,
 };
 
+use crate::i18n::tr;
 use crate::theme;
 
 /// The preset entry that stands for the values written in the file.
-const DESIGN_DEFAULTS: &str = "Design default values";
+fn design_defaults() -> &'static str {
+    tr("Design default values", "Valeurs par défaut du fichier")
+}
 
 #[derive(Default)]
 pub struct Customizer {
@@ -129,11 +132,11 @@ impl Customizer {
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Customizer").strong().size(14.0).color(theme::palette().text));
+            ui.label(RichText::new(tr("Customizer", "Paramètres")).strong().size(14.0).color(theme::palette().text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let reset = ui
-                    .add_enabled(!self.values.is_empty(), Button::new(RichText::new("Reset all").size(12.0)))
-                    .on_hover_text("Back to the values written in the file");
+                    .add_enabled(!self.values.is_empty(), Button::new(RichText::new(tr("Reset all", "Tout réinitialiser")).size(12.0)))
+                    .on_hover_text(tr("Back to the values written in the file", "Revenir aux valeurs écrites dans le fichier"));
                 if reset.clicked() {
                     self.reset();
                     changed = true;
@@ -150,13 +153,15 @@ impl Customizer {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if !self.has_parameters() {
                 ui.add_space(8.0);
-                ui.label(RichText::new("This file declares no parameters.").color(theme::palette().text_dim));
+                ui.label(RichText::new(tr("This file declares no parameters.", "Ce fichier ne déclare aucun paramètre.")).color(theme::palette().text_dim));
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(
+                    RichText::new(tr(
                         "Top-level assignments of plain values become parameters, \
                          with an optional comment for their range or choices:",
-                    )
+                        "Les affectations de valeurs simples au premier niveau deviennent des paramètres, \
+                         avec un commentaire facultatif pour leur plage ou leurs choix :",
+                    ))
                     .size(12.0)
                     .color(theme::palette().text_faint),
                 );
@@ -170,7 +175,9 @@ impl Customizer {
                 return;
             }
             for group in self.groups() {
-                let title = RichText::new(&group).strong().size(13.0).color(theme::palette().text);
+                // The heading of a file without groups is ours to translate.
+                let heading = if group == DEFAULT_GROUP { tr(DEFAULT_GROUP, "Paramètres") } else { group.as_str() };
+                let title = RichText::new(heading).strong().size(13.0).color(theme::palette().text);
                 egui::CollapsingHeader::new(title).id_salt(("customizer-group", &group)).default_open(true).show(
                     ui,
                     |ui| {
@@ -205,12 +212,12 @@ impl Customizer {
         let mut changed = false;
         let mut choice = None;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Preset").size(12.0).color(theme::palette().text_dim));
-            let current = self.selected.clone().unwrap_or_else(|| DESIGN_DEFAULTS.into());
+            ui.label(RichText::new(tr("Preset", "Préréglage")).size(12.0).color(theme::palette().text_dim));
+            let current = self.selected.clone().unwrap_or_else(|| design_defaults().into());
             ComboBox::from_id_salt("customizer-preset").selected_text(&current).width(ui.available_width() - 34.0).show_ui(
                 ui,
                 |ui| {
-                    if ui.selectable_label(self.selected.is_none(), DESIGN_DEFAULTS).clicked() {
+                    if ui.selectable_label(self.selected.is_none(), design_defaults()).clicked() {
                         choice = Some(None);
                     }
                     for (name, _) in &self.sets.sets {
@@ -222,8 +229,8 @@ impl Customizer {
             );
             let delete = ui
                 .add_enabled(self.selected.is_some(), Button::new("🗑").frame(false))
-                .on_hover_text("Delete this preset")
-                .on_disabled_hover_text("Choose a preset to delete it");
+                .on_hover_text(tr("Delete this preset", "Supprimer ce préréglage"))
+                .on_disabled_hover_text(tr("Choose a preset to delete it", "Choisissez un préréglage pour le supprimer"));
             if delete.clicked() {
                 if let Some(name) = self.selected.clone() {
                     if self.update_sets(|sets| sets.remove(&name)) {
@@ -248,14 +255,17 @@ impl Customizer {
             // With an unreadable file, saving reads it again and refuses.
             let can_save = self.sets_path.is_some();
             let field = TextEdit::singleline(&mut self.new_name)
-                .hint_text("Name for a new preset")
+                .hint_text(tr("Name for a new preset", "Nom du nouveau préréglage"))
                 .desired_width(ui.available_width() - 64.0);
-            let field = ui.add_enabled(can_save, field).on_disabled_hover_text("Save the file first");
+            let field = ui.add_enabled(can_save, field).on_disabled_hover_text(tr("Save the file first", "Enregistrez d'abord le fichier"));
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let name = self.new_name.trim().to_string();
             let save = ui
-                .add_enabled(can_save && !name.is_empty(), Button::new("Save"))
-                .on_hover_text("Save the current values as a preset, next to the file");
+                .add_enabled(can_save && !name.is_empty(), Button::new(tr("Save", "Enregistrer")))
+                .on_hover_text(tr(
+                    "Save the current values as a preset, next to the file",
+                    "Enregistrer les valeurs actuelles comme préréglage, à côté du fichier",
+                ));
             if (save.clicked() || enter) && can_save && !name.is_empty() {
                 let values: Vec<(String, String)> =
                     self.parameters.iter().map(|p| (p.name.clone(), set_text(self.value(p)))).collect();
@@ -281,7 +291,11 @@ impl Customizer {
                     Ok(Some(value)) => self.set(&parameter.name, value),
                     Ok(None) => {}
                     Err(why) => {
-                        self.problem = Some(format!("Preset \"{name}\" stops at {}: {why}", parameter.name));
+                        self.problem = Some(tr!(
+                            "Preset \"{name}\" stops at {}: {why}",
+                            "Le préréglage « {name} » s'arrête à {} : {why}",
+                            parameter.name
+                        ));
                         return;
                     }
                 }
@@ -312,7 +326,7 @@ impl Customizer {
             }
             Err(err) => {
                 let _ = std::fs::remove_file(&temp);
-                self.problem = Some(format!("Cannot write {}: {err}", file_name(&path)));
+                self.problem = Some(tr!("Cannot write {}: {err}", "Impossible d'écrire {} : {err}", file_name(&path)));
                 false
             }
         }
@@ -341,7 +355,7 @@ impl Customizer {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let default = parameter.default.to_source();
                     let reset = ui.add(Button::new(RichText::new("↺").size(13.0)).frame(false));
-                    if reset.on_hover_text(format!("Back to {default}")).clicked() {
+                    if reset.on_hover_text(tr!("Back to {default}", "Revenir à {default}")).clicked() {
                         self.problem = None;
                         self.values.remove(&parameter.name);
                         changed = true;
@@ -452,7 +466,10 @@ impl Customizer {
                 let response = ui.add(field);
                 let edited = response.changed();
                 if !readable {
-                    response.on_hover_text("Not a value of the same type as in the file");
+                    response.on_hover_text(tr(
+                        "Not a value of the same type as in the file",
+                        "Pas une valeur du même type que dans le fichier",
+                    ));
                 }
                 match read(&draft.text) {
                     Some(new) if edited && new != value => {
@@ -475,7 +492,13 @@ fn read_sets(path: &Path) -> Result<ParameterSets, String> {
     std::fs::read_to_string(path)
         .map_err(|e| e.to_string())
         .and_then(|json| ParameterSets::parse(&json))
-        .map_err(|err| format!("Cannot read {} ({err}); presets are not saved until it is fixed", file_name(path)))
+        .map_err(|err| {
+            tr!(
+                "Cannot read {} ({err}); presets are not saved until it is fixed",
+                "Impossible de lire {} ({err}) ; les préréglages ne seront pas enregistrés avant sa correction",
+                file_name(path)
+            )
+        })
 }
 
 /// How many decimals a step needs.

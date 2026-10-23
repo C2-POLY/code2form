@@ -22,6 +22,7 @@ use crate::console::{Console, Level};
 use crate::customizer::{self, Customizer};
 use crate::editor::{Editor, FindRequest};
 use crate::examples;
+use crate::i18n::{self, Language, tr};
 use crate::icon_setting;
 use crate::open_events;
 use crate::pause_edit;
@@ -43,14 +44,22 @@ use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
 /// File dialog filters: a name and an extension.
-const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
-const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
-const CIRCUIT_FILES: (&str, &str) = ("Code2Form circuit", "c2fc");
+fn design_files() -> (&'static str, &'static str) {
+    (tr("Code2Form design", "Fichier Code2Form"), "c2f")
+}
+fn scad_files() -> (&'static str, &'static str) {
+    (tr("SCAD design", "Fichier SCAD"), "scad")
+}
+fn circuit_files() -> (&'static str, &'static str) {
+    (tr("Code2Form circuit", "Circuit Code2Form"), "c2fc")
+}
 
 /// How long a customizer control must rest before a re-render.
 const PARAMETER_DEBOUNCE: Duration = Duration::from_millis(120);
 /// How often the file is checked for changes on disk.
 const POLL: Duration = Duration::from_secs(1);
+/// The pause in typing before an autosave.
+const AUTOSAVE_DELAY: Duration = Duration::from_millis(1000);
 
 /// Outside the editor and the text fields, which have their own; the other
 /// shortcuts are the settings'.
@@ -58,51 +67,68 @@ const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)
 const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::Z);
 
 /// The app icons in the settings, in points, and how many in a row.
-const ICON_CHOICE: f32 = 56.0;
+const ICON_CHOICE: f32 = 44.0;
 const ICONS_PER_ROW: usize = 5;
 /// The height of the settings' pages, so that the window keeps its size.
-const SETTINGS_HEIGHT: f32 = 330.0;
+const SETTINGS_HEIGHT: f32 = 380.0;
 
 /// The model colors the settings offer, besides the color picker.
-const MODEL_COLORS: [(&str, [u8; 3]); 8] = [
-    ("Yellow", settings::MODEL_COLOR),
-    ("Orange", [240, 140, 50]),
-    ("Red", [214, 72, 66]),
-    ("Green", [96, 186, 98]),
-    ("Blue", [72, 140, 226]),
-    ("Violet", [150, 104, 214]),
-    ("Gray", [168, 174, 184]),
-    ("White", [238, 238, 236]),
+const MODEL_COLORS: [(fn() -> &'static str, [u8; 3]); 8] = [
+    (|| tr("Yellow", "Jaune"), settings::MODEL_COLOR),
+    (|| tr("Orange", "Orange"), [240, 140, 50]),
+    (|| tr("Red", "Rouge"), [214, 72, 66]),
+    (|| tr("Green", "Vert"), [96, 186, 98]),
+    (|| tr("Blue", "Bleu"), [72, 140, 226]),
+    (|| tr("Violet", "Violet"), [150, 104, 214]),
+    (|| tr("Gray", "Gris"), [168, 174, 184]),
+    (|| tr("White", "Blanc"), [238, 238, 236]),
 ];
 
 /// The pages of the settings window.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
-    AppIcon,
+    General,
+    Appearance,
     Editor,
-    View,
+    Model,
     Export,
     Libraries,
     Shortcuts,
 }
 
 impl Section {
-    const ALL: [Section; 6] =
-        [Section::AppIcon, Section::Editor, Section::View, Section::Export, Section::Libraries, Section::Shortcuts];
+    const ALL: [Section; 7] = [
+        Section::General,
+        Section::Appearance,
+        Section::Editor,
+        Section::Model,
+        Section::Export,
+        Section::Libraries,
+        Section::Shortcuts,
+    ];
 
     /// As a screenshot run names it.
-    fn id(self) -> String {
-        self.name().to_lowercase().replace(' ', "-")
+    fn id(self) -> &'static str {
+        match self {
+            Section::General => "general",
+            Section::Appearance => "appearance",
+            Section::Editor => "editor",
+            Section::Model => "model",
+            Section::Export => "export",
+            Section::Libraries => "libraries",
+            Section::Shortcuts => "shortcuts",
+        }
     }
 
     fn name(self) -> &'static str {
         match self {
-            Section::AppIcon => "App Icon",
-            Section::Editor => "Editor",
-            Section::View => "View",
-            Section::Export => "Export",
-            Section::Libraries => "Libraries",
-            Section::Shortcuts => "Shortcuts",
+            Section::General => tr("General", "Général"),
+            Section::Appearance => tr("Appearance", "Apparence"),
+            Section::Editor => tr("Editor", "Éditeur"),
+            Section::Model => tr("Model", "Modèle"),
+            Section::Export => tr("Export", "Export"),
+            Section::Libraries => tr("Libraries", "Bibliothèques"),
+            Section::Shortcuts => tr("Shortcuts", "Raccourcis"),
         }
     }
 }
@@ -140,8 +166,8 @@ enum Pending {
 impl Pending {
     fn verb(self) -> &'static str {
         match self {
-            Pending::Close => "closing it",
-            Pending::Quit => "quitting",
+            Pending::Close => tr("closing it", "de le fermer"),
+            Pending::Quit => tr("quitting", "de quitter"),
         }
     }
 }
@@ -199,6 +225,8 @@ struct Tab {
 
     /// When to re-render after typing.
     render_deadline: Option<Instant>,
+    /// When to save after typing, with autosave on.
+    autosave_deadline: Option<Instant>,
     /// The source and customizer values of the last render request.
     sent_source: Option<String>,
     sent_values: Vec<(String, Literal)>,
@@ -257,6 +285,7 @@ impl Tab {
             path: None,
             disk_mtime: None,
             render_deadline: None,
+            autosave_deadline: None,
             sent_source: None,
             sent_values: Vec::new(),
             sent: 0,
@@ -298,7 +327,7 @@ impl Tab {
         self.path
             .as_deref()
             .and_then(Path::file_name)
-            .map_or_else(|| "Untitled".to_string(), |n| n.to_string_lossy().into_owned())
+            .map_or_else(|| tr("Untitled", "Sans titre").to_string(), |n| n.to_string_lossy().into_owned())
     }
 
     /// Where the script lives, for resolving its imports.
@@ -389,6 +418,11 @@ pub struct StudioApp {
     allow_close: bool,
     title: String,
     screenshot: Option<Screenshot>,
+    /// The widths of the toolbar's buttons on the right and on the left,
+    /// and of the app's name, as last drawn.
+    toolbar_right: f32,
+    toolbar_left: f32,
+    toolbar_name: f32,
 }
 
 impl StudioApp {
@@ -406,7 +440,7 @@ impl StudioApp {
         let mut app = StudioApp::with(&cc.egui_ctx, cc.gl.clone(), stores, recent, settings, paths);
         let icon = app.settings.icon;
         if let Err(err) = icon_setting::restore(icon) {
-            app.doc.console.log(Level::Warning, format!("Cannot give the app its {} icon: {err}", icon.name()));
+            app.doc.console.log(Level::Warning, tr!("Cannot give the app its {} icon: {err}", "Impossible de donner à l'app l'icône {} : {err}", icon.name()));
         }
         app
     }
@@ -445,7 +479,7 @@ impl StudioApp {
             settings,
             settings_store: stores.settings,
             settings_open: false,
-            settings_section: Section::AppIcon,
+            settings_section: Section::General,
             recording: None,
             record_problem: None,
             icon_choices: Vec::new(),
@@ -455,6 +489,9 @@ impl StudioApp {
             allow_close: false,
             title: String::new(),
             screenshot: Screenshot::from_env(),
+            toolbar_right: 0.0,
+            toolbar_left: 0.0,
+            toolbar_name: 0.0,
         };
         app.apply_settings(ctx);
         // A screenshot of a settings page, as `settings:shortcuts`.
@@ -467,7 +504,8 @@ impl StudioApp {
         // simply not reopened.
         let session = std::mem::take(&mut app.session);
         let mut active = None;
-        for (i, path) in session.paths.iter().enumerate().filter(|(_, p)| p.exists()) {
+        let reopened = if app.settings.reopen_tabs { session.paths.as_slice() } else { &[] };
+        for (i, path) in reopened.iter().enumerate().filter(|(_, p)| p.exists()) {
             app.open(ctx, path.clone());
             if session.active == Some(i) {
                 active = Some(app.shelf.active());
@@ -485,7 +523,7 @@ impl StudioApp {
             if !app.doc.is_blank() {
                 app.add_tab();
             }
-            app.doc.console.log(Level::Info, format!("New file {} (not saved yet)", path.display()));
+            app.doc.console.log(Level::Info, tr!("New file {} (not saved yet)", "Nouveau fichier {} (pas encore enregistré)", path.display()));
             app.doc.path = Some(absolute(&path));
             app.doc.customizer.open(app.doc.path.as_deref());
             app.render_now();
@@ -536,6 +574,7 @@ impl StudioApp {
         if index == self.shelf.active() || index >= self.shelf.len() {
             return;
         }
+        self.autosave_now();
         // A drag or a hover in the view belongs to the view it began in.
         self.doc.rewire = None;
         self.doc.hover = None;
@@ -613,7 +652,7 @@ impl StudioApp {
             return;
         }
         if let Err(err) = session.save(self.session_store.as_deref()) {
-            self.doc.console.log(Level::Warning, format!("Cannot save the open tabs: {err}"));
+            self.doc.console.log(Level::Warning, tr!("Cannot save the open tabs: {err}", "Impossible d'enregistrer les onglets ouverts : {err}"));
         }
         self.session = session;
     }
@@ -660,9 +699,17 @@ impl StudioApp {
                 Reply::Exported { target, result } => {
                     // Asked for by the active tab.
                     match result {
-                        Ok(message) => self.doc.console.log(Level::Info, message.clone()),
+                        Ok(message) => {
+                            self.doc.console.log(Level::Info, message.clone());
+                            if self.settings.reveal_export {
+                                if let Err(err) = reveal(target) {
+                                    let message = tr!("Cannot show {}: {}", "Impossible de montrer {} : {}", target.display(), err);
+                                    self.doc.console.log(Level::Warning, message);
+                                }
+                            }
+                        }
                         Err(error) => {
-                            let message = format!("Exporting {} failed: {error}", target.display());
+                            let message = tr!("Exporting {} failed: {error}", "Échec de l'export de {} : {error}", target.display());
                             self.doc.console.log(Level::Error, message);
                         }
                     }
@@ -1008,7 +1055,7 @@ impl StudioApp {
                     .show(ui, |ui| {
                         ui.set_max_width(rect.width() - 48.0);
                         ui.horizontal(|ui| {
-                            toggled = ui.checkbox(&mut done, "").on_hover_text("Done").changed();
+                            toggled = ui.checkbox(&mut done, "").on_hover_text(tr("Done", "Fait")).changed();
                             ui.label(
                                 RichText::new(&instruction).strong().size(14.0).color(theme::palette().overlay_text),
                             );
@@ -1028,20 +1075,23 @@ impl StudioApp {
                                     .color(theme::palette().overlay_text),
                             );
                             ui.label(
-                                RichText::new(format!("· {done_count} done")).color(theme::palette().overlay_text_dim),
+                                RichText::new(tr!("· {done_count} done", "· {done_count} faits")).color(theme::palette().overlay_text_dim),
                             );
                             ui.add_space(8.0);
                             previous = ui
-                                .add_enabled(step > 0, Button::new("◀ Previous"))
-                                .on_hover_text("The previous wire (Left arrow)")
+                                .add_enabled(step > 0, Button::new(tr("◀ Previous", "◀ Précédent")))
+                                .on_hover_text(tr("The previous wire (Left arrow)", "Le fil précédent (flèche gauche)"))
                                 .clicked();
                             next = ui
-                                .button("Next ▶")
-                                .on_hover_text("Check this wire off and go to the next (Right arrow)")
+                                .button(tr("Next ▶", "Suivant ▶"))
+                                .on_hover_text(tr(
+                                    "Check this wire off and go to the next (Right arrow)",
+                                    "Cocher ce fil et passer au suivant (flèche droite)",
+                                ))
                                 .clicked();
                             restart = ui
-                                .button("Start over")
-                                .on_hover_text("Uncheck every wire and go back to the first")
+                                .button(tr("Start over", "Recommencer"))
+                                .on_hover_text(tr("Uncheck every wire and go back to the first", "Décocher tous les fils et revenir au premier"))
                                 .clicked();
                         });
                     });
@@ -1154,7 +1204,7 @@ impl StudioApp {
                 self.add_part(ctx, &entry, at);
             }
             Some(catalogue::Action::Created(path)) => {
-                self.doc.console.log(Level::Info, format!("Made the part {}", path.display()));
+                self.doc.console.log(Level::Info, tr!("Made the part {}", "Composant créé : {}", path.display()));
                 // In a tab of its own, next to the circuit.
                 self.open(ctx, path);
             }
@@ -1171,7 +1221,7 @@ impl StudioApp {
         let name = catalogue::part_name(&entry.name, &catalogue::part_names(&self.doc.text));
         let (text, cursor) = catalogue::insert_part(&self.doc.text, &name, &entry.rel, at);
         self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
-        self.doc.console.log(Level::Info, format!("Added the part `{name}` ({})", entry.rel));
+        self.doc.console.log(Level::Info, tr!("Added the part `{name}` ({})", "Composant `{name}` ajouté ({})", entry.rel));
         self.render_now();
     }
 
@@ -1279,13 +1329,13 @@ impl StudioApp {
             painter.line_segment([anchor, to], Stroke::new(2.0, color));
         }
         let text = match (&rewire.error, rewire.grabbed, rewire.target) {
-            (Some(error), _, _) => format!("{error} (drop anyway to wire it)"),
-            (None, Some(_), Some(to)) => format!("Move this end to {}", circuit.end_name(to)),
-            (None, Some(_), None) => "Drop away from a pin to remove this wire".to_string(),
+            (Some(error), _, _) => tr!("{error} (drop anyway to wire it)", "{error} (lâchez quand même pour le relier)"),
+            (None, Some(_), Some(to)) => tr!("Move this end to {}", "Déplacer ce bout vers {}", circuit.end_name(to)),
+            (None, Some(_), None) => tr("Drop away from a pin to remove this wire", "Lâchez hors d'une broche pour retirer ce fil").to_string(),
             (None, None, Some(to)) => {
-                format!("New wire: {} ➡ {}", circuit.end_name(rewire.anchor), circuit.end_name(to))
+                tr!("New wire: {} ➡ {}", "Nouveau fil : {} ➡ {}", circuit.end_name(rewire.anchor), circuit.end_name(to))
             }
-            (None, None, None) => "Drop on a pin to wire it".to_string(),
+            (None, None, None) => tr("Drop on a pin to wire it", "Lâchez sur une broche pour la relier").to_string(),
         };
         let color = if rewire.error.is_some() { theme::palette().error } else { theme::palette().overlay_text };
         inspect::paint_bubble_in(painter, rect, pointer, &text, color);
@@ -1297,18 +1347,22 @@ impl StudioApp {
         let Some(wiring) = &self.doc.wiring else { return };
         let circuit = &wiring.circuit;
         let done = match edit {
-            Edit::Move { to, .. } => format!("Moved a wire's end to {}", circuit.end_name(to)),
-            Edit::Add { from, to } => format!("Added a wire: {} ➡ {}", circuit.end_name(from), circuit.end_name(to)),
+            Edit::Move { to, .. } => tr!("Moved a wire's end to {}", "Bout de fil déplacé vers {}", circuit.end_name(to)),
+            Edit::Add { from, to } => tr!("Added a wire: {} ➡ {}", "Fil ajouté : {} ➡ {}", circuit.end_name(from), circuit.end_name(to)),
             Edit::Remove { wire } => {
                 let w = &circuit.wires[wire];
-                format!("Removed the wire {} ➡ {}", circuit.end_name(w.from), circuit.end_name(w.to))
+                tr!("Removed the wire {} ➡ {}", "Fil retiré : {} ➡ {}", circuit.end_name(w.from), circuit.end_name(w.to))
             }
         };
         let fresh = self.doc.sent_source.as_deref() == Some(self.doc.text.as_str());
         let result = if fresh {
             rewire::apply(&self.doc.text, circuit, edit)
         } else {
-            Err("the code changed since the last render: try again once it is rendered".to_string())
+            Err(tr(
+                "the code changed since the last render: try again once it is rendered",
+                "le code a changé depuis le dernier rendu : réessayez une fois le rendu fait",
+            )
+            .to_string())
         };
         match result {
             Ok((text, cursor)) => {
@@ -1319,7 +1373,7 @@ impl StudioApp {
                 self.doc.console.log(Level::Info, done);
                 self.render_now();
             }
-            Err(why) => self.doc.console.log(Level::Warning, format!("Cannot rewire: {why}")),
+            Err(why) => self.doc.console.log(Level::Warning, tr!("Cannot rewire: {why}", "Impossible de recâbler : {why}")),
         }
     }
 
@@ -1387,17 +1441,21 @@ impl StudioApp {
         let result = if fresh {
             part_edit::place(&self.doc.text, instance, at, turns)
         } else {
-            Err("the code changed since the last render: try again once it is rendered".to_string())
+            Err(tr(
+                "the code changed since the last render: try again once it is rendered",
+                "le code a changé depuis le dernier rendu : réessayez une fois le rendu fait",
+            )
+            .to_string())
         };
         match result {
             Ok((text, cursor)) => {
                 self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
                 let mut done = Vec::new();
                 if let Some(at) = at {
-                    done.push(format!("moved `{}` to [{}, {}]", instance.name, at[0], at[1]));
+                    done.push(tr!("moved `{}` to [{}, {}]", "`{}` déplacé en [{}, {}]", instance.name, at[0], at[1]));
                 }
                 if turns > 0 {
-                    done.push(format!("turned `{}` by {}°", instance.name, 90 * turns));
+                    done.push(tr!("turned `{}` by {}°", "`{}` tourné de {}°", instance.name, 90 * turns));
                 }
                 let done = done.join(", ");
                 let mut chars = done.chars();
@@ -1407,7 +1465,7 @@ impl StudioApp {
                 true
             }
             Err(why) => {
-                self.doc.console.log(Level::Warning, format!("Cannot move the part: {why}"));
+                self.doc.console.log(Level::Warning, tr!("Cannot move the part: {why}", "Impossible de déplacer le composant : {why}"));
                 false
             }
         }
@@ -1422,7 +1480,11 @@ impl StudioApp {
         let result = if fresh {
             part_edit::remove(&self.doc.text, &circuit, part)
         } else {
-            Err("the code changed since the last render: try again once it is rendered".to_string())
+            Err(tr(
+                "the code changed since the last render: try again once it is rendered",
+                "le code a changé depuis le dernier rendu : réessayez une fois le rendu fait",
+            )
+            .to_string())
         };
         match result {
             Ok((text, cursor, wires)) => {
@@ -1430,14 +1492,14 @@ impl StudioApp {
                 self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
                 let name = &circuit.parts[part].name;
                 let what = match wires {
-                    0 => format!("Removed `{name}`"),
-                    1 => format!("Removed `{name}` and its wire"),
-                    n => format!("Removed `{name}` and its {n} wires"),
+                    0 => tr!("Removed `{name}`", "`{name}` retiré"),
+                    1 => tr!("Removed `{name}` and its wire", "`{name}` retiré avec son fil"),
+                    n => tr!("Removed `{name}` and its {n} wires", "`{name}` retiré avec ses {n} fils"),
                 };
                 self.doc.console.log(Level::Info, what);
                 self.render_now();
             }
-            Err(why) => self.doc.console.log(Level::Warning, format!("Cannot remove the part: {why}")),
+            Err(why) => self.doc.console.log(Level::Warning, tr!("Cannot remove the part: {why}", "Impossible de retirer le composant : {why}")),
         }
     }
 
@@ -1519,7 +1581,7 @@ impl StudioApp {
                 self.load(path, text);
                 self.doc.editor.focus(ctx);
             }
-            Err(err) => self.doc.console.log(Level::Error, format!("Cannot open {}: {err}", path.display())),
+            Err(err) => self.doc.console.log(Level::Error, tr!("Cannot open {}: {err}", "Impossible d'ouvrir {} : {err}", path.display())),
         }
     }
 
@@ -1528,7 +1590,7 @@ impl StudioApp {
         self.doc.text = text.clone();
         self.doc.saved_text = text;
         self.doc.disk_mtime = modified(&path);
-        self.doc.console.log(Level::Info, format!("Opened {}", path.display()));
+        self.doc.console.log(Level::Info, tr!("Opened {}", "Ouvert : {}", path.display()));
         self.remember(&path);
         // A circuit has no parameters, nor presets next to it.
         self.doc.customizer.open(Some(path.as_path()).filter(|p| !circuit::is_circuit(p)));
@@ -1544,16 +1606,16 @@ impl StudioApp {
     /// Opens a new untitled tab.
     fn new_tab(&mut self, ctx: &egui::Context) {
         self.add_tab();
-        self.doc.console.log(Level::Info, "New file");
+        self.doc.console.log(Level::Info, tr("New file", "Nouveau fichier"));
         self.render_now();
         self.doc.editor.focus(ctx);
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let mut dialog = rfd::FileDialog::new()
-            .set_title("Open a design")
-            .add_filter("Code2Form, SCAD or circuit", &["c2f", "scad", "c2fc"])
-            .add_filter("All files", &["*"]);
+            .set_title(tr("Open a design", "Ouvrir un fichier"))
+            .add_filter(tr("Code2Form, SCAD or circuit", "Code2Form, SCAD ou circuit"), &["c2f", "scad", "c2fc"])
+            .add_filter(tr("All files", "Tous les fichiers"), &["*"]);
         if let Some(dir) = self.doc.directory() {
             dialog = dialog.set_directory(dir);
         }
@@ -1569,7 +1631,7 @@ impl StudioApp {
             self.open(ctx, path);
             return;
         }
-        self.doc.console.log(Level::Warning, format!("{} no longer exists; removed from Open Recent", path.display()));
+        self.doc.console.log(Level::Warning, tr!("{} no longer exists; removed from Open Recent", "{} n'existe plus ; retiré des récents", path.display()));
         self.recent.remove(&path);
         self.save_recent();
     }
@@ -1581,7 +1643,7 @@ impl StudioApp {
 
     fn save_recent(&mut self) {
         if let Err(err) = self.recent.save() {
-            self.doc.console.log(Level::Warning, format!("Cannot save the recent files list: {err}"));
+            self.doc.console.log(Level::Warning, tr!("Cannot save the recent files list: {err}", "Impossible d'enregistrer la liste des récents : {err}"));
         }
     }
 
@@ -1597,13 +1659,13 @@ impl StudioApp {
         // Designs are .c2f files; a .scad file keeps its extension by default.
         let scad = self.doc.path.as_deref().and_then(Path::extension).is_some_and(|e| e == "scad");
         let filters = if self.doc.is_circuit() {
-            [CIRCUIT_FILES, DESIGN_FILES, SCAD_FILES]
+            [circuit_files(), design_files(), scad_files()]
         } else if scad {
-            [SCAD_FILES, DESIGN_FILES, CIRCUIT_FILES]
+            [scad_files(), design_files(), circuit_files()]
         } else {
-            [DESIGN_FILES, SCAD_FILES, CIRCUIT_FILES]
+            [design_files(), scad_files(), circuit_files()]
         };
-        let mut dialog = rfd::FileDialog::new().set_title("Save as");
+        let mut dialog = rfd::FileDialog::new().set_title(tr("Save as", "Enregistrer sous"));
         for (name, extension) in filters {
             dialog = dialog.add_filter(name, &[extension]);
         }
@@ -1624,7 +1686,7 @@ impl StudioApp {
             Ok(()) => {
                 self.doc.saved_text = self.doc.text.clone();
                 self.doc.disk_mtime = modified(&path);
-                self.doc.console.log(Level::Info, format!("Saved {}", path.display()));
+                self.doc.console.log(Level::Info, tr!("Saved {}", "Enregistré : {}", path.display()));
                 self.remember(&path);
                 if circuit::is_circuit(&path) {
                     self.doc.customizer.open(None);
@@ -1642,9 +1704,67 @@ impl StudioApp {
                 true
             }
             Err(err) => {
-                self.doc.console.log(Level::Error, format!("Cannot save {}: {err}", path.display()));
+                self.doc.console.log(Level::Error, tr!("Cannot save {}: {err}", "Impossible d'enregistrer {} : {err}", path.display()));
                 false
             }
+        }
+    }
+
+    /// The format the Export shortcut writes the model in: the settings'
+    /// for a 3D model, SVG for a 2D one.
+    fn shortcut_format(&self) -> Format {
+        match self.doc.model.as_ref().map(|m| m.formats) {
+            Some(formats) if formats == Format::FLAT => Format::Svg,
+            _ => self.settings.export_format,
+        }
+    }
+
+    /// With autosave on, saves the active tab once typing has paused for
+    /// `AUTOSAVE_DELAY`, when it has a file.
+    fn autosave(&mut self, ctx: &egui::Context) {
+        if !self.settings.autosave || self.doc.path.is_none() || !self.doc.is_dirty() {
+            self.doc.autosave_deadline = None;
+            return;
+        }
+        let now = Instant::now();
+        let deadline = *self.doc.autosave_deadline.get_or_insert(now + AUTOSAVE_DELAY);
+        // Not in the middle of a drag in the view, nor of a question.
+        if now < deadline || ctx.input(|i| i.pointer.any_down()) || self.confirm.is_some() {
+            ctx.request_repaint_after(deadline.saturating_duration_since(now).max(Duration::from_millis(50)));
+            return;
+        }
+        self.autosave_now();
+    }
+
+    /// With autosave on, saves the active tab's edits now, quietly, when
+    /// it has a file.
+    fn autosave_now(&mut self) {
+        self.doc.autosave_deadline = None;
+        if !self.settings.autosave || !self.doc.is_dirty() {
+            return;
+        }
+        let Some(path) = self.doc.path.clone() else { return };
+        match std::fs::write(&path, &self.doc.text) {
+            Ok(()) => {
+                self.doc.saved_text = self.doc.text.clone();
+                self.doc.disk_mtime = modified(&path);
+            }
+            Err(err) => {
+                let message = tr!("Cannot save {}: {}", "Impossible d'enregistrer {} : {}", path.display(), err);
+                self.doc.console.log(Level::Error, message);
+                // Not again at every frame: the next edit tries again.
+                self.doc.autosave_deadline = Some(Instant::now() + Duration::from_secs(3600));
+            }
+        }
+    }
+
+    /// With autosave on, saves every tab with a file, as when quitting.
+    fn autosave_all(&mut self) {
+        if !self.settings.autosave {
+            return;
+        }
+        for index in 0..self.shelf.len() {
+            self.in_tab(index, |app| app.autosave_now());
         }
     }
 
@@ -1652,11 +1772,17 @@ impl StudioApp {
         let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
         if !formats.contains(&format) {
             let why = match formats.first() {
-                None => "the model is empty".to_string(),
-                Some(other) if Format::FLAT.contains(other) => "the model is 2D; export it as SVG or DXF".to_string(),
-                Some(_) => "the model is 3D; export it as STL, 3MF or glTF".to_string(),
+                None => tr("the model is empty", "le modèle est vide").to_string(),
+                Some(other) if Format::FLAT.contains(other) => {
+                    tr("the model is 2D; export it as SVG or DXF", "le modèle est en 2D ; exportez-le en SVG ou DXF")
+                        .to_string()
+                }
+                Some(_) => {
+                    tr("the model is 3D; export it as STL, 3MF or glTF", "le modèle est en 3D ; exportez-le en STL, 3MF ou glTF")
+                        .to_string()
+                }
             };
-            self.doc.console.log(Level::Warning, format!("Nothing to export as {}: {why}", format.name()));
+            self.doc.console.log(Level::Warning, tr!("Nothing to export as {}: {why}", "Rien à exporter en {} : {why}", format.name()));
             return;
         }
         let stem = self
@@ -1667,7 +1793,7 @@ impl StudioApp {
             .map_or_else(|| "model".to_string(), |s| s.to_string_lossy().into_owned());
         let (name, extension) = (format.name(), format.extension());
         let mut dialog = rfd::FileDialog::new()
-            .set_title(format!("Export {name}"))
+            .set_title(tr!("Export {name}", "Exporter en {name}"))
             .add_filter(name, &[extension])
             .set_file_name(format!("{stem}.{extension}"));
         // The folder picked in the settings, while it exists.
@@ -1730,7 +1856,7 @@ impl StudioApp {
         if !changed_parts.is_empty() {
             self.doc.animation.forget();
             for file in &changed_parts {
-                self.doc.console.log(Level::Info, format!("Rendering again: {} changed on disk", file.display()));
+                self.doc.console.log(Level::Info, tr!("Rendering again: {} changed on disk", "Nouveau rendu : {} modifié sur le disque", file.display()));
             }
             self.render_when_shown(shown);
         }
@@ -1740,7 +1866,7 @@ impl StudioApp {
         }
         self.doc.disk_mtime = Some(mtime);
         if self.doc.is_dirty() {
-            let message = format!("{} changed on disk; keeping your unsaved edits", path.display());
+            let message = tr!("{} changed on disk; keeping your unsaved edits", "{} modifié sur le disque ; vos modifications non enregistrées sont gardées", path.display());
             self.doc.console.log(Level::Warning, message);
             return;
         }
@@ -1748,11 +1874,11 @@ impl StudioApp {
             Ok(text) if text != self.doc.text => {
                 self.doc.text = text.clone();
                 self.doc.saved_text = text;
-                self.doc.console.log(Level::Info, format!("Reloaded {} (changed on disk)", path.display()));
+                self.doc.console.log(Level::Info, tr!("Reloaded {} (changed on disk)", "Rechargé : {} (modifié sur le disque)", path.display()));
                 self.render_when_shown(shown);
             }
             Ok(_) => {}
-            Err(err) => self.doc.console.log(Level::Error, format!("Cannot reload {}: {err}", path.display())),
+            Err(err) => self.doc.console.log(Level::Error, tr!("Cannot reload {}: {err}", "Impossible de recharger {} : {err}", path.display())),
         }
     }
 
@@ -1776,6 +1902,7 @@ impl StudioApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+            self.autosave_all();
             if let Some(index) = self.next_unsaved() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.select_tab(ctx, index);
@@ -1813,7 +1940,7 @@ impl StudioApp {
                     self.select_tab(ctx, tabs::step(self.shelf.active(), self.shelf.len(), forward));
                 }
                 Action::Render => self.render_now(),
-                Action::Export => self.export(Format::Stl),
+                Action::Export => self.export(self.shortcut_format()),
                 Action::Find | Action::FindReplace => {
                     self.doc.editor.find(FindRequest::Open { replace: action == Action::FindReplace });
                 }
@@ -1906,78 +2033,105 @@ impl StudioApp {
         egui::TopBottomPanel::top("toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
-                ui.label(RichText::new("Code2Form").strong().color(theme::palette().text).size(14.5));
-                ui.add_space(10.0);
-                toolbar_separator(ui);
-
-                if tool_button(ui, "New", "New file, in a new tab", Some(keys.get(Action::New))).clicked() {
-                    self.new_tab(ctx);
-                }
-                if tool_button(ui, "Open…", "Open files, each in its tab", Some(keys.get(Action::Open))).clicked() {
-                    self.open_dialog(ctx);
-                }
-                self.recent_menu(ui);
-                self.examples_menu(ui);
-                if tool_button(ui, "Save", "Save the file", Some(keys.get(Action::Save))).clicked() {
-                    self.save();
-                }
-                if tool_button(ui, "Save As…", "Save under a new name", Some(keys.get(Action::SaveAs))).clicked() {
-                    self.save_as();
-                }
-                toolbar_separator(ui);
-
-                let render = Button::new(RichText::new("Render").color(theme::palette().on_accent).strong())
-                    .fill(theme::palette().accent)
-                    .stroke(Stroke::NONE)
-                    .corner_radius(CornerRadius::same(6));
-                let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
-                if ui.add(render).on_hover_text(format!("Render now ({shortcut})")).clicked() {
-                    self.render_now();
-                }
-                let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
-                let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
-                    ui.menu_button("Export", |ui| {
-                        // Solids above the separator, 2D models below.
-                        let stl = if self.settings.binary_stl { "A binary STL" } else { "An ASCII STL" };
-                        let entries = [
-                            (Format::Stl, stl),
-                            (Format::ThreeMf, "A 3MF package, in millimeters"),
-                            (Format::Glb, "A glTF model for game engines (Godot, Unity), with its colors"),
-                            (Format::Svg, "An SVG drawing, in millimeters"),
-                            (Format::Dxf, "A DXF drawing of line segments"),
-                        ];
-                        for (format, hover) in entries {
-                            if format == Format::Svg {
-                                ui.separator();
+                // Snug buttons: room for the longer French labels.
+                ui.spacing_mut().button_padding.x = 8.0;
+                // The buttons on the right keep their place; the ones on the
+                // left scroll when the window is too narrow for both, as
+                // with longer French labels.
+                let room = (ui.available_width() - self.toolbar_right - 12.0).max(120.0);
+                // The app's name beside its icon, while there is room for it.
+                let named = self.toolbar_left + self.toolbar_name <= room;
+                egui::ScrollArea::horizontal()
+                    .id_salt("toolbar-left")
+                    .max_width(room)
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        let left = ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
+                            if named {
+                                let name = RichText::new("Code2Form").strong().color(theme::palette().text).size(14.5);
+                                self.toolbar_name = ui.label(name).rect.width() + 6.0;
                             }
-                            let mut button = Button::new(format!("{}…", format.name()));
-                            if format == Format::Stl {
-                                button = button.shortcut_text(shortcuts::describe(ctx, &keys.get(Action::Export)));
-                            }
-                            let disabled =
-                                if Format::SOLID.contains(&format) { "For 3D models" } else { "For 2D models" };
-                            let response = ui.add_enabled(formats.contains(&format), button);
-                            if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
-                                self.export(format);
-                                ui.close();
-                            }
-                        }
-                    })
-                });
-                export.response.on_disabled_hover_text("Render a non-empty model first");
+                            ui.add_space(10.0);
+                            toolbar_separator(ui);
 
+                            if tool_button(ui, tr("New", "Nouveau"), tr("New file, in a new tab", "Nouveau fichier, dans un nouvel onglet"), Some(keys.get(Action::New))).clicked() {
+                                self.new_tab(ctx);
+                            }
+                            if tool_button(ui, tr("Open…", "Ouvrir…"), tr("Open files, each in its tab", "Ouvrir des fichiers, chacun dans son onglet"), Some(keys.get(Action::Open))).clicked() {
+                                self.open_dialog(ctx);
+                            }
+                            self.recent_menu(ui);
+                            self.examples_menu(ui);
+                            if tool_button(ui, tr("Save", "Enregistrer"), tr("Save the file", "Enregistrer le fichier"), Some(keys.get(Action::Save))).clicked() {
+                                self.save();
+                            }
+                            if tool_button(ui, tr("Save As…", "Enregistrer sous…"), tr("Save under a new name", "Enregistrer sous un nouveau nom"), Some(keys.get(Action::SaveAs))).clicked() {
+                                self.save_as();
+                            }
+                            toolbar_separator(ui);
+
+                            let render = Button::new(RichText::new(tr("Render", "Rendu")).color(theme::palette().on_accent).strong())
+                                .fill(theme::palette().accent)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(6));
+                            let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
+                            if ui.add(render).on_hover_text(tr!("Render now ({shortcut})", "Lancer le rendu ({shortcut})")).clicked() {
+                                self.render_now();
+                            }
+                            let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
+                            let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
+                                ui.menu_button(tr("Export", "Exporter"), |ui| {
+                                    // Solids above the separator, 2D models below.
+                                    let stl = if self.settings.binary_stl { tr("A binary STL", "Un STL binaire") } else { tr("An ASCII STL", "Un STL ASCII") };
+                                    let entries = [
+                                        (Format::Stl, stl),
+                                        (Format::ThreeMf, tr("A 3MF package, in millimeters", "Un paquet 3MF, en millimètres")),
+                                        (
+                                            Format::Glb,
+                                            tr(
+                                                "A glTF model for game engines (Godot, Unity), with its colors",
+                                                "Un modèle glTF pour moteurs de jeu (Godot, Unity), avec ses couleurs",
+                                            ),
+                                        ),
+                                        (Format::Svg, tr("An SVG drawing, in millimeters", "Un dessin SVG, en millimètres")),
+                                        (Format::Dxf, tr("A DXF drawing of line segments", "Un dessin DXF en segments")),
+                                    ];
+                                    for (format, hover) in entries {
+                                        if format == Format::Svg {
+                                            ui.separator();
+                                        }
+                                        let mut button = Button::new(format!("{}…", format.name()));
+                                        if format == self.shortcut_format() {
+                                            button = button.shortcut_text(shortcuts::describe(ctx, &keys.get(Action::Export)));
+                                        }
+                                        let disabled =
+                                            if Format::SOLID.contains(&format) { tr("For 3D models", "Pour les modèles 3D") } else { tr("For 2D models", "Pour les modèles 2D") };
+                                        let response = ui.add_enabled(formats.contains(&format), button);
+                                        if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
+                                            self.export(format);
+                                            ui.close();
+                                        }
+                                    }
+                                })
+                            });
+                            export.response.on_disabled_hover_text(tr("Render a non-empty model first", "Faites d'abord le rendu d'un modèle non vide"));
+                        });
+                        let width = left.response.rect.width();
+                        self.toolbar_left = if named { width - self.toolbar_name } else { width };
+                    });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if tool_button(ui, "Settings…", "Settings", Some(keys.get(Action::Settings))).clicked() {
+                    if tool_button(ui, tr("Settings…", "Réglages…"), tr("Settings", "Réglages"), Some(keys.get(Action::Settings))).clicked() {
                         self.settings_open = true;
                     }
                     toolbar_separator(ui);
                     if self.doc.is_circuit() {
-                        let button = egui::Button::selectable(self.doc.mount.active, "Assembly");
+                        let button = egui::Button::selectable(self.doc.mount.active, tr("Assembly", "Montage"));
                         let toggle = ui.add_enabled(self.mount_names().is_some(), button);
-                        let hint = "Wire the circuit one wire at a time, in the file's order";
-                        if toggle.on_hover_text(hint).on_disabled_hover_text("The circuit has no wires").clicked() {
+                        let hint = tr("Wire the circuit one wire at a time, in the file's order", "Câbler le circuit fil par fil, dans l'ordre du fichier");
+                        if toggle.on_hover_text(hint).on_disabled_hover_text(tr("The circuit has no wires", "Le circuit n'a aucun fil")).clicked() {
                             self.set_mount(!self.doc.mount.active);
                         }
                         toolbar_separator(ui);
@@ -1985,52 +2139,64 @@ impl StudioApp {
                     // A circuit has no parameters: room for its own toggles.
                     if self.doc.is_circuit() {
                         let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
-                        toggle.on_hover_text("The parts of the library and your own, to add to the circuit");
+                        toggle.on_hover_text(tr(
+                            "The parts of the library and your own, to add to the circuit",
+                            "Les composants de la bibliothèque et les vôtres, à ajouter au circuit",
+                        ));
                     } else {
                         let mut shown = self.doc.customizer_shown();
-                        let toggle = ui.toggle_value(&mut shown, "Customizer");
-                        if toggle.on_hover_text("Show the parameters the file declares").changed() {
+                        let toggle = ui.toggle_value(&mut shown, tr("Customizer", "Paramètres"));
+                        if toggle.on_hover_text(tr("Show the parameters the file declares", "Afficher les paramètres que déclare le fichier")).changed() {
                             self.doc.customizer_open = Some(shown);
                         }
                     }
                     toolbar_separator(ui);
-                    ui.toggle_value(&mut self.doc.viewer.show_grid, "Grid").on_hover_text("Show the XY grid");
-                    ui.toggle_value(&mut self.doc.viewer.show_axes, "Axes").on_hover_text("Show the axes");
-                    ui.toggle_value(&mut self.doc.viewer.layer_view, "Layers")
-                        .on_hover_text("Cut the model at the top of a layer, picked with the slider on the right");
+                    ui.toggle_value(&mut self.doc.viewer.show_grid, tr("Grid", "Grille"))
+                        .on_hover_text(tr("Show the XY grid", "Afficher la grille XY"));
+                    ui.toggle_value(&mut self.doc.viewer.show_axes, "Axes").on_hover_text(tr("Show the axes", "Afficher les axes"));
+                    ui.toggle_value(&mut self.doc.viewer.layer_view, tr("Layers", "Couches")).on_hover_text(tr(
+                        "Cut the model at the top of a layer, picked with the slider on the right",
+                        "Couper le modèle au sommet d'une couche, choisie avec le curseur à droite",
+                    ));
                     if self.doc.viewer.has_pauses() {
                         ui.toggle_value(&mut self.doc.viewer.show_pauses, "Pauses")
-                            .on_hover_text("Show the heights where the print pauses");
+                            .on_hover_text(tr("Show the heights where the print pauses", "Afficher les hauteurs où l'impression fait une pause"));
                     }
                     toolbar_separator(ui);
-                    ui.menu_button("View", |ui| {
+                    ui.menu_button(tr("View", "Vue"), |ui| {
                         for &(name, yaw, pitch) in viewer::PRESETS {
-                            if ui.button(name).clicked() {
+                            if ui.button(viewer::preset_label(name)).clicked() {
                                 self.doc.viewer.look_from(yaw, pitch);
                                 ui.close();
                             }
                         }
                         ui.separator();
-                        ui.checkbox(&mut self.doc.viewer.turntable, "Turntable")
-                            .on_hover_text("Turn the view around the model (a drag in the view stops it)");
+                        ui.checkbox(&mut self.doc.viewer.turntable, tr("Turntable", "Rotation auto")).on_hover_text(tr(
+                            "Turn the view around the model (a drag in the view stops it)",
+                            "Tourner la vue autour du modèle (un glisser dans la vue l'arrête)",
+                        ));
                         // A circuit's enclosure: a view setting, kept off the
                         // toolbar, which a circuit fills.
                         if self.doc.is_circuit() && self.doc.viewer.has_enclosure() {
                             ui.separator();
                             let mut shown = self.doc.viewer.shows_enclosure();
-                            let toggle = ui.checkbox(&mut shown, "Enclosure");
-                            if toggle.on_hover_text("Show the enclosure around the parts, see-through").changed() {
+                            let toggle = ui.checkbox(&mut shown, tr("Enclosure", "Boîtier"));
+                            if toggle.on_hover_text(tr("Show the enclosure around the parts, see-through", "Afficher le boîtier autour des composants, transparent")).changed() {
                                 self.doc.viewer.set_show_enclosure(shown);
                             }
                         }
                     });
                     if ui
-                        .button("Reset view")
-                        .on_hover_text("Default angle, fit the model (or double-click the view)")
+                        .button(tr("Reset view", "Cadrer"))
+                        .on_hover_text(tr(
+                            "Default angle, fit the model (or double-click the view)",
+                            "Angle par défaut, modèle cadré (ou double-clic dans la vue)",
+                        ))
                         .clicked()
                     {
                         self.doc.viewer.reset();
                     }
+                    self.toolbar_right = ui.min_rect().width();
                 });
             });
         });
@@ -2040,7 +2206,7 @@ impl StudioApp {
         let mut chosen = None;
         let mut clear = false;
         let menu = ui.add_enabled_ui(!self.recent.is_empty(), |ui| {
-            ui.menu_button("Open Recent", |ui| {
+            ui.menu_button(tr("Open Recent", "Récents"), |ui| {
                 for path in self.recent.paths() {
                     let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
                     let folder = path.parent().map(display_folder).unwrap_or_default();
@@ -2051,13 +2217,15 @@ impl StudioApp {
                     }
                 }
                 ui.separator();
-                if ui.button("Clear Menu").clicked() {
+                if ui.button(tr("Clear Menu", "Effacer la liste")).clicked() {
                     clear = true;
                     ui.close();
                 }
             })
         });
-        menu.response.on_hover_text("Reopen one of the last files").on_disabled_hover_text("No recent files");
+        menu.response
+            .on_hover_text(tr("Reopen one of the last files", "Rouvrir un des derniers fichiers"))
+            .on_disabled_hover_text(tr("No recent files", "Aucun fichier récent"));
         if let Some(path) = chosen {
             self.open_recent(ui.ctx(), path);
         }
@@ -2072,10 +2240,10 @@ impl StudioApp {
     fn examples_menu(&mut self, ui: &mut egui::Ui) {
         let mut chosen = None;
         let source = examples::source_dir();
-        let response = ui.menu_button("Examples", |ui| {
+        let response = ui.menu_button(tr("Examples", "Exemples"), |ui| {
             let found = source.as_deref().map(examples::list).unwrap_or_default();
             if found.is_empty() {
-                ui.label(RichText::new("No examples found").color(theme::palette().text_dim));
+                ui.label(RichText::new(tr("No examples found", "Aucun exemple trouvé")).color(theme::palette().text_dim));
             }
             let mut subjects: Vec<&str> = found.iter().map(|e| e.subject.as_str()).collect();
             subjects.dedup();
@@ -2090,16 +2258,19 @@ impl StudioApp {
                 });
             }
         });
-        response.response.on_hover_text("Open an example, as a copy in Documents/Code2Form/Examples");
+        response.response.on_hover_text(tr(
+            "Open an example, as a copy in Documents/Code2Form/Examples",
+            "Ouvrir un exemple, en copie dans Documents/Code2Form/Examples",
+        ));
         let (Some(example), Some(source)) = (chosen, source) else { return };
         let Some(user) = examples::user_dir() else {
-            self.doc.console.log(Level::Error, "Cannot open the example: no home folder");
+            self.doc.console.log(Level::Error, tr("Cannot open the example: no home folder", "Impossible d'ouvrir l'exemple : pas de dossier personnel"));
             return;
         };
         match examples::copy_out(&example, &source, &user) {
             Ok(copy) => self.open(ui.ctx(), copy),
             Err(err) => {
-                let message = format!("Cannot copy the example {} to {}: {err}", example.file_name, user.display());
+                let message = tr!("Cannot copy the example {} to {}: {err}", "Impossible de copier l'exemple {} dans {} : {err}", example.file_name, user.display());
                 self.doc.console.log(Level::Error, message);
             }
         }
@@ -2113,20 +2284,20 @@ impl StudioApp {
                 let small = |text: String| RichText::new(text).size(12.0).color(theme::palette().text_dim);
                 if self.doc.busy() {
                     ui.add(egui::Spinner::new().size(11.0).color(theme::palette().accent_strong));
-                    ui.label(RichText::new("Rendering…").size(12.0).color(theme::palette().accent_strong));
+                    ui.label(RichText::new(tr("Rendering…", "Rendu en cours…")).size(12.0).color(theme::palette().accent_strong));
                 } else if !self.settings.render_while_typing && self.doc.unrendered() {
                     status_dot(ui, theme::palette().warning);
                     let shortcut = shortcuts::describe(ctx, &self.settings.shortcuts.get(Action::Render));
                     ui.label(
-                        RichText::new(format!("Not rendered · {shortcut}")).size(12.0).color(theme::palette().warning),
+                        RichText::new(tr!("Not rendered · {shortcut}", "Non rendu · {shortcut}")).size(12.0).color(theme::palette().warning),
                     )
-                    .on_hover_text("Rendering as you type is off in the settings");
+                    .on_hover_text(tr("Rendering as you type is off in the settings", "Le rendu pendant la frappe est désactivé dans les réglages"));
                 } else if self.doc.failed {
                     status_dot(ui, theme::palette().error);
-                    ui.label(RichText::new("Render failed").size(12.0).color(theme::palette().error));
+                    ui.label(RichText::new(tr("Render failed", "Échec du rendu")).size(12.0).color(theme::palette().error));
                 } else {
                     status_dot(ui, theme::palette().success);
-                    ui.label(RichText::new("Ready").size(12.0).color(theme::palette().text));
+                    ui.label(RichText::new(tr("Ready", "Prêt")).size(12.0).color(theme::palette().text));
                 }
                 if let Some(elapsed) = self.doc.elapsed {
                     ui.label(small(format!("· {}", format_duration(elapsed))));
@@ -2135,11 +2306,11 @@ impl StudioApp {
                     if !model.empty {
                         let s = model.stats;
                         if model.parts > 0 {
-                            ui.label(small(format!("· {} part{}", model.parts, plural(model.parts))));
+                            ui.label(small(tr!("· {} part{}", "· {} pièce{}", model.parts, plural(model.parts))));
                             ui.label(small(format!("· {} triangles", group_digits(s.triangles))));
                         } else if model.is_2d {
-                            ui.label(small(format!("· 2D · {} vertices", group_digits(s.vertices))));
-                            ui.label(small(format!("· area {}", format_quantity(s.volume))));
+                            ui.label(small(tr!("· 2D · {} vertices", "· 2D · {} sommets", group_digits(s.vertices))));
+                            ui.label(small(tr!("· area {}", "· aire {}", format_quantity(s.volume))));
                         } else {
                             ui.label(small(format!("· {} triangles", group_digits(s.triangles))));
                             ui.label(small(format!("· volume {}", format_quantity(s.volume))));
@@ -2151,14 +2322,14 @@ impl StudioApp {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if self.doc.is_dirty() {
                         ui.label(RichText::new("●").size(12.0).color(theme::palette().warning))
-                            .on_hover_text("Unsaved changes");
+                            .on_hover_text(tr("Unsaved changes", "Modifications non enregistrées"));
                     }
                     let name = ui.label(RichText::new(self.doc.file_name()).size(12.0).color(theme::palette().text));
                     if let Some(path) = &self.doc.path {
                         name.on_hover_text(path.display().to_string());
                     }
                     if let Some((line, column)) = self.doc.editor.cursor {
-                        ui.label(small(format!("Ln {}, Col {}   ", line + 1, column + 1)));
+                        ui.label(small(tr!("Ln {}, Col {}   ", "Ligne {}, col {}   ", line + 1, column + 1)));
                     }
                 });
             });
@@ -2183,16 +2354,16 @@ impl StudioApp {
                 let warnings = console.count(Level::Warning);
                 let echoes = console.count(Level::Echo);
                 if errors > 0 {
-                    pill(ui, &format!("{errors} error{}", plural(errors)), theme::palette().error);
+                    pill(ui, &tr!("{errors} error{}", "{errors} erreur{}", plural(errors)), theme::palette().error);
                 }
                 if warnings > 0 {
-                    pill(ui, &format!("{warnings} warning{}", plural(warnings)), theme::palette().warning);
+                    pill(ui, &tr!("{warnings} warning{}", "{warnings} avertissement{}", plural(warnings)), theme::palette().warning);
                 }
                 if echoes > 0 {
                     pill(ui, &format!("{echoes} echo"), theme::palette().text_dim);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add_enabled(!console.is_empty(), Button::new(RichText::new("Clear").size(12.0))).clicked() {
+                    if ui.add_enabled(!console.is_empty(), Button::new(RichText::new(tr("Clear", "Effacer")).size(12.0))).clicked() {
                         console.clear();
                     }
                 });
@@ -2231,9 +2402,13 @@ impl StudioApp {
             .default_width((width * 0.42).max(320.0))
             .width_range(260.0..=(width - 300.0).max(300.0))
             .show(ctx, |ui| {
-                if self.doc.editor.show(ui, &mut self.doc.text) && self.settings.render_while_typing {
-                    let delay = Duration::from_millis(self.settings.render_delay.into());
-                    self.doc.render_deadline = Some(Instant::now() + delay);
+                if self.doc.editor.show(ui, &mut self.doc.text) {
+                    if self.settings.render_while_typing {
+                        let delay = Duration::from_millis(self.settings.render_delay.into());
+                        self.doc.render_deadline = Some(Instant::now() + delay);
+                    }
+                    // Typing on puts the save off.
+                    self.doc.autosave_deadline = None;
                 }
             });
     }
@@ -2272,7 +2447,7 @@ impl StudioApp {
                     let shortcut = shortcuts::describe(ctx, &new_keys);
                     let plus = ui
                         .add(Button::new(RichText::new("+").size(15.0).color(theme::palette().text_dim)).frame(false));
-                    new = plus.on_hover_text(format!("New file in a new tab ({shortcut})")).clicked();
+                    new = plus.on_hover_text(tr!("New file in a new tab ({shortcut})", "Nouveau fichier dans un nouvel onglet ({shortcut})")).clicked();
                 });
             });
         });
@@ -2320,7 +2495,10 @@ impl StudioApp {
                 has_model,
                 is_2d: self.doc.model.as_ref().is_some_and(|m| m.is_2d),
                 empty_hint: if self.doc.is_circuit() {
-                    "The circuit places no parts yet. Add a [parts.name] table with the part's file."
+                    tr(
+                        "The circuit places no parts yet. Add a [parts.name] table with the part's file.",
+                        "Le circuit ne place encore aucun composant. Ajoutez une table [parts.name] avec le fichier du composant.",
+                    )
                 } else {
                     viewer::empty_hint(!self.doc.text.trim().is_empty())
                 },
@@ -2335,8 +2513,13 @@ impl StudioApp {
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
             if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
                 let name = &original.parts[drag.part].name;
-                let turned = if drag.turns > 0 { format!(", turned {}°", 90 * drag.turns) } else { String::new() };
-                let text = format!("`{name}` at [{}, {}]{turned} · Shift: 0.1 mm · R: turn", drag.at[0], drag.at[1]);
+                let turned = if drag.turns > 0 { tr!(", turned {}°", ", tourné de {}°", 90 * drag.turns) } else { String::new() };
+                let text = tr!(
+                    "`{name}` at [{}, {}]{turned} · Shift: 0.1 mm · R: turn",
+                    "`{name}` en [{}, {}]{turned} · Maj : 0,1 mm · R : tourner",
+                    drag.at[0],
+                    drag.at[1]
+                );
                 inspect::paint_bubble(&ui.painter_at(response.rect), response.rect, pointer, &text);
             }
             // A part dragged from the catalogue lands where it is dropped.
@@ -2358,8 +2541,8 @@ impl StudioApp {
                     let card = inspect::paint_card(&painter, response.rect, &title, &lines);
                     if let Hit::Part(part) = selection {
                         let button = egui::Rect::from_min_size(card.left_bottom() + Vec2::new(0.0, 6.0), Vec2::new(150.0, 22.0));
-                        let remove = ui.put(button, Button::new("Remove with its wires"));
-                        if remove.on_hover_text("Remove the part and every wire to it (Delete)").clicked() {
+                        let remove = ui.put(button, Button::new(tr("Remove with its wires", "Retirer avec ses fils")));
+                        if remove.on_hover_text(tr("Remove the part and every wire to it (Delete)", "Retirer le composant et tous ses fils (Suppr)")).clicked() {
                             remove_part = Some(part);
                         }
                     }
@@ -2382,13 +2565,16 @@ impl StudioApp {
                         .range(0.0..=500.0)
                         .speed(0.5)
                         .max_decimals(1)
-                        .prefix("Wire margin: ")
+                        .prefix(tr("Wire margin: ", "Marge des fils : "))
                         .suffix(" mm");
-                    let hint = "Added to each wire's routed length, for its stripped ends and some slack";
+                    let hint = tr(
+                        "Added to each wire's routed length, for its stripped ends and some slack",
+                        "Ajoutée à la longueur tracée de chaque fil, pour ses bouts dénudés et un peu de mou",
+                    );
                     if ui.put(field, value).on_hover_text(hint).changed() {
                         self.wire_margin.mm = mm;
                         if let Err(err) = self.wire_margin.save() {
-                            self.doc.console.log(Level::Warning, format!("Cannot save the wire margin: {err}"));
+                            self.doc.console.log(Level::Warning, tr!("Cannot save the wire margin: {err}", "Impossible d'enregistrer la marge des fils : {err}"));
                         }
                     }
                 }
@@ -2416,19 +2602,22 @@ impl StudioApp {
     fn apply_pause_edit(&mut self, ctx: &egui::Context, edit: PauseEdit) {
         // The pauses point into the text they were rendered from.
         if self.doc.viewer.scene_source() != self.doc.text {
-            let message = "The code changed since the last render: try again once it is rendered";
+            let message = tr(
+                "The code changed since the last render: try again once it is rendered",
+                "Le code a changé depuis le dernier rendu : réessayez une fois le rendu fait",
+            );
             self.doc.console.log(Level::Warning, message);
             return;
         }
         let (result, done) = match edit {
             PauseEdit::Add { z } => {
-                (Ok(pause_edit::add(&self.doc.text, z)), format!("Added a pause at {} mm", pause_edit::number(z)))
+                (Ok(pause_edit::add(&self.doc.text, z)), tr!("Added a pause at {} mm", "Pause ajoutée à {} mm", pause_edit::number(z)))
             }
             PauseEdit::Move { number, z } => (
                 pause_edit::set_height(&self.doc.text, number, z),
-                format!("Moved a pause to {} mm", pause_edit::number(z)),
+                tr!("Moved a pause to {} mm", "Pause déplacée à {} mm", pause_edit::number(z)),
             ),
-            PauseEdit::Remove { call } => (pause_edit::remove(&self.doc.text, call), "Removed a pause".to_string()),
+            PauseEdit::Remove { call } => (pause_edit::remove(&self.doc.text, call), tr("Removed a pause", "Pause retirée").to_string()),
         };
         match result {
             Ok((text, cursor)) => {
@@ -2436,7 +2625,7 @@ impl StudioApp {
                 self.doc.console.log(Level::Info, done);
                 self.render_now();
             }
-            Err(why) => self.doc.console.log(Level::Warning, format!("Cannot change the pause: {why}")),
+            Err(why) => self.doc.console.log(Level::Warning, tr!("Cannot change the pause: {why}", "Impossible de modifier la pause : {why}")),
         }
     }
 
@@ -2446,6 +2635,7 @@ impl StudioApp {
         let settings = &self.settings;
         theme::set_code_size(ctx, settings.code_size);
         theme::style_window(ctx, settings.appearance);
+        theme::set_accent(ctx, settings.accent_from_icon.then_some(settings.icon));
         ctx.set_zoom_factor(settings.interface_size);
         self.worker.set_libraries(settings.library_folders.clone());
         self.catalogue.set_libraries(settings.library_folders.clone());
@@ -2496,7 +2686,7 @@ impl StudioApp {
         }
         self.note_window();
         if let Err(err) = self.settings.save(self.settings_store.as_deref()) {
-            self.doc.console.log(Level::Warning, format!("Cannot save the settings: {err}"));
+            self.doc.console.log(Level::Warning, tr!("Cannot save the settings: {err}", "Impossible d'enregistrer les réglages : {err}"));
         }
         self.saved_settings = self.settings.clone();
     }
@@ -2530,7 +2720,7 @@ impl StudioApp {
         let mut done = false;
         let before = self.settings.clone();
         let modal = egui::Modal::new(Id::new("settings")).show(ctx, |ui| {
-            ui.label(RichText::new("Settings").heading().color(theme::palette().text));
+            ui.label(RichText::new(tr("Settings", "Réglages")).heading().color(theme::palette().text));
             ui.add_space(10.0);
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
@@ -2557,22 +2747,30 @@ impl StudioApp {
                     widgets.inactive.weak_bg_fill = theme::palette().hover;
                     widgets.hovered.bg_fill = theme::palette().border_strong;
                     widgets.hovered.weak_bg_fill = theme::palette().border_strong;
-                    match self.settings_section {
-                        Section::AppIcon => chosen = self.icon_page(ui),
-                        Section::Editor => editor_page(ui, ctx, &mut self.settings),
-                        Section::View => view_page(ui, ctx, &mut self.settings),
-                        Section::Export => export_folder = export_page(ui, &mut self.settings),
-                        Section::Libraries => (libraries, fonts) = libraries_page(ui, &self.settings),
-                        Section::Shortcuts => {
-                            let problem = self.record_problem.as_deref();
-                            shortcut_edit = shortcuts_page(ui, ctx, &self.settings.shortcuts, self.recording, problem);
-                        }
+                    if self.settings_section == Section::Shortcuts {
+                        // A list of its own, which scrolls.
+                        let problem = self.record_problem.as_deref();
+                        shortcut_edit = shortcuts_page(ui, ctx, &self.settings.shortcuts, self.recording, problem);
+                        return;
                     }
+                    let scroll = egui::ScrollArea::vertical()
+                        .id_salt(("settings-page", self.settings_section.id()))
+                        .max_height(SETTINGS_HEIGHT)
+                        .auto_shrink([false, true]);
+                    scroll.show(ui, |ui| match self.settings_section {
+                        Section::General => general_page(ui, &mut self.settings),
+                        Section::Appearance => chosen = self.appearance_page(ui, ctx),
+                        Section::Editor => editor_page(ui, &mut self.settings),
+                        Section::Model => model_page(ui, ctx, &mut self.settings),
+                        Section::Export => export_folder = export_page(ui, ctx, &mut self.settings),
+                        Section::Libraries => (libraries, fonts) = libraries_page(ui, &self.settings),
+                        Section::Shortcuts => {}
+                    });
                 });
             });
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let button = Button::new(RichText::new("Done").color(theme::palette().on_accent).strong())
+                let button = Button::new(RichText::new(tr("Done", "OK")).color(theme::palette().on_accent).strong())
                     .fill(theme::palette().accent);
                 if ui.add(button).clicked() {
                     done = true;
@@ -2587,6 +2785,13 @@ impl StudioApp {
         }
         if self.settings.interface_size != before.interface_size {
             ctx.set_zoom_factor(self.settings.interface_size);
+        }
+        if self.settings.language != before.language {
+            i18n::set_language(self.settings.language);
+            ctx.request_repaint();
+        }
+        if self.settings.accent_from_icon != before.accent_from_icon || self.settings.icon != before.icon {
+            self.apply_accent(ctx);
         }
         if self.settings.appearance != before.appearance {
             theme::style_window(ctx, self.settings.appearance);
@@ -2616,7 +2821,7 @@ impl StudioApp {
         match export_folder {
             Some(ExportFolderEdit::NextToTheDesign) => self.settings.export_folder = None,
             Some(ExportFolderEdit::Choose) => {
-                let mut dialog = rfd::FileDialog::new().set_title("Export to this folder");
+                let mut dialog = rfd::FileDialog::new().set_title(tr("Export to this folder", "Exporter dans ce dossier"));
                 if let Some(folder) = self.settings.export_folder.as_deref().filter(|f| f.is_dir()) {
                     dialog = dialog.set_directory(folder);
                 }
@@ -2630,14 +2835,14 @@ impl StudioApp {
             self.doc.render_deadline = None;
         }
         if let Some(edit) = libraries {
-            if edit_folders(&mut self.settings.library_folders, edit, "Add a library folder") {
+            if edit_folders(&mut self.settings.library_folders, edit, tr("Add a library folder", "Ajouter un dossier de bibliothèques")) {
                 self.worker.set_libraries(self.settings.library_folders.clone());
                 self.catalogue.set_libraries(self.settings.library_folders.clone());
                 self.render_now();
             }
         }
         if let Some(edit) = fonts {
-            if edit_folders(&mut self.settings.font_folders, edit, "Add a font folder") {
+            if edit_folders(&mut self.settings.font_folders, edit, tr("Add a font folder", "Ajouter un dossier de polices")) {
                 c2f_geom::set_font_folders(self.settings.font_folders.clone());
                 self.render_now();
             }
@@ -2648,11 +2853,54 @@ impl StudioApp {
         }
     }
 
-    /// The icons to pick from; the one clicked.
-    fn icon_page(&self, ui: &mut egui::Ui) -> Option<Tint> {
+    /// The theme, the interface's size and the app icon; the icon clicked.
+    fn appearance_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> Option<Tint> {
+        let settings = &mut self.settings;
+        let system = if cfg!(target_os = "macos") { "macOS" } else { tr("the system", "le système") };
+        section_heading(
+            ui,
+            tr("Appearance", "Apparence"),
+            &tr!("System follows {} as it turns light or dark.", "Système suit {}, en clair ou en sombre.", system),
+        );
+        egui::Grid::new("appearance").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label(tr("Theme", "Thème"));
+            ui.horizontal(|ui| {
+                for appearance in Appearance::ALL {
+                    ui.selectable_value(&mut settings.appearance, appearance, appearance.name());
+                }
+            });
+            ui.end_row();
+            let keys = tr!(
+                "{} and {} change it too; {} sets it back to 100%.",
+                "{} et {} la changent aussi ; {} la remet à 100 %.",
+                shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomIn)),
+                shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomOut)),
+                shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomReset))
+            );
+            ui.label(tr("Size", "Taille")).on_hover_text(keys);
+            ui.horizontal(|ui| {
+                // Eight sizes on one row.
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().button_padding.x = 5.0;
+                let (low, high) = (*settings::INTERFACE_SIZES.start(), *settings::INTERFACE_SIZES.end());
+                for tenths in (low * 10.0).round() as u32..=(high * 10.0).round() as u32 {
+                    let size = tenths as f32 / 10.0;
+                    let selected = (settings.interface_size - size).abs() < 0.01;
+                    if ui.selectable_label(selected, format!("{}%", tenths * 10)).clicked() {
+                        settings.interface_size = size;
+                    }
+                }
+            });
+            ui.end_row();
+        });
+        ui.add_space(14.0);
         let mut chosen = None;
-        let shown_in = if cfg!(target_os = "macos") { "the Dock and the Finder" } else { "the window's title bar" };
-        section_heading(ui, "App icon", &format!("Shown in {shown_in}."));
+        let shown_in = if cfg!(target_os = "macos") {
+            tr("Shown in the Dock and the Finder.", "Affichée dans le Dock et le Finder.")
+        } else {
+            tr("Shown in the window's title bar.", "Affichée dans la barre de titre.")
+        };
+        section_heading(ui, tr("App icon", "Icône de l'app"), shown_in);
         for (row, tints) in Tint::ALL.chunks(ICONS_PER_ROW).enumerate() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
@@ -2664,7 +2912,22 @@ impl StudioApp {
                 }
             });
         }
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut self.settings.accent_from_icon,
+            tr("Buttons and highlights in the icon's color", "Boutons et sélections de la couleur de l'icône"),
+        )
+        .on_hover_text(tr("Otherwise blue", "Sinon en bleu"));
         chosen
+    }
+
+    /// Gives the theme the accent the settings ask for.
+    fn apply_accent(&mut self, ctx: &egui::Context) {
+        let tint = self.settings.accent_from_icon.then_some(self.settings.icon);
+        if theme::set_accent(ctx, tint) {
+            self.restyle();
+        }
+        ctx.request_repaint();
     }
 
     /// Shows `tint` from now on; the settings keep it.
@@ -2675,9 +2938,13 @@ impl StudioApp {
         self.settings.icon = tint;
         self.logo = logo_texture(ctx, tint);
         match icon_setting::apply(ctx, tint) {
-            Ok(()) => self.doc.console.log(Level::Info, format!("App icon: {}", tint.name())),
+            Ok(()) => self.doc.console.log(Level::Info, tr!("App icon: {}", "Icône de l'app : {}", tint.name())),
             Err(err) => {
-                let message = format!("The Dock shows the {} icon while the app runs, but {err}", tint.name());
+                let message = tr!(
+                    "The Dock shows the {} icon while the app runs, but {err}",
+                    "Le Dock montre l'icône {} tant que l'app tourne, mais {err}",
+                    tint.name()
+                );
                 self.doc.console.log(Level::Warning, message);
             }
         }
@@ -2695,23 +2962,27 @@ impl StudioApp {
         let name = self.doc.file_name();
         let modal = egui::Modal::new(Id::new("confirm-unsaved")).show(ctx, |ui| {
             ui.set_width(400.0);
-            ui.label(RichText::new("Unsaved changes").heading().color(theme::palette().text));
+            ui.label(RichText::new(tr("Unsaved changes", "Modifications non enregistrées")).heading().color(theme::palette().text));
             ui.add_space(6.0);
             ui.label(
-                RichText::new(format!("Do you want to save the changes to {name} before {}?", action.verb()))
+                RichText::new(tr!(
+                    "Do you want to save the changes to {name} before {}?",
+                    "Voulez-vous enregistrer les modifications de {name} avant {} ?",
+                    action.verb()
+                ))
                     .color(theme::palette().text_dim),
             );
             ui.add_space(14.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let save = Button::new(RichText::new("Save").color(theme::palette().on_accent).strong())
+                let save = Button::new(RichText::new(tr("Save", "Enregistrer")).color(theme::palette().on_accent).strong())
                     .fill(theme::palette().accent);
                 if ui.add(save).clicked() {
                     choice = Some(Choice::Save);
                 }
-                if ui.button("Don't save").clicked() {
+                if ui.button(tr("Don't save", "Ne pas enregistrer")).clicked() {
                     choice = Some(Choice::Discard);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr("Cancel", "Annuler")).clicked() {
                     choice = Some(Choice::Cancel);
                 }
             });
@@ -2784,6 +3055,7 @@ impl eframe::App for StudioApp {
                 ctx.request_repaint_after(deadline - now);
             }
         }
+        self.autosave(ctx);
         if self.doc.busy() {
             // Keep the spinners turning.
             ctx.request_repaint_after(Duration::from_millis(50));
@@ -2831,20 +3103,27 @@ struct BarInput {
 fn animation_bar(ui: &mut egui::Ui, animation: &Animation) -> BarInput {
     let mut input = BarInput { frame: animation.frame, fps: animation.fps, steps: animation.steps, toggle: false };
     ui.horizontal(|ui| {
-        let (icon, hint) = if animation.playing { ("⏸", "Pause") } else { ("▶", "Play the model along $t") };
+        let (icon, hint) = if animation.playing { ("⏸", tr("Pause", "Pause")) } else { ("▶", tr("Play the model along $t", "Animer le modèle selon $t")) };
         input.toggle = ui.button(icon).on_hover_text(hint).clicked();
         let t = f64::from(input.frame) / f64::from(input.steps);
         ui.label(RichText::new(format!("$t = {t:.3}")).monospace().color(theme::palette().text));
         ui.spacing_mut().slider_width = (ui.available_width() - 210.0).max(60.0);
         let last = input.steps - 1;
-        let frame = format!("Frame {} of {}", input.frame + 1, input.steps);
+        let frame = tr!("Frame {} of {}", "Image {} sur {}", input.frame + 1, input.steps);
         ui.add(egui::Slider::new(&mut input.frame, 0..=last).show_value(false)).on_hover_text(frame);
-        ui.add(egui::DragValue::new(&mut input.fps).range(animation::FPS).suffix(" fps")).on_hover_text("Frames shown a second");
-        ui.add(egui::DragValue::new(&mut input.steps).range(animation::STEPS).suffix(" steps"))
-            .on_hover_text("Frames from $t = 0 to 1, which it does not reach: the last frame leads back to the first");
+        ui.add(egui::DragValue::new(&mut input.fps).range(animation::FPS).suffix(tr(" fps", " i/s")))
+            .on_hover_text(tr("Frames shown a second", "Images affichées par seconde"));
+        ui.add(egui::DragValue::new(&mut input.steps).range(animation::STEPS).suffix(tr(" steps", " pas")))
+            .on_hover_text(tr(
+                "Frames from $t = 0 to 1, which it does not reach: the last frame leads back to the first",
+                "Images de $t = 0 à 1, qu'il n'atteint pas : la dernière image ramène à la première",
+            ));
         let cached = RichText::new(format!("{}/{}", animation.cached(), animation.steps)).size(12.0);
         ui.label(cached.color(theme::palette().text_dim)).on_hover_text(
-            "Frames rendered and kept in memory: once all of them are, the animation plays at full speed",
+            tr(
+                "Frames rendered and kept in memory: once all of them are, the animation plays at full speed",
+                "Images rendues et gardées en mémoire : une fois toutes prêtes, l'animation tourne à pleine vitesse",
+            ),
         );
     });
     input
@@ -2923,11 +3202,41 @@ fn section_heading(ui: &mut egui::Ui, title: &str, about: &str) {
     ui.add_space(8.0);
 }
 
-/// The code's size and when to render.
-fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
-    section_heading(ui, "Code", "The editor's and the console's text.");
+/// The language, and what comes back at launch.
+fn general_page(ui: &mut egui::Ui, settings: &mut Settings) {
+    section_heading(ui, tr("Language", "Langue"), tr("The interface's language.", "La langue de l'interface."));
     ui.horizontal(|ui| {
-        ui.label("Size");
+        for language in Language::ALL {
+            ui.selectable_value(&mut settings.language, language, language.name());
+        }
+    });
+    ui.add_space(14.0);
+    section_heading(
+        ui,
+        tr("At launch", "Au lancement"),
+        tr("Files opened from the Finder open too.", "Les fichiers ouverts depuis le Finder s'ouvrent aussi."),
+    );
+    ui.checkbox(
+        &mut settings.reopen_tabs,
+        tr("Reopen the tabs open when the app was last closed", "Rouvrir les onglets laissés ouverts"),
+    );
+    ui.add_space(14.0);
+    let kept = tr(
+        "The grid, the axes, the layer height and the window's size and place are kept as you leave them.",
+        "La grille, les axes, la hauteur de couche, la taille et la place de la fenêtre restent comme vous les laissez.",
+    );
+    ui.label(RichText::new(kept).color(theme::palette().text_dim));
+}
+
+/// The code's size, Tab's indent and saving.
+fn editor_page(ui: &mut egui::Ui, settings: &mut Settings) {
+    section_heading(
+        ui,
+        tr("Code", "Code"),
+        tr("The editor's and the console's text.", "Le texte de l'éditeur et de la console."),
+    );
+    ui.horizontal(|ui| {
+        ui.label(tr("Size", "Taille"));
         let slider = egui::Slider::new(&mut settings.code_size, settings::CODE_SIZES)
             .step_by(0.5)
             .max_decimals(1)
@@ -2936,23 +3245,43 @@ fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) 
         ui.add(slider);
     });
     ui.horizontal(|ui| {
-        ui.label("Tab indents by");
+        ui.label(tr("Tab indents by", "Tab indente de"));
         for width in settings::INDENT_WIDTHS {
             ui.selectable_value(&mut settings.indent_width, width, width.to_string());
         }
-        ui.label("spaces");
+        ui.label(tr("spaces", "espaces"));
     });
     ui.add_space(14.0);
+    section_heading(
+        ui,
+        tr("Saving", "Enregistrement"),
+        tr(
+            "An untitled file waits for Save As… to get a name.",
+            "Un fichier sans titre attend Enregistrer sous… pour avoir un nom.",
+        ),
+    );
+    ui.checkbox(&mut settings.autosave, tr("Save files as soon as typing pauses", "Enregistrer dès que la frappe s'arrête"));
+}
+
+/// When the model renders, and its color.
+fn model_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
     let shortcut = shortcuts::describe(ctx, &settings.shortcuts.get(Action::Render));
     section_heading(
         ui,
-        "Rendering",
-        &format!("Off, the model renders only on Render ({shortcut}), which suits models that take long."),
+        tr("Rendering", "Rendu"),
+        &tr!(
+            "Off, the model renders only on Render ({}), which suits models that take long.",
+            "Désactivé, le modèle ne se calcule que sur Rendu ({}) : pratique pour les modèles longs.",
+            shortcut
+        ),
     );
-    ui.checkbox(&mut settings.render_while_typing, "Render as you type and as parameters change");
+    ui.checkbox(
+        &mut settings.render_while_typing,
+        tr("Render as you type and as parameters change", "Rendre pendant la frappe et quand un paramètre change"),
+    );
     ui.add_enabled_ui(settings.render_while_typing, |ui| {
         ui.horizontal(|ui| {
-            ui.label("After a pause of");
+            ui.label(tr("After a pause of", "Après une pause de"));
             let slider = egui::Slider::new(&mut settings.render_delay, settings::RENDER_DELAYS)
                 .step_by(50.0)
                 .suffix(" ms")
@@ -2960,53 +3289,23 @@ fn editor_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) 
             ui.add(slider);
         });
     });
-}
-
-/// The model's color, the interface's size and what else is kept.
-fn view_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) {
-    let system = if cfg!(target_os = "macos") { "macOS" } else { "the system" };
-    section_heading(ui, "Appearance", &format!("System follows {system} as it turns light or dark."));
-    ui.horizontal(|ui| {
-        for appearance in Appearance::ALL {
-            ui.selectable_value(&mut settings.appearance, appearance, appearance.name());
-        }
-    });
     ui.add_space(14.0);
-    section_heading(ui, "Model color", "The color of the parts without color().");
+    section_heading(
+        ui,
+        tr("Model color", "Couleur du modèle"),
+        tr("The color of the parts without color().", "La couleur des pièces sans color()."),
+    );
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (name, color) in MODEL_COLORS {
-            if color_swatch(ui, color, settings.model_color == color).on_hover_text(name).clicked() {
+            if color_swatch(ui, color, settings.model_color == color).on_hover_text(name()).clicked() {
                 settings.model_color = color;
             }
         }
         ui.add_space(4.0);
-        egui::color_picker::color_edit_button_srgb(ui, &mut settings.model_color).on_hover_text("Any color");
+        egui::color_picker::color_edit_button_srgb(ui, &mut settings.model_color)
+            .on_hover_text(tr("Any color", "Une autre couleur"));
     });
-    ui.add_space(14.0);
-    let keys = format!(
-        "{} and {} change it too; {} sets it back to 100%.",
-        shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomIn)),
-        shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomOut)),
-        shortcuts::describe(ctx, &settings.shortcuts.get(Action::ZoomReset))
-    );
-    section_heading(ui, "Interface size", &keys);
-    ui.horizontal(|ui| {
-        // Eight sizes on one row.
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.spacing_mut().button_padding.x = 5.0;
-        let (low, high) = (*settings::INTERFACE_SIZES.start(), *settings::INTERFACE_SIZES.end());
-        for tenths in (low * 10.0).round() as u32..=(high * 10.0).round() as u32 {
-            let size = tenths as f32 / 10.0;
-            let selected = (settings.interface_size - size).abs() < 0.01;
-            if ui.selectable_label(selected, format!("{}%", tenths * 10)).clicked() {
-                settings.interface_size = size;
-            }
-        }
-    });
-    ui.add_space(14.0);
-    let kept = "The grid, the axes, the layer height and the window's size and place are kept as you leave them.";
-    ui.label(RichText::new(kept).color(theme::palette().text_dim));
 }
 
 /// Each action's keys, which a click records anew, with the actions that
@@ -3020,7 +3319,14 @@ fn shortcuts_page(
 ) -> Option<ShortcutEdit> {
     let p = theme::palette();
     let mut edit = None;
-    section_heading(ui, "Keyboard shortcuts", "Click an action's keys, then press new ones; Escape gives up.");
+    section_heading(
+        ui,
+        tr("Keyboard shortcuts", "Raccourcis clavier"),
+        tr(
+            "Click an action's keys, then press new ones; Escape gives up.",
+            "Cliquez sur les touches d'une action, puis tapez les nouvelles ; Échap annule.",
+        ),
+    );
     let conflicts = shortcuts.conflicts();
     let notes = conflicts.len() + usize::from(problem.is_some());
     let height = SETTINGS_HEIGHT - 92.0 - 22.0 * notes as f32;
@@ -3033,13 +3339,13 @@ fn shortcuts_page(
                     ui.add_space(10.0);
                     let default = shortcuts::describe(ctx, &action.default_keys());
                     let reset = ui.add_enabled(!shortcuts.is_default(action), Button::new("↺").small());
-                    if reset.on_hover_text(format!("Back to {default}")).clicked() {
+                    if reset.on_hover_text(tr!("Back to {default}", "Revenir à {default}")).clicked() {
                         edit = Some(ShortcutEdit::Reset(action));
                     }
                     let sharing = shortcuts.sharing(action);
                     let listening = recording == Some(action);
                     let (text, color) = if listening {
-                        ("Type the keys…".to_string(), p.accent_strong)
+                        (tr("Type the keys…", "Tapez les touches…").to_string(), p.accent_strong)
                     } else {
                         let color = if sharing.is_empty() { p.text } else { p.warning };
                         (shortcuts::describe(ctx, &shortcuts.get(action)), color)
@@ -3048,11 +3354,11 @@ fn shortcuts_page(
                         .selected(listening)
                         .min_size(Vec2::new(140.0, 0.0));
                     let tip = if listening {
-                        "Press the new keys, or Escape to keep these".to_string()
+                        tr("Press the new keys, or Escape to keep these", "Tapez les nouvelles touches, ou Échap pour garder celles-ci").to_string()
                     } else if sharing.is_empty() {
-                        "Click, then press new keys".to_string()
+                        tr("Click, then press new keys", "Cliquez, puis tapez les nouvelles touches").to_string()
                     } else {
-                        format!("Also the keys of {}", names(&sharing))
+                        tr!("Also the keys of {}", "Aussi les touches de {}", names(&sharing))
                     };
                     if ui.add(button).on_hover_text(tip).clicked() {
                         edit = Some(ShortcutEdit::Record(action));
@@ -3067,11 +3373,11 @@ fn shortcuts_page(
     }
     for group in &conflicts {
         let keys = shortcuts::describe(ctx, &shortcuts.get(group[0]));
-        let note = format!("⚠ {} share {keys}: it does {}.", names(group), group[0].name());
+        let note = tr!("⚠ {} share {keys}: it does {}.", "⚠ {} partagent {keys} : c'est {} qui s'exécute.", names(group), group[0].name());
         ui.label(RichText::new(note).color(p.warning));
     }
     ui.add_space(4.0);
-    if ui.add_enabled(shortcuts.customized(), Button::new("Reset All")).clicked() {
+    if ui.add_enabled(shortcuts.customized(), Button::new(tr("Reset All", "Tout réinitialiser"))).clicked() {
         edit = Some(ShortcutEdit::ResetAll);
     }
     edit
@@ -3084,51 +3390,109 @@ fn names(actions: &[Action]) -> String {
         [one] => one.name().to_string(),
         [rest @ .., last] => {
             let rest: Vec<&str> = rest.iter().map(|a| a.name()).collect();
-            format!("{} and {}", rest.join(", "), last.name())
+            tr!("{} and {}", "{} et {}", rest.join(", "), last.name())
         }
     }
 }
 
-/// The STL format and where exports go; the change asked for in the folder.
-fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolderEdit> {
-    section_heading(ui, "STL files", "3D printers' slicers read both.");
-    ui.radio_value(&mut settings.binary_stl, false, "ASCII: text, the most widely read");
-    ui.radio_value(&mut settings.binary_stl, true, "Binary: about a fifth of the size, quicker to open");
-    ui.add_space(14.0);
-    section_heading(ui, "glTF models", "For game engines: Godot, Unity. glTF counts in meters.");
-    ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[0], "Real size: a millimeter is a millimeter");
-    ui.radio_value(&mut settings.gltf_scale, GLTF_SCALES[1], "A unit is a meter: for levels and scenery");
-    ui.add_space(6.0);
-    ui.label(RichText::new("A design that reads $t moves its part()s along it:").color(theme::palette().text_dim));
-    ui.horizontal(|ui| {
-        ui.add(egui::DragValue::new(&mut settings.gltf_duration).range(settings::GLTF_DURATIONS).speed(0.1).suffix(" s"))
-            .on_hover_text("The seconds from $t = 0 to 1");
-        ui.add(egui::DragValue::new(&mut settings.gltf_fps).range(settings::GLTF_FPS).suffix(" fps"))
-            .on_hover_text("Frames sampled a second");
-        ui.checkbox(&mut settings.gltf_loop, "Loop").on_hover_text("Its name ends in -loop, which Godot plays over and over");
-    });
-    ui.add_space(14.0);
-    section_heading(ui, "Export folder", "Where Export… opens.");
+/// Where exports go, the Export shortcut's format and each format's
+/// options; the change asked for in the folder.
+fn export_page(ui: &mut egui::Ui, ctx: &egui::Context, settings: &mut Settings) -> Option<ExportFolderEdit> {
+    section_heading(ui, tr("Export folder", "Dossier d'export"), tr("Where Export… opens.", "Là où s'ouvre Exporter…"));
     let mut edit = None;
-    if ui.radio(settings.export_folder.is_none(), "Next to the design").clicked() {
+    if ui.radio(settings.export_folder.is_none(), tr("Next to the design", "À côté du fichier")).clicked() {
         edit = Some(ExportFolderEdit::NextToTheDesign);
     }
     ui.horizontal(|ui| {
         let folder = settings.export_folder.as_deref();
-        if ui.radio(folder.is_some(), "In this folder:").clicked() && folder.is_none() {
+        if ui.radio(folder.is_some(), tr("In this folder:", "Dans ce dossier :")).clicked() && folder.is_none() {
             edit = Some(ExportFolderEdit::Choose);
         }
         if let Some(folder) = folder {
             let missing = !folder.is_dir();
             let color = if missing { theme::palette().warning } else { theme::palette().text };
             let label = ui.add(egui::Label::new(RichText::new(display_folder(folder)).color(color)).truncate());
-            let note = if missing { " (not found: Export… opens next to the design)" } else { "" };
+            let note = if missing {
+                tr(" (not found: Export… opens next to the design)", " (introuvable : Exporter… s'ouvre à côté du fichier)")
+            } else {
+                ""
+            };
             label.on_hover_text(format!("{}{note}", folder.display()));
         }
     });
-    if ui.button("Choose Folder…").clicked() {
+    if ui.button(tr("Choose Folder…", "Choisir un dossier…")).clicked() {
         edit = Some(ExportFolderEdit::Choose);
     }
+    let reveal = if cfg!(target_os = "macos") {
+        tr("Show each exported file in the Finder", "Montrer chaque fichier exporté dans le Finder")
+    } else {
+        tr("Show each exported file in its folder", "Montrer chaque fichier exporté dans son dossier")
+    };
+    ui.checkbox(&mut settings.reveal_export, reveal);
+    ui.add_space(14.0);
+    let keys = shortcuts::describe(ctx, &settings.shortcuts.get(Action::Export));
+    section_heading(
+        ui,
+        tr("Export shortcut", "Raccourci d'export"),
+        &tr!(
+            "{} writes a 3D model in this format, a 2D one as SVG.",
+            "{} écrit un modèle 3D dans ce format, un modèle 2D en SVG.",
+            keys
+        ),
+    );
+    ui.horizontal(|ui| {
+        for &format in Format::SOLID {
+            ui.selectable_value(&mut settings.export_format, format, format.name());
+        }
+    });
+    ui.add_space(14.0);
+    section_heading(
+        ui,
+        tr("STL files", "Fichiers STL"),
+        tr("3D printers' slicers read both.", "Les slicers d'impression 3D lisent les deux."),
+    );
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut settings.binary_stl, false, "ASCII")
+            .on_hover_text(tr("Text, the most widely read", "Du texte, lu partout"));
+        ui.radio_value(&mut settings.binary_stl, true, tr("Binary", "Binaire")).on_hover_text(tr(
+            "About a fifth of the size, quicker to open",
+            "Environ cinq fois plus léger, plus rapide à ouvrir",
+        ));
+    });
+    ui.add_space(14.0);
+    section_heading(
+        ui,
+        tr("glTF models", "Modèles glTF"),
+        tr(
+            "For game engines: Godot, Unity. glTF counts in meters.",
+            "Pour les moteurs de jeu : Godot, Unity. glTF compte en mètres.",
+        ),
+    );
+    ui.radio_value(
+        &mut settings.gltf_scale,
+        GLTF_SCALES[0],
+        tr("Real size: a millimeter is a millimeter", "Taille réelle : un millimètre reste un millimètre"),
+    );
+    ui.radio_value(
+        &mut settings.gltf_scale,
+        GLTF_SCALES[1],
+        tr("A unit is a meter: for levels and scenery", "Une unité vaut un mètre : pour les niveaux et les décors"),
+    );
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(tr("A design that reads $t moves its part()s along it:", "Un fichier qui lit $t anime ses part() :"))
+            .color(theme::palette().text_dim),
+    );
+    ui.horizontal(|ui| {
+        ui.add(egui::DragValue::new(&mut settings.gltf_duration).range(settings::GLTF_DURATIONS).speed(0.1).suffix(" s"))
+            .on_hover_text(tr("The seconds from $t = 0 to 1", "Les secondes de $t = 0 à 1"));
+        ui.add(egui::DragValue::new(&mut settings.gltf_fps).range(settings::GLTF_FPS).suffix(tr(" fps", " i/s")))
+            .on_hover_text(tr("Frames sampled a second", "Images par seconde"));
+        ui.checkbox(&mut settings.gltf_loop, tr("Loop", "En boucle")).on_hover_text(tr(
+            "Its name ends in -loop, which Godot plays over and over",
+            "Son nom finit par -loop, que Godot joue en boucle",
+        ));
+    });
     edit
 }
 
@@ -3136,15 +3500,21 @@ fn export_page(ui: &mut egui::Ui, settings: &mut Settings) -> Option<ExportFolde
 fn libraries_page(ui: &mut egui::Ui, settings: &Settings) -> (Option<FolderEdit>, Option<FolderEdit>) {
     section_heading(
         ui,
-        "Library folders",
-        "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
+        tr("Library folders", "Dossiers de bibliothèques"),
+        tr(
+            "Searched for include <…> and use <…> before ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH and the app's own.",
+            "Parcourus pour include <…> et use <…> avant ~/Documents/Code2Form/libraries, C2F_LIBRARY_PATH et ceux de l'app.",
+        ),
     );
     let libraries = folder_list(ui, "libraries", &settings.library_folders);
     ui.add_space(14.0);
     section_heading(
         ui,
-        "Font folders",
-        "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
+        tr("Font folders", "Dossiers de polices"),
+        tr(
+            "Searched for text()'s fonts, with their subfolders, before C2F_FONT_PATH, the app's and the system's.",
+            "Parcourus avec leurs sous-dossiers pour les polices de text(), avant C2F_FONT_PATH, ceux de l'app et du système.",
+        ),
     );
     let fonts = folder_list(ui, "fonts", &settings.font_folders);
     (libraries, fonts)
@@ -3158,27 +3528,27 @@ fn folder_list(ui: &mut egui::Ui, id: &str, folders: &[PathBuf]) -> Option<Folde
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         if folders.is_empty() {
-            ui.label(RichText::new("None").color(theme::palette().text_faint));
+            ui.label(RichText::new(tr("None", "Aucun")).color(theme::palette().text_faint));
         }
         for (i, folder) in folders.iter().enumerate() {
             ui.push_id((id, i), |ui| {
                 ui.horizontal(|ui| {
                     let missing = !folder.is_dir();
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("Remove").clicked() {
+                        if ui.small_button(tr("Remove", "Retirer")).clicked() {
                             edit = Some(FolderEdit::Remove(i));
                         }
                         let color = if missing { theme::palette().warning } else { theme::palette().text };
                         let name = RichText::new(display_folder(folder)).color(color);
                         let label = ui.add(egui::Label::new(name).truncate());
-                        let note = if missing { " (not found)" } else { "" };
+                        let note = if missing { tr(" (not found)", " (introuvable)") } else { "" };
                         label.on_hover_text(format!("{}{note}", folder.display()));
                     });
                 });
             });
         }
     });
-    if ui.button("Add Folder…").clicked() {
+    if ui.button(tr("Add Folder…", "Ajouter un dossier…")).clicked() {
         edit = Some(FolderEdit::Add);
     }
     edit
@@ -3218,7 +3588,7 @@ fn logo_texture(ctx: &egui::Context, tint: Tint) -> TextureHandle {
 
 /// One icon the settings offer, with its name, ringed when picked.
 fn icon_choice(ui: &mut egui::Ui, texture: &TextureHandle, tint: Tint, selected: bool) -> egui::Response {
-    let size = Vec2::new(ICON_CHOICE + 16.0, ICON_CHOICE + 30.0);
+    let size = Vec2::new(ICON_CHOICE + 26.0, ICON_CHOICE + 28.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, tint.name()));
     let center = rect.center_top() + Vec2::new(0.0, 8.0 + ICON_CHOICE / 2.0);
@@ -3227,7 +3597,7 @@ fn icon_choice(ui: &mut egui::Ui, texture: &TextureHandle, tint: Tint, selected:
     if selected || response.hovered() {
         let (color, width): (Color32, f32) =
             if selected { (theme::palette().accent, 2.5) } else { (theme::palette().border, 1.5) };
-        painter.rect_stroke(icon.expand(4.0), CornerRadius::same(17), Stroke::new(width, color), StrokeKind::Outside);
+        painter.rect_stroke(icon.expand(4.0), CornerRadius::same(14), Stroke::new(width, color), StrokeKind::Outside);
     }
     egui::Image::new(texture).paint_at(ui, icon);
     let color = if selected { theme::palette().text } else { theme::palette().text_dim };
@@ -3367,6 +3737,26 @@ fn part_boxes(scene: &crate::worker::Scene) -> Vec<Option<(glam::Vec3, glam::Vec
             Some(points.iter().fold((first, first), |(lo, hi), &p| (lo.min(p.into()), hi.max(p.into()))))
         })
         .collect()
+}
+
+/// Shows `file` in the Finder, selected, or opens its folder elsewhere.
+fn reveal(file: &Path) -> std::io::Result<()> {
+    let mut command = if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(file);
+        command
+    } else if cfg!(windows) {
+        let mut command = std::process::Command::new("explorer");
+        let mut select = std::ffi::OsString::from("/select,");
+        select.push(file);
+        command.arg(select);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(file.parent().unwrap_or(Path::new(".")));
+        command
+    };
+    command.spawn().map(drop)
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -3603,6 +3993,64 @@ mod tests {
         wait(&mut app, |app| app.owners.owner(closed).is_none());
         // The second tab still shows its own box, 2 × 2 × 4.
         assert_eq!(app.doc.model.as_ref().map(|m| m.stats.volume), Some(16.0));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_tabs_stay_closed_when_the_settings_say() {
+        let dir = folder("no-session");
+        let store = dir.join("settings").join("open-tabs.txt");
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, Some(store.clone()), vec![dir.join("a.c2f")]);
+        app.save_session();
+        drop(app);
+        let stores = Stores { session: Some(store), settings: None };
+        let settings = Settings { reopen_tabs: false, ..Settings::default() };
+        let app = StudioApp::with(&ctx, None, stores, RecentFiles::default(), settings, vec![dir.join("b.c2f")]);
+        assert_eq!(open_files(&app), (files(&["b.c2f"]), 0), "only the file given");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn autosave_writes_once_typing_pauses() {
+        let dir = folder("autosave");
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, None, vec![dir.join("a.c2f"), dir.join("b.c2f")]);
+        app.doc.text.push_str("sphere(1);\n");
+        // Off, nothing is written.
+        app.autosave_now();
+        assert!(app.doc.is_dirty());
+        app.settings.autosave = true;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.autosave(ctx));
+        assert!(app.doc.is_dirty(), "not before the pause");
+        app.doc.autosave_deadline = Some(Instant::now());
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.autosave(ctx));
+        assert!(!app.doc.is_dirty());
+        assert_eq!(std::fs::read_to_string(dir.join("b.c2f")).unwrap(), "cube([2, 2, 4]);\nsphere(1);\n");
+        // Leaving a tab saves it at once.
+        app.doc.text.push_str("cube(9);\n");
+        app.select_tab(&ctx, 0);
+        assert!(std::fs::read_to_string(dir.join("b.c2f")).unwrap().ends_with("cube(9);\n"));
+        // An untitled tab waits for a name.
+        app.new_tab(&ctx);
+        app.doc.text.push_str("cube(1);\n");
+        app.autosave_now();
+        assert!(app.doc.is_dirty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_export_shortcut_takes_the_settings_format() {
+        let dir = folder("export-format");
+        std::fs::write(dir.join("flat.c2f"), "square(4);\n").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, None, vec![dir.join("a.c2f")]);
+        app.settings.export_format = Format::ThreeMf;
+        wait(&mut app, |app| !app.doc.busy());
+        assert_eq!(app.shortcut_format(), Format::ThreeMf);
+        app.open(&ctx, dir.join("flat.c2f"));
+        wait(&mut app, |app| !app.doc.busy());
+        assert_eq!(app.shortcut_format(), Format::Svg, "a 2D model");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

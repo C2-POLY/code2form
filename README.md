@@ -18,12 +18,19 @@ they are. Written in Rust, it renders as you type.
   circuit with its plate. One opens as a copy in
   `~/Documents/Code2Form/Examples`, its folder with it, to change and
   save; opened again, the copy keeps its changes.
-- **Settings** (⌘,): the app icon in ten tints (graphite by default,
-  shown in the Dock and the Finder), the code's size, whether to render
-  as you type and after what pause, and folders searched for libraries
-  and for `text()`'s fonts before the default ones, a light or a dark
-  theme (or the system's, as it changes), and the keys of each shortcut.
-  The grid, the axes and the layer height are kept as left.
+- **Settings** (⌘,), page by page. General: the interface in English
+  or French, and whether the last tabs come back at launch. Appearance:
+  a light or a dark theme (or the system's, as it changes), the
+  interface's size, the app icon in ten tints (graphite by default, shown
+  in the Dock and the Finder), and buttons in the icon's color rather
+  than blue. Editor: the code's size, Tab's indent, and saving as soon as
+  typing pauses. Model: whether to render as you type and after what
+  pause, and the model's color. Export: the folder exports go to, the
+  format of the Export shortcut, showing each file exported in the
+  Finder, and the STL and glTF options. Libraries: folders searched for
+  libraries and for `text()`'s fonts before the default ones. Shortcuts:
+  the keys of each action. The grid, the axes and the layer height are
+  kept as left.
 - **Animation**: a design that reads `$t`, the animation time from 0 to
   1 as in the reference implementation, gets a bar under the view to
   play it: play and pause, the time's slider, frames a second and steps

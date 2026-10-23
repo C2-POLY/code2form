@@ -51,20 +51,9 @@ impl Tint {
         Tint::Pink,
     ];
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Tint::Graphite => "Graphite",
-            Tint::Green => "Green",
-            Tint::Red => "Red",
-            Tint::Orange => "Orange",
-            Tint::Amber => "Amber",
-            Tint::Teal => "Teal",
-            Tint::Cyan => "Cyan",
-            Tint::Indigo => "Indigo",
-            Tint::Violet => "Violet",
-            Tint::Pink => "Pink",
-        }
-    }
+    // `name`, the tint as the settings list it, is in `icon_setting.rs`, in
+    // the interface's language: the `app-icon` example builds this file on
+    // its own, without the app's translations.
 
     /// The name kept in the settings file.
     pub fn id(self) -> &'static str {
@@ -84,6 +73,12 @@ impl Tint {
 
     pub fn from_id(id: &str) -> Option<Tint> {
         Tint::ALL.into_iter().find(|t| t.id() == id.trim())
+    }
+
+    /// The tile and the two squares, darkest to lightest.
+    pub fn colors(self) -> [[u8; 3]; 3] {
+        let Palette { tile, outer, inner } = self.palette();
+        [tile, outer, inner]
     }
 
     fn palette(self) -> Palette {
