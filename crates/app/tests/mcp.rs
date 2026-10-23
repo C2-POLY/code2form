@@ -333,10 +333,15 @@ fn prompts_lead_from_an_idea_to_its_electronics() {
     let tools = server.request("tools/list", json!({}));
     let tools: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     let design = server.request("prompts/get", json!({ "name": "design_object", "arguments": { "description": "A box" } }));
-    let both = format!("{text}{}", design["result"]["messages"][0]["content"]["text"].as_str().unwrap());
+    let plan = server.request("prompts/get", json!({ "name": "plan_object", "arguments": { "idea": "A watch winder" } }));
+    let both = format!(
+        "{text}{}{}",
+        design["result"]["messages"][0]["content"]["text"].as_str().unwrap(),
+        plan["result"]["messages"][0]["content"]["text"].as_str().unwrap()
+    );
     for tool in [
         "render", "image", "library_parts", "check_part", "save_part", "electrify", "check_circuit", "fit", "circuit_image",
-        "circuit_wires", "circuit_bom", "export",
+        "circuit_wires", "circuit_bom", "export", "save_brief", "read_brief", "check_brief", "mass_properties", "loads",
     ] {
         assert!(both.contains(&format!("`{tool}`")) && tools.contains(&tool), "{tool}");
     }
@@ -926,4 +931,30 @@ fn loads_weighs_a_shaft_and_its_motor_from_the_motor_sheet() {
     let bad = json!({ "axis": { "at": [0, 0, 0], "direction": [1, 0, 0] }, "supports": [], "shaft": { "d_mm": 5, "material": "wood" } });
     let (is_error, _) = server.report("loads", bad);
     assert!(is_error);
+}
+
+#[test]
+fn check_brief_weighs_the_design_and_measures_the_motor_margins() {
+    let mut server = Server::start();
+    let dir = temp_dir("check-brief-measures");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The motor's sheet, found beside the brief.
+    std::fs::copy(app.join("tests/loads/gear_motor.c2f"), dir.join("gear_motor.c2f")).unwrap();
+    let scenario = std::fs::read_to_string(app.join("tests/loads/winder.json")).unwrap();
+    let brief = dir.join("brief.md");
+    let text = format!(
+        "# Night light\n\n## Requirements\n\n- mass < 100 g\n- tipping > 15°\n- mass < 30 g\n- torque margin >= 2\n\n```json mass\n{{ \"material\": \"PLA\", \"infill\": 20 }}\n```\n\n```json loads\n{scenario}```\n"
+    );
+    std::fs::write(&brief, text).unwrap();
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": app.join("../../examples/nightlight/nightlight.c2f") }));
+    assert!(is_error, "{report}");
+    let statuses: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["status"].as_str().unwrap()).collect();
+    // About 38 g printed and tipping past 60°; the winder's motor alone falls short of a margin of 2.
+    assert_eq!(statuses, ["holds", "holds", "fails", "fails"], "{report}");
+    let mass = report["requirements"][0]["measured"].as_f64().unwrap();
+    assert!((30.0..100.0).contains(&mass), "{report}");
+    assert!(report["requirements"][3]["measured"].as_f64().unwrap() < 1.0, "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

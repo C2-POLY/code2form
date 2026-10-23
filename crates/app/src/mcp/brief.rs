@@ -162,13 +162,18 @@ impl Status {
     }
 }
 
-/// What the design and its circuit give to measure the requirements with.
-#[derive(Default)]
+/// What the design and its circuit give to measure the requirements with,
+/// and why what could not be measured was not.
 struct Measured {
     /// Each piece's name and size, in millimeters.
     pieces: Option<Vec<(String, [f64; 3])>>,
     /// The part files the circuit names, as it names them.
     components: Option<Vec<String>>,
+    /// The total mass in grams and the smallest tipping angle in degrees,
+    /// from `mass_properties`.
+    mass: Result<(f64, Option<f64>), String>,
+    /// The torque margin and the motor's radial load margin, from `loads`.
+    margins: Result<(Option<f64>, Option<f64>), String>,
 }
 
 fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
@@ -176,8 +181,15 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
     let brief_path = PathBuf::from(string("brief").ok_or("`brief` names the brief's .md file")?);
     let brief_text = std::fs::read_to_string(&brief_path).map_err(|err| format!("cannot read {}: {err}", brief_path.display()))?;
     let brief = read_brief(&brief_text);
-    let mut measured = Measured::default();
+    let mut measured = Measured {
+        mass: Err("give the `design` to weigh it".into()),
+        margins: Err("the brief has no ```json loads``` block saying what the motor turns".into()),
+        pieces: None,
+        components: None,
+    };
     let mut notes: Vec<String> = Vec::new();
+    let mass_options = crate::mass::options(brief.mass.as_ref().unwrap_or(&json!({})));
+    let mut design_mass: Option<Result<c2f_geom::MassReport, String>> = None;
     let mut circuit_path = string("circuit").map(PathBuf::from);
     if let Some(design) = string("design") {
         let mut design_args = json!({ "path": design });
@@ -202,6 +214,7 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
         // leaves it empty, and its name is the design's.
         let pieces: Vec<(String, [f64; 3])> = sizes.filter(|(_, size)| size.iter().any(|s| *s > 0.0)).collect();
         measured.pieces = Some(pieces);
+        design_mass = Some(mass_options.clone().and_then(|options| c2f_geom::mass_properties(&evaluated.nodes, &base_dir, &options)));
         if circuit_path.is_none() {
             let (annotations, _) = c2f_lang::annotations::read(&src);
             circuit_path = annotations.circuit.map(|link| base_dir.join(link.path));
@@ -214,6 +227,15 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
         let circuit = c2f_circuit::parse(&src, path, &c2f_eval::default_library_paths())
             .map_err(|_| format!("{} does not read: check it with `check_circuit`", path.display()))?;
         measured.components = Some(circuit.parts.iter().map(|p| p.part.clone()).collect());
+        // The circuit weighs its components too.
+        design_mass = Some(mass_options.clone().and_then(|options| crate::mass::circuit(&circuit, &src, path, options)));
+    }
+    if let Some(report) = design_mass {
+        measured.mass = report.map(|r| (r.total, r.stability.map(|s| s.min_tipping_deg)));
+    }
+    if let Some(scenario) = &brief.loads {
+        let dir = brief_path.parent().filter(|p| !p.as_os_str().is_empty());
+        measured.margins = crate::loads::evaluate(scenario, dir).map(|report| (report.margins.torque, report.margins.motor_radial));
     }
     let results: Vec<Value> = brief.requirements.iter().map(|r| measure(r, &measured)).collect();
     let ok = results.iter().all(|r| r["status"] != Status::Fails.name());
@@ -272,9 +294,33 @@ fn measure(requirement: &Requirement, measured: &Measured) -> Value {
                 }
             }
         },
-        Rule::Mass(..) | Rule::Tipping(..) => (Status::Unmeasured, Value::Null, "measured by `mass_properties`".into()),
-        Rule::TorqueMargin(..) | Rule::RadialLoadMargin(..) => (Status::Unmeasured, Value::Null, "measured by `loads`".into()),
+        Rule::Mass(op, bound) => match &measured.mass {
+            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Ok((grams, _)) => compare(*op, *grams, *bound, "g", "the total mass, printed as the ```json mass``` block says"),
+        },
+        Rule::Tipping(op, bound) => match &measured.mass {
+            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Ok((_, None)) => (Status::Unmeasured, Value::Null, "nothing rests on the ground".into()),
+            Ok((_, Some(degrees))) => compare(*op, *degrees, *bound, "°", "the smallest angle it leans before it tips"),
+        },
+        Rule::TorqueMargin(op, bound) => match &measured.margins {
+            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Ok((None, _)) => (Status::Unmeasured, Value::Null, "the ```json loads``` block gives no motor torque".into()),
+            Ok((Some(margin), _)) => compare(*op, *margin, *bound, "x", "the motor's torque over the torque needed"),
+        },
+        Rule::RadialLoadMargin(op, bound) => match &measured.margins {
+            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Ok((_, None)) => (Status::Unmeasured, Value::Null, "the ```json loads``` block gives no motor radial load limit, or the motor carries none".into()),
+            Ok((_, Some(margin))) => compare(*op, *margin, *bound, "x", "the motor's largest radial load over the one it carries"),
+        },
         Rule::Other => (Status::Unmeasured, Value::Null, "no tool measures it: the user checks it".into()),
     };
     json!({ "line": requirement.line, "text": requirement.text, "status": status.name(), "measured": value, "why": why })
+}
+
+/// A measure against its bound, and what it is.
+fn compare(op: c2f_circuit::brief::Op, value: f64, bound: f64, unit: &str, what: &str) -> (Status, Value, String) {
+    let status = if op.holds(value, bound) { Status::Holds } else { Status::Fails };
+    let shown = (value * 1000.0).round() / 1000.0;
+    (status, json!(shown), format!("{what}: {shown} {unit}, against {} {bound} {unit}", op.symbol()))
 }
