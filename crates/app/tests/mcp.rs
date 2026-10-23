@@ -397,6 +397,36 @@ fn an_agent_builds_the_grogu_circuit() {
 }
 
 #[test]
+fn image_sheet_holds_four_views_or_five_with_a_section() {
+    let mut server = Server::start();
+    let code = "difference() { cube(30); translate([5, 5, 5]) cube(20); }";
+    let sheet = |server: &mut Server, args: Value| {
+        let (is_error, content) = server.call("image", args);
+        assert!(!is_error, "{content:?}");
+        let report: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(report["volume"], 27000.0 - 8000.0);
+        decode_png(&base64_decode(content[0]["data"].as_str().unwrap()))
+    };
+    // Two views across, then three with the section; the size is the sheet's.
+    let (width, height, _) = sheet(&mut server, json!({ "code": code, "view": "sheet", "width": 40 }));
+    assert_eq!((width, height), (990, 816));
+    let (width, height, _) = sheet(&mut server, json!({ "code": code, "view": "sheet", "section": true }));
+    assert_eq!((width, height), (1480, 816));
+
+    let (is_error, content) = server.call("image", json!({ "code": code, "view": "front", "section": true }));
+    assert!(is_error && content[0]["text"].as_str().unwrap().contains("sheet"), "{content:?}");
+    let (is_error, _) = server.call("image", json!({ "code": code, "view": "sheet", "section": "yes" }));
+    assert!(is_error);
+    let (is_error, _) = server.call("image", json!({ "code": "echo(1);", "view": "sheet" }));
+    assert!(is_error);
+
+    // A circuit's sheet: its parts and wires.
+    let (is_error, content) = server.call("circuit_image", json!({ "path": grogu_dir().join("grogu.c2fc"), "view": "sheet" }));
+    assert!(!is_error, "{content:?}");
+    assert_eq!(decode_png(&base64_decode(content[0]["data"].as_str().unwrap())).0, 990);
+}
+
+#[test]
 fn circuit_image_is_a_png_with_its_wires() {
     let mut server = Server::start();
     let path = grogu_dir().join("grogu.c2fc");
