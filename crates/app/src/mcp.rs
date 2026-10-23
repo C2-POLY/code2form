@@ -23,7 +23,11 @@ their line, echo output, warnings, the triangle count, the volume and the \
 bounding box; `image` returns a picture of the model from a view; \
 `parameters` lists the customizer parameters, which every tool can set \
 with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D), \
-or glTF (.glb) for game engines such as Godot and Unity. \
+glTF (.glb) for game engines such as Godot and Unity, OBJ, STEP for CAD \
+programs, URDF for robots (part(\"name\", joint = \"revolute\", axis = \
+[0, 1, 0], limits = [-90, 90]) joins a part to its parent) or the parts \
+as JSON. `import()` reads STL, OBJ, 3MF, OFF, AMF, DXF and SVG, and STEP \
+when FreeCAD is installed. \
 `pause(z, message);` pauses a 3D print once it is done up to height `z`, \
 to drop magnets or nuts into closed cavities: the 3MF carries the pauses \
 for PrusaSlicer. For electronics, `library_parts` lists the parts and \
@@ -143,12 +147,31 @@ fn tools() -> Value {
         {
             "name": "export",
             "title": "Export a model",
-            "description": "Renders a model and writes it to a file: a solid as STL or 3MF (in millimeters) or as \
+            "description": "Renders a model and writes it to a file: a solid as STL or 3MF (in millimeters), as \
                             glTF 2.0 binary (.glb, in meters with Y up, a material per color, for Godot and Unity), \
-                            a 2D model as SVG or DXF. Returns the render report and the size written.",
+                            as OBJ (an object per part(), its colors in a .mtl beside it), as STEP (faceted solids \
+                            for CAD programs), as URDF (a robot: a link per part(), joined by part(joint = ...), \
+                            its meshes in a folder beside it) or its parts as JSON; a 2D model as SVG or DXF, and \
+                            a 3D model's outline seen from `view` as DXF. Returns the render report and the size written.",
             "inputSchema": schema(json!({
                 "output": { "type": "string", "description": "The file to write, absolute or relative to the server's current directory; it is replaced." },
-                "format": { "type": "string", "enum": ["stl", "3mf", "glb", "svg", "dxf"], "description": "Default: the output's extension." },
+                "format": {
+                    "type": "string",
+                    "enum": ["stl", "3mf", "glb", "obj", "step", "urdf", "json", "svg", "dxf"],
+                    "description": "Default: the output's extension.",
+                },
+                "view": {
+                    "type": "string",
+                    "enum": views,
+                    "default": "top",
+                    "description": "dxf of a 3D model: where its outline is seen from, at its real size.",
+                },
+                "density": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 1240,
+                    "description": "urdf: kilograms per cubic meter, for the links' masses (PLA's by default).",
+                },
                 "scale": {
                     "type": "number",
                     "exclusiveMinimum": 0,
@@ -310,15 +333,90 @@ fn export_tool(args: &Value) -> Result<Vec<Value>, String> {
         Some(format) => format,
         None => Path::new(output).extension().and_then(|e| e.to_str()).unwrap_or(""),
     };
-    let export =
-        Export::named(format).ok_or_else(|| format!("unknown format `{format}`: give `format` (stl, 3mf, glb, svg or dxf)"))?;
-    if let Export::Glb = export {
-        return export_gltf(args, output);
+    let export = Export::named(format)
+        .ok_or_else(|| format!("unknown format `{format}`: give `format` (stl, 3mf, glb, obj, step, urdf, json, svg or dxf)"))?;
+    match export {
+        Export::Glb => return export_gltf(args, output),
+        Export::Obj | Export::Urdf | Export::Json => return export_parts(args, output, export),
+        _ => {}
     }
+    let view = match args.get("view").and_then(Value::as_str) {
+        Some(view) => {
+            let &(_, yaw, pitch) =
+                c2f_geom::VIEWS.iter().find(|(name, _, _)| *name == view).ok_or_else(|| format!("unknown view `{view}`"))?;
+            Some((f64::from(yaw), f64::from(pitch)))
+        }
+        None => None,
+    };
     let (rendered, mut report) = render(args)?;
-    let bytes = export.write(&rendered).map_err(|why| format!("{why}\n{}", pretty(&report)))?;
+    let name = Path::new(output).file_stem().map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned());
+    let bytes = export.write(&rendered, &name, view).map_err(|why| format!("{why}\n{}", pretty(&report)))?;
     std::fs::write(output, &bytes).map_err(|err| format!("cannot write {output}: {err}"))?;
     report["written"] = json!({ "path": output, "format": export.name(), "bytes": bytes.len() });
+    Ok(vec![text(pretty(&report))])
+}
+
+/// Writes the model's parts to `output`: as OBJ and its `.mtl`, as a URDF
+/// and its meshes, or as JSON.
+fn export_parts(args: &Value, output: &str, export: Export) -> Result<Vec<Value>, String> {
+    let (program, src) = load(args)?;
+    let evaluated = c2f_eval::evaluate(&program);
+    let mut report = json!({ "ok": evaluated.error.is_none(), "echo": evaluated.echo, "warnings": evaluated.warnings });
+    if let Some(error) = &evaluated.error {
+        report["error"] = json!(error);
+        return Err(pretty(&report));
+    }
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
+    let target = Path::new(output);
+    let name = target.file_stem().map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned());
+    let write = |path: &Path, bytes: &[u8]| std::fs::write(path, bytes).map_err(|err| format!("cannot write {}: {err}", path.display()));
+    let fail = |why: String, report: &Value| format!("{why}\n{}", pretty(report));
+    let (warnings, mut written) = match export {
+        Export::Obj => {
+            let obj = c2f_geom::obj(&evaluated.nodes, base_dir, &c2f_geom::ObjOptions { name: name.clone(), ..Default::default() })
+                .map_err(|why| fail(why, &report))?;
+            let mtl = target.with_extension("mtl");
+            write(&mtl, obj.mtl.as_bytes())?;
+            write(target, obj.obj.as_bytes())?;
+            report["triangles"] = json!(obj.triangles);
+            (obj.warnings, json!({ "path": output, "materials": mtl.display().to_string(), "bytes": obj.obj.len() }))
+        }
+        Export::Urdf => {
+            let density = match args.get("density") {
+                None => 1240.0,
+                Some(v) => v.as_f64().filter(|d| d.is_finite() && *d > 0.0).ok_or("`density` must be a positive number")?,
+            };
+            let options = c2f_geom::UrdfOptions { name: name.clone(), mesh_folder: format!("{name}_meshes"), density, ..Default::default() };
+            let urdf = c2f_geom::urdf(&evaluated.nodes, base_dir, &options).map_err(|why| fail(why, &report))?;
+            let dir = target.parent().unwrap_or(Path::new(""));
+            for (file, bytes) in &urdf.meshes {
+                let path = dir.join(file);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|err| format!("cannot create {}: {err}", parent.display()))?;
+                }
+                write(&path, bytes)?;
+            }
+            write(target, urdf.urdf.as_bytes())?;
+            report["links"] = json!(urdf.links);
+            report["moving_joints"] = json!(urdf.moving);
+            let meshes: Vec<&String> = urdf.meshes.iter().map(|(file, _)| file).collect();
+            (urdf.warnings, json!({ "path": output, "meshes": meshes, "bytes": urdf.urdf.len() }))
+        }
+        _ => {
+            let parameters = program.parameters(&src).into_iter()
+                .filter(|p| p.group != c2f_eval::customizer::HIDDEN_GROUP)
+                .map(|p| (p.name, p.default)).collect();
+            let options = c2f_geom::PartsOptions { name: name.clone(), parameters, ..Default::default() };
+            let (json, warnings) = c2f_geom::parts_json(&evaluated.nodes, base_dir, &options).map_err(|why| fail(why, &report))?;
+            write(target, json.as_bytes())?;
+            (warnings, json!({ "path": output, "bytes": json.len() }))
+        }
+    };
+    if let Some(list) = report["warnings"].as_array_mut() {
+        list.extend(warnings.iter().map(|w| json!(w)));
+    }
+    written["format"] = json!(export.name());
+    report["written"] = written;
     Ok(vec![text(pretty(&report))])
 }
 

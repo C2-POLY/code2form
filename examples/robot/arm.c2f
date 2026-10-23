@@ -1,0 +1,52 @@
+// A robot arm whose joints say how its parts move, for a URDF export
+// (Export > URDF…, or c2f urdf -o arm.urdf arm.c2f): ROS, Gazebo or MuJoCo
+// load it as a robot whose shoulder turns, elbow bends and gripper slides.
+//
+// Each part() is a link; joint = says how it moves against the part it is
+// written in, about (or along) its axis, at the origin of its own frame.
+// The same angles animate it here with $t: press play under the view.
+
+/* [Arm] */
+// Length of the upper arm, in mm.
+upper = 60; // [30:120]
+// Length of the forearm, in mm.
+fore = 50; // [30:100]
+// How far the elbow bends, in degrees, from the arm straight up.
+bend = 60; // [0:90]
+
+/* [Hidden] */
+$fn = 32;
+// The animation, from the pose at $t = 0, which is each joint's zero: the
+// shoulder turns a full turn, the elbow bends to `bend` and back, the
+// gripper opens and closes.
+swing = (1 - cos(360 * $t)) / 2;
+shoulder_angle = 360 * $t;
+elbow_angle = bend * swing;
+grip = 4 + 5 * swing;
+
+color("DimGray") cylinder(r = 30, h = 8);
+
+translate([0, 0, 8]) rotate([0, 0, shoulder_angle])
+    part("shoulder", joint = "continuous") {
+        color("SteelBlue") {
+            cylinder(r = 20, h = 12);
+            translate([-6, -10, 12]) cube([12, 20, upper]);
+        }
+        // The elbow turns about the arm's Y: its own Z, once turned.
+        translate([0, 0, 12 + upper]) rotate([90, 0, 0]) rotate([0, 0, -elbow_angle])
+            part("elbow", joint = "revolute", limits = [-90, 0]) {
+                color("Orange") {
+                    translate([0, 0, -11]) cylinder(r = 9, h = 22);
+                    translate([-5, 0, -5]) cube([10, fore, 10]);
+                }
+                translate([0, fore, 0]) {
+                    color("Orange") translate([-12, 0, -5]) cube([24, 4, 10]);
+                    // Two fingers that slide apart along X.
+                    for (side = [-1, 1])
+                        translate([side * grip, 4, 0])
+                            part(side < 0 ? "finger_left" : "finger_right",
+                                 joint = "prismatic", axis = [side, 0, 0], limits = [0, 5])
+                                color("Gainsboro") translate([-1.5, 0, -4]) cube([3, 18, 8]);
+                }
+            }
+    }

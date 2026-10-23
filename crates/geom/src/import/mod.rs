@@ -2,13 +2,15 @@
 //! `file =` argument read, parsed the way the reference implementation
 //! (2021.01) reads them.
 //!
-//! 3D formats (STL, OFF, AMF, 3MF) give a triangle mesh with coincident
+//! 3D formats (STL, OFF, OBJ, AMF, 3MF, and STEP through FreeCAD) give a triangle mesh with coincident
 //! corners merged; 2D formats (DXF, SVG) give a cross-section.
 
 mod amf;
 mod dxf;
+mod obj;
 mod off;
 mod png;
+mod step;
 mod stl;
 mod surface;
 mod svg;
@@ -61,8 +63,10 @@ pub(crate) fn import(path: &Path, name: &str, params: &DxfParams, warnings: &mut
     match extension.as_str() {
         "stl" => stl::read(&read(warnings)?, name, warnings).map(|m| Imported::Solid(vec![m])),
         "off" => off::read(&read(warnings)?, name, warnings).map(|m| Imported::Solid(vec![m])),
+        "obj" => obj::read(&read(warnings)?, name, warnings).map(|m| Imported::Solid(vec![m])),
         "amf" => amf::read(&read(warnings)?, name, warnings).map(Imported::Solid),
         "3mf" => threemf::read(&read(warnings)?, name, warnings).map(Imported::Solid),
+        "step" | "stp" => step::read(path, name, &params.segments, warnings).map(|m| Imported::Solid(vec![m])),
         "dxf" => dxf(path, name, params, warnings).map(Imported::Flat),
         "svg" => svg::read(&read(warnings)?, name, warnings).map(Imported::Flat),
         "nef3" => {

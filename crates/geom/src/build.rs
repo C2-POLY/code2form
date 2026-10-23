@@ -601,7 +601,7 @@ fn colored(m: Manifold, ctx: Ctx) -> Model {
     Model::Solid(m.set_properties(COLOR_PROPS, move |props, _, _| props.copy_from_slice(&color)))
 }
 
-fn transform(model: Model, m: &Matrix) -> Model {
+pub(crate) fn transform(model: Model, m: &Matrix) -> Model {
     match model {
         Model::Solid(solid) => {
             let col = |j: usize| Vec3::new(m[0][j], m[1][j], m[2][j]);

@@ -61,10 +61,23 @@ they are. Written in Rust, it renders as you type.
   in a `.json` file.
 - **Geometry**: CSG with [Manifold](https://github.com/elalish/manifold)
   (through its Rust port), `text()` with real font shaping, `import()` of
-  STL, OFF, AMF, 3MF, DXF and SVG, `surface()` from `.dat` and PNG.
+  STL, OFF, OBJ, AMF, 3MF, DXF and SVG (and STEP, see
+  [Other programs](#other-programs-obj-step-urdf-json)), `surface()`
+  from `.dat` and PNG.
+- **Meshes**: Open… takes an STL, 3MF, OBJ, OFF, AMF or STEP file (or one
+  dropped on the window or opened from the Finder) as a design that
+  imports it, to look at it and build on it; Insert > Mesh… imports one on
+  the cursor's line, and Insert > Design's Modules or Whole Design adds a
+  `use <…>` or `include <…>` line at the top, its path relative to the
+  design.
 - **Export** of solids to STL and 3MF (in millimeters), checked with
   PrusaSlicer's own loader, and of 2D models to SVG and DXF, laid out as
-  the reference implementation (release 2021.01) writes them.
+  the reference implementation (release 2021.01) writes them. Export >
+  DXF of the View… draws a 3D model's outline as the view shows it, at its
+  size, for a laser cutter or a drawing (`c2f dxf --view front`).
+- **Other programs**: solids export to OBJ, to faceted STEP for CAD
+  programs, to URDF for robots, and their parts to JSON (see
+  [Other programs](#other-programs-obj-step-urdf-json)).
 - **Game engines**: solids export to glTF 2.0 (`.glb`), which Godot 4
   imports as it is and Unity through glTFast or UnityGLTF, with their
   colors as materials (see [Game engines](#game-engines-gltf)).
@@ -111,8 +124,9 @@ they are. Written in Rust, it renders as you type.
   `cutout_for()` and `circuit_part()`, which follow the circuit's parts,
   as `examples/grogu/grogu_plate.c2f` does.
 - **Command line**: `c2f` prints the AST, the CSG tree, an STL, a 3MF, a
-  glTF, an SVG or a DXF, and takes `-D name=value`, `-p presets.json` and
-  `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
+  glTF, an OBJ, a STEP, the parts' JSON, an SVG or a DXF (or writes them,
+  and a URDF, with `-o file`), and takes `-D name=value`, `-p presets.json`
+  and `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
   checks a circuit, prints its wiring list and bill of materials, and
   exports its assembled parts (see the
   [guide](docs/electronics.md#6-from-the-command-line)).
@@ -142,7 +156,7 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 | `render` | The error that stops the model, with its file, line and column; the echo output and warnings; whether it is 3D or 2D, its triangles, volume (area in 2D) and bounding box |
 | `parameters` | The customizer parameters: name, group, description, default and widget |
 | `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report |
-| `export` | Writes a solid as STL, 3MF or glTF (`.glb`, with `scale` in meters per unit), or a 2D model as SVG or DXF, to `output`, in the `format` its extension gives |
+| `export` | Writes a solid as STL, 3MF, glTF (`.glb`, with `scale` in meters per unit), OBJ (and its `.mtl`), STEP, URDF (and its meshes, with `density`) or its parts as JSON, a 2D model as SVG or DXF, or a 3D model's outline seen from `view` as DXF, to `output`, in the `format` its extension gives |
 
 For electronics, the agent finds parts and describes a circuit (`.c2fc`).
 The circuit tools take the circuit's text as `code` (its part files
@@ -294,6 +308,54 @@ as `$fn`, `$fa` and `$fs` say; the export prints the count (and the app
 shows it under the view). Keep `$fn` low on small curves: `$fn = 8` for a
 gem, 24 to 48 for a wheel or a barrel.
 
+## Other programs (OBJ, STEP, URDF, JSON)
+
+Each is in Export, `c2f <format>` and the MCP `export` tool.
+
+- **OBJ** (Blender, Maya, game engines): in millimeters, Z up as
+  designed, an object for the root and for each `part()`, placed where
+  the model puts it, and a material for each color in a `.mtl` beside it
+  (`c2f obj -o model.obj design.c2f`). `import("model.obj")` reads it back.
+- **STEP** (Fusion 360, SolidWorks, FreeCAD, Onshape): AP214, in
+  millimeters, in the model's colors. Code2Form builds triangles, not
+  exact surfaces, so the solids are faceted: the triangles in one plane
+  and one color become one face, holes its inner loops, so that a cube
+  has six faces to pick, measure and extrude, and a cylinder stays a
+  prism of facets. Each closed shell is a solid, a shell inside another a
+  cavity. FreeCAD reads the examples back as valid solids of the same
+  volume.
+- **STEP import**: `import("motor.step")` (or `.stp`, or Open…) asks
+  FreeCAD's command-line program to mesh it, when FreeCAD is installed
+  (found on the `PATH`, where its installers put it, or through
+  `C2F_FREECAD`); facets turn by at most `$fa`, or a `$fn`th of a turn.
+  The mesh is cached, so the design renders again at once.
+- **URDF** (ROS, RViz, Gazebo, MuJoCo, PyBullet, Isaac Sim): the root and
+  each `part()` are links, their geometry a binary STL in meters in a
+  folder beside the `.urdf`, their mass, center of mass and inertia
+  from their volume and a density (PLA's, 1240 kg/m³, by default:
+  `--density`). A part is joined to the part it is written in at the
+  origin of its own frame, fixed unless `part()` says how it moves:
+
+  ```
+  part("base") cylinder(r = 20, h = 10);
+  translate([0, 0, 10]) part("shoulder", joint = "continuous") {
+      cylinder(r = 8, h = 10);
+      translate([0, 0, 10]) rotate([90, 0, 0])
+          part("elbow", joint = "revolute", axis = [0, 0, 1], limits = [-90, 45])
+              cube([5, 30, 5]);
+  }
+  ```
+
+  `joint` is `revolute` (between `limits`, in degrees), `continuous` (a
+  wheel), `prismatic` (sliding between `limits`, in millimeters) or
+  `fixed`; `axis` is in the part's own frame, Z by default. Other
+  exports ignore the joint (`c2f urdf -o arm.urdf arm.c2f`).
+- **JSON** (a bill of materials, a configurator, an agent): the
+  `code2form-parts` format, version 1, in millimeters: the design's
+  parameters, its bounds and volume, and for the root and each `part()`
+  its name, its parent, its place (`matrix` in its parent, `world` in the
+  model, row by row), its joint, bounds, volume, triangles and colors.
+
 ## Compatibility
 
 Code2Form opens `.scad` files. Its parser, evaluator and geometry are
@@ -347,7 +409,7 @@ names.
 |---|---|
 | `crates/lang` (`c2f-lang`) | Lexer, parser, AST, customizer comments, electronics annotations, AST dump |
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
-| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, glTF, SVG and DXF exports, PNG pictures |
+| `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, glTF, OBJ, STEP, URDF, JSON, SVG and DXF exports, PNG pictures |
 | `crates/circuit` (`c2f-circuit`) | Circuit files: parts placed in space and the wires between their pins |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |
