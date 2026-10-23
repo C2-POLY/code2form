@@ -5,7 +5,7 @@
 // regulator, the RGB and power LEDs, the passives, and its two 22-pin
 // headers as it is sold. Seen from above, the antenna towards +y, the
 // USB-C connectors on the edge at y = 0.
-// https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide.html
+// https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/index.html
 //
 // Same chip as the XIAO ESP32-S3, so the same GPIO numbers. From the user
 // guide: the headers J1 (left) and J3 (right), 22 pins each at 2.54 mm
@@ -35,7 +35,7 @@
 // @spec interfaces: UART, I2C, SPI, I2S, ADC, capacitive touch, USB
 // @spec pins: 2 x 22 at 2.54 mm pitch, rows 22.86 mm apart
 // @spec size: 62.7 x 25.4 mm
-// @source https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide.html user guide
+// @source https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/index.html user guide
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf ESP32-S3-WROOM-1 datasheet
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf ESP32-S3 datasheet
 
