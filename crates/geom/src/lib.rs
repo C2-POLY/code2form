@@ -28,7 +28,7 @@ pub use build::{DEFAULT_COLOR, Model, render, render_in};
 pub use explode::{Explode, Exploded, exploded};
 pub use collide::{Placement, TOUCHING, collisions};
 pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
-pub use image::VIEWS;
+pub use image::{VIEWS, sheet_png};
 pub use import::objects as mesh_objects;
 pub use inventory::{PartsOptions, parts_json};
 pub use mesh::{Rendered, RenderMesh, Stats};

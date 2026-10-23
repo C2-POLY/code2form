@@ -1972,6 +1972,27 @@ impl StudioApp {
         self.export_as(Format::Dxf, Some(view));
     }
 
+    /// Asks where to save the sheet of views of the model, then has the
+    /// worker draw it.
+    fn export_sheet(&mut self) {
+        let stem = self.doc.path.as_deref().and_then(Path::file_stem).map_or_else(|| "model".into(), |s| s.to_string_lossy());
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(tr("Save the sheet of views", "Enregistrer la planche de vues"))
+            .add_filter("PNG", &["png"])
+            .set_file_name(format!("{stem}-views.png"));
+        let folder = self.settings.export_folder.clone().filter(|folder| folder.is_dir());
+        if let Some(dir) = folder.or_else(|| self.doc.directory()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(target) = dialog.save_file() {
+            // As for an export: this tab's model first.
+            if self.exportable != Some(self.doc.id) {
+                self.render_now();
+            }
+            self.worker.sheet(target);
+        }
+    }
+
     /// Asks where to write the model in `format`, then has the worker
     /// write it; a DXF of a 3D model is its outline seen from `view`.
     fn export_as(&mut self, format: Format, view: Option<(f64, f64)>) {
@@ -2472,6 +2493,16 @@ impl StudioApp {
                 );
                 if response.on_hover_text(hover).on_disabled_hover_text(tr("For 3D models", "Pour les modèles 3D")).clicked() {
                     self.export_view();
+                    ui.close();
+                }
+                let hover = tr(
+                    "A PNG of the model from four sides at one scale, with its size in millimeters and a 3D model cut \
+                     through its middle: to show it for approval",
+                    "Un PNG du modèle sous quatre angles à la même échelle, avec sa taille en millimètres et un modèle 3D \
+                     coupé en son milieu : pour le faire valider",
+                );
+                if ui.button(tr("View Sheet…", "Planche de vues…")).on_hover_text(hover).clicked() {
+                    self.export_sheet();
                     ui.close();
                 }
             })

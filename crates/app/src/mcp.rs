@@ -21,7 +21,8 @@ const INSTRUCTIONS: &str = "\
 Code2Form models parts as programs in the .scad language. Give a tool the \
 program's text (`code`) or a file (`path`). `render` reports errors with \
 their line, echo output, warnings, the triangle count, the volume and the \
-bounding box; `image` returns a picture of the model from a view; \
+bounding box; `image` returns a picture of the model from a view, or with \
+view `sheet` four views at one scale with its size, to show for approval; \
 `parameters` lists the customizer parameters, which every tool can set \
 with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D), \
 glTF (.glb) for game engines such as Godot and Unity, OBJ, STEP for CAD \
@@ -146,9 +147,14 @@ fn tools() -> Value {
             "description": "Renders a model and returns a PNG picture of it, framed to fit, in the app's colors, \
                             with the render report. Z is up; `front` looks along +Y, `top` down with X right and Y up, \
                             `diagonal` (or `isometric`) is the app's default view. A 2D model shows as a 1 mm slab, \
-                            best seen from `top`.",
+                            best seen from `top`. `sheet` is a sheet of views to show someone for approval: diagonal, \
+                            front, right and top, titled, at one scale, with the size in mm (width × depth × height) \
+                            and a scale bar; `section` adds the model cut through its middle (y = the box's center, \
+                            seen from the front, the cut hatched) to show inside a hollow part. A sheet has its own \
+                            size: `width` and `height` are ignored.",
             "inputSchema": schema(json!({
-                "view": { "type": "string", "enum": views, "default": "diagonal", "description": "Where the camera looks from." },
+                "view": { "type": "string", "enum": sheet_views(), "default": "diagonal", "description": "Where the camera looks from, or `sheet`." },
+                "section": { "type": "boolean", "default": false, "description": "With `view` = `sheet`: add a view cut through the middle." },
                 "width": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.0, "description": "In pixels." },
                 "height": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.1, "description": "In pixels." },
             }), &[]),
@@ -347,12 +353,32 @@ fn parameters_tool(args: &Value) -> Result<Vec<Value>, String> {
 }
 
 fn image_tool(args: &Value) -> Result<Vec<Value>, String> {
-    let (yaw, pitch, width, height) = view_and_size(args)?;
     let (rendered, report) = render(args)?;
-    let png = rendered
-        .png(yaw, pitch, width, height)
-        .ok_or_else(|| format!("the model is empty: nothing to draw\n{}", pretty(&report)))?;
+    let png = picture(&rendered, args)?.ok_or_else(|| format!("the model is empty: nothing to draw\n{}", pretty(&report)))?;
     Ok(vec![json!({ "type": "image", "data": base64(&png), "mimeType": "image/png" }), text(pretty(&report))])
+}
+
+/// The views `image` and `circuit_image` take: the presets, and the sheet.
+fn sheet_views() -> Vec<&'static str> {
+    c2f_geom::VIEWS.iter().map(|(name, _, _)| *name).chain(["isometric", "sheet"]).collect()
+}
+
+/// The picture the arguments ask for: the sheet of views for `view` =
+/// `sheet` (with a cut for `section`), else one view; `None` when there is
+/// nothing to draw.
+fn picture(rendered: &c2f_geom::Rendered, args: &Value) -> Result<Option<Vec<u8>>, String> {
+    let section = match args.get("section") {
+        None => false,
+        Some(v) => v.as_bool().ok_or("`section` must be true or false")?,
+    };
+    if args.get("view").and_then(Value::as_str) == Some("sheet") {
+        return Ok(rendered.sheet(section));
+    }
+    if section {
+        return Err("`section` goes with `view` = `sheet`".into());
+    }
+    let (yaw, pitch, width, height) = view_and_size(args)?;
+    Ok(rendered.png(yaw, pitch, width, height))
 }
 
 /// The camera's angles and the picture's size the arguments ask for.

@@ -8,7 +8,7 @@ use c2f_circuit::{Circuit, End, route};
 use c2f_lang::annotations::{self, PortSize};
 use serde_json::{Value, json};
 
-use super::{IMAGE_SIZE, Tool, base64, pretty, schema_of, text, view_and_size};
+use super::{IMAGE_SIZE, Tool, base64, picture, pretty, schema_of, text};
 use crate::circuit::{DEFAULT_MARGIN, assemble, bom, wires};
 
 /// The library folder parts are listed from.
@@ -33,7 +33,6 @@ pub fn tools() -> Vec<Value> {
             },
         })
     };
-    let views: Vec<&str> = c2f_geom::VIEWS.iter().map(|(name, _, _)| *name).chain(["isometric"]).collect();
     vec![
         json!({
             "name": "library_parts",
@@ -68,10 +67,11 @@ pub fn tools() -> Vec<Value> {
             "name": "circuit_image",
             "title": "Picture of a circuit",
             "description": "A PNG picture of a circuit: its parts where it places them and its wires as tubes in their \
-                            colors, from a view as `image` takes. `net` (a pin, as `xiao.GND`) highlights the wires of its \
-                            net and greys the others.",
+                            colors, from a view as `image` takes, or its sheet of views (`view` = `sheet`, with \
+                            `section`). `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others.",
             "inputSchema": schema_of(super::merge(circuit(), json!({
-                "view": { "type": "string", "enum": views, "default": "diagonal", "description": "Where the camera looks from." },
+                "view": { "type": "string", "enum": super::sheet_views(), "default": "diagonal", "description": "Where the camera looks from, or `sheet`." },
+                "section": { "type": "boolean", "default": false, "description": "With `view` = `sheet`: add a view cut through the middle." },
                 "width": { "type": "integer", "minimum": 1, "maximum": super::MAX_IMAGE_SIZE, "default": IMAGE_SIZE.0, "description": "In pixels." },
                 "height": { "type": "integer", "minimum": 1, "maximum": super::MAX_IMAGE_SIZE, "default": IMAGE_SIZE.1, "description": "In pixels." },
                 "net": { "type": "string", "description": "A pin, as `part.pin`, whose net to highlight." },
@@ -303,7 +303,6 @@ fn objects(rows: &[Vec<String>]) -> Vec<Value> {
 }
 
 fn circuit_image(args: &Value) -> Result<Vec<Value>, String> {
-    let (yaw, pitch, width, height) = view_and_size(args)?;
     let (circuit, src, path) = load(args)?;
     let highlight = match args.get("net").and_then(Value::as_str) {
         None => None,
@@ -328,7 +327,7 @@ fn circuit_image(args: &Value) -> Result<Vec<Value>, String> {
             rendered.solid.push_triangle(std::array::from_fn(|k| tube.positions[corners[k] as usize]), [color; 3]);
         }
     }
-    let png = rendered.png(yaw, pitch, width, height).ok_or("the circuit is empty: nothing to draw")?;
+    let png = picture(&rendered, args)?.ok_or("the circuit is empty: nothing to draw")?;
     let mut report = json!({ "parts": circuit.parts.len(), "wires": circuit.wires.len() });
     if let Some(net) = &highlight {
         report["net"] = json!(net.iter().map(|&end| circuit.end_name(end)).collect::<Vec<_>>());
