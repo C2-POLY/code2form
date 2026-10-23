@@ -950,7 +950,7 @@ fn mass_properties_weighs_designs_and_circuits() {
     assert_eq!(stability["base"].as_array().unwrap().len(), 4, "{stability}");
     assert!(report.get("components").is_none());
 
-    // A circuit: the nightlight's sheets give no mass yet.
+    // A circuit: the nightlight's parts weigh what their sheets say.
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let (is_error, report) = server.report("mass_properties", json!({ "path": dir.join("../../examples/nightlight/nightlight.c2fc") }));
     assert!(!is_error, "{report}");
@@ -958,12 +958,13 @@ fn mass_properties_weighs_designs_and_circuits() {
     assert_eq!(names, ["Base", "Top", "Dome"]);
     let components = report["components"].as_array().unwrap();
     assert_eq!(components.len(), 3);
-    assert!(components.iter().all(|c| c["mass_g"].is_null()), "{report}");
+    let masses: Vec<Option<f64>> = components.iter().map(|c| c["mass_g"].as_f64()).collect();
+    assert_eq!(masses, [Some(3.0), Some(3.3), Some(1.1)], "{report}");
     assert_eq!(components[0]["part"], "electronics/xiao_esp32s3.c2f");
     let warnings = report["warnings"].as_array().unwrap();
-    assert_eq!(warnings.iter().filter(|w| w.as_str().unwrap().contains("has no mass on its sheet")).count(), 3, "{report}");
+    assert!(!warnings.iter().any(|w| w.as_str().unwrap().contains("has no mass on its sheet")), "{report}");
     let enclosure: f64 = report["parts"].as_array().unwrap().iter().map(|p| p["mass_g"].as_f64().unwrap()).sum();
-    assert!((report["total"]["mass_g"].as_f64().unwrap() - enclosure).abs() < 1e-2, "{report}");
+    assert!((report["total"]["mass_g"].as_f64().unwrap() - enclosure - 7.4).abs() < 1e-2, "{report}");
     // A part whose sheet gives its mass: 10 g.
     let (_, report) = server.report("mass_properties", json!({ "path": dir.join("tests/mass/ballast.c2fc") }));
     assert_eq!(report["components"][0], json!({ "name": "weight", "part": "ballast.c2f", "mass_g": 10.0, "center": [35.0, 35.0, 10.0] }));

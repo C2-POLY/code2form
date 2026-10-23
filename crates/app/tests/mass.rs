@@ -63,17 +63,18 @@ fn an_l_tips_over_its_short_side() {
 }
 
 #[test]
-fn the_nightlight_weighs_its_enclosure_and_warns_of_parts_without_a_mass() {
+fn the_nightlight_weighs_its_enclosure_and_its_parts() {
     let dir = manifest().join("../../examples/nightlight");
     let design = c2f(&dir, &["nightlight.c2f"]);
     assert!(design.status.success(), "{}", text(&design.stderr));
     let circuit = c2f(&dir, &["nightlight.c2fc"]);
     assert!(circuit.status.success(), "{}", text(&circuit.stderr));
     let (stdout, stderr) = (text(&circuit.stdout), text(&circuit.stderr));
-    // Its sheets give no mass yet.
-    for part in ["xiao", "ring", "touch"] {
-        assert!(stderr.contains(&format!("WARNING: `{part}` has no mass on its sheet")), "{stderr}");
-        assert!(stdout.lines().any(|line| line.starts_with(part) && line.contains(" ? ")), "{stdout}");
+    // Each part weighs what its sheet says: the XIAO 3 g, the ring 3.3 g,
+    // the touch plate 1.1 g.
+    assert!(!stderr.contains("has no mass on its sheet"), "{stderr}");
+    for (part, mass) in [("xiao", "3.0 g"), ("ring", "3.3 g"), ("touch", "1.1 g")] {
+        assert!(stdout.lines().any(|line| line.starts_with(part) && line.contains(mass)), "{part}: {stdout}");
     }
     // The enclosure's three pieces weigh what the design does alone (the
     // columns are as wide as the longest name).
@@ -86,8 +87,12 @@ fn the_nightlight_weighs_its_enclosure_and_warns_of_parts_without_a_mass() {
     };
     assert_eq!(pieces(&stdout).len(), 3, "{stdout}");
     assert_eq!(pieces(&stdout), pieces(&text(&design.stdout)));
-    let total = |stdout: &str| stdout.lines().find(|line| line.starts_with("total:")).unwrap().to_string();
-    assert_eq!(total(&stdout), total(&text(&design.stdout)));
+    // The total is the design's and the parts' 7.4 g.
+    let total = |stdout: &str| -> f64 {
+        let line = stdout.lines().find(|line| line.starts_with("total:")).unwrap();
+        line.trim_start_matches("total:").split_whitespace().next().unwrap().parse().unwrap()
+    };
+    assert!((total(&stdout) - total(&text(&design.stdout)) - 7.4).abs() < 0.11, "{stdout}");
     assert!(stdout.contains("stands on"), "{stdout}");
 }
 
