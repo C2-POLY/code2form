@@ -428,8 +428,14 @@ fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
     let piece = args.get("piece").and_then(Value::as_str);
     let done = c2f_circuit::electrify::electrify(&src, &design_file, &circuit_file, piece)?;
     std::fs::write(&circuit_path, &done.circuit).map_err(|err| format!("cannot write {}: {err}", circuit_path.display()))?;
-    std::fs::write(&path, &done.design).map_err(|err| format!("cannot write {}: {err}", path.display()))?;
-    let after = render(&json!({ "path": path }))?.1;
+    // Anything that fails from here leaves the design as it was, and no circuit.
+    let undo = |why: String| {
+        let _ = std::fs::write(&path, &src);
+        let _ = std::fs::remove_file(&circuit_path);
+        why
+    };
+    std::fs::write(&path, &done.design).map_err(|err| undo(format!("cannot write {}: {err}", path.display())))?;
+    let after = render(&json!({ "path": path })).map_err(undo)?.1;
     let report = json!({
         "ok": true,
         "design": path.display().to_string(),

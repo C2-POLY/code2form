@@ -846,7 +846,7 @@ check what the agent wrote and file it.
   parts folder, `~/Documents/Code2Form/libraries/electronics`, the one
   the catalogue's **New part...** uses: the catalogue lists it, and a
   circuit names it `electronics/NAME.c2f`. It refuses a file that does
-  not parse, whose annotations have errors, or without a `@description`
+  not parse, in which `check_part` finds errors, or without a `@description`
   and at least one `@source`, and it does not replace a part unless
   `overwrite` is true. It returns the path and the `check_part` report.
 

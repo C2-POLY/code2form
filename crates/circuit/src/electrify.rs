@@ -61,6 +61,22 @@ pub fn electrify(src: &str, design_file: &str, circuit_file: &str, piece: Option
         return Err("the design already has a module named design, electronics_cuts or electronics_mounts".into());
     }
     let pieces = pieces(&file.stmts);
+    // Pieces drawn from inside a module would be wrapped with the rest.
+    let in_modules: Vec<&str> = file
+        .stmts
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::Module(m) if !self::pieces(std::slice::from_ref(&m.body)).is_empty() => Some(m.name.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !in_modules.is_empty() {
+        return Err(format!(
+            "the design draws pieces from inside modules ({}): write each part(\"…\") where the module is called, \
+             around the call, so that its pieces stay apart",
+            in_modules.join(", ")
+        ));
+    }
     if !pieces.is_empty() {
         let design = in_piece(src, &pieces, piece, circuit_file)?;
         return Ok(Electrified { design, circuit: circuit(design_file) });
@@ -239,7 +255,8 @@ fn in_piece(src: &str, pieces: &[Piece], piece: Option<&str>, circuit_file: &str
 /// The design with `// @circuit` after its opening comment, so that the
 /// comment that says what the design is stays first.
 fn with_circuit_line(src: &str, circuit_file: &str) -> String {
-    let line = format!("// @circuit {circuit_file}\n");
+    let link = c2f_lang::annotations::CircuitLink { path: circuit_file.to_string(), span: Default::default() };
+    let line = format!("// {link}\n");
     let mut offset = 0;
     for raw in src.split_inclusive('\n') {
         if !raw.trim_start().starts_with("//") {
@@ -259,7 +276,7 @@ fn dedent(text: &str, column: usize) -> String {
     let mut lines = text.lines();
     let mut out = lines.next().unwrap_or_default().to_string();
     for line in lines {
-        let indent = (line.len() - line.trim_start().len()).min(column);
+        let indent = line.bytes().take_while(|b| *b == b' ' || *b == b'\t').count().min(column);
         out.push('\n');
         out.push_str(&line[indent..]);
     }
@@ -330,5 +347,20 @@ mod tests {
         assert!(design.contains("module electronics_cuts() {\n}") && design.contains("module electronics_mounts() {\n}"));
         // Without pieces, there is none to name.
         assert!(electrify(DESIGN, "box.c2f", "box.c2fc", Some("Base")).is_err());
+    }
+
+    #[test]
+    fn what_could_break_the_design_is_refused_or_kept_safe() {
+        // Pieces drawn from inside a module.
+        let err = electrify("module base() part(\"Base\") cube(10);\nbase();\n", "a.c2f", "a.c2fc", None).unwrap_err();
+        assert!(err.contains("inside modules (base)"), "{err}");
+        // A circuit's name with a space is quoted, and reads back.
+        let out = electrify("cube(1);\n", "night light.c2f", "night light.c2fc", None).unwrap();
+        let (annotations, errors) = c2f_lang::annotations::read(&out.design);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(annotations.circuit.map(|c| c.path), Some("night light.c2fc".to_string()));
+        // An indent that is not plain spaces.
+        let out = electrify(" cube([1,\n\u{a0} 2, 3]);\n", "a.c2f", "a.c2fc", None).unwrap();
+        assert!(out.design.contains("\u{a0} 2, 3]);"), "{}", out.design);
     }
 }

@@ -916,11 +916,12 @@ impl StudioApp {
             let enclosure = self.doc.wiring.as_ref()?.circuit.enclosure.clone()?;
             return enclosure.is_file().then_some((enclosure, true));
         }
-        // A plain search: the toolbar asks every frame, and a design names
-        // its circuit at the start of a line.
-        let at = self.doc.text.find("// @circuit ")?;
-        let name = self.doc.text[at + "// @circuit ".len()..].lines().next()?.trim();
-        let path = self.doc.directory()?.join(name);
+        // The toolbar asks every frame: most designs name no circuit.
+        if !self.doc.text.contains("@circuit") {
+            return None;
+        }
+        let link = c2f_lang::annotations::read(&self.doc.text).0.circuit?;
+        let path = self.doc.directory()?.join(link.path);
         path.is_file().then_some((path, false))
     }
 

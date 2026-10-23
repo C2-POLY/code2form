@@ -754,3 +754,16 @@ fn circuit_image_draws_the_enclosure_see_through() {
     let (is_error, _) = server.call("circuit_image", json!({ "path": path, "enclosure": "yes" }));
     assert!(is_error);
 }
+
+#[test]
+fn save_part_refuses_what_check_part_finds_wrong_and_fit_a_clearance_it_cannot_measure() {
+    let (mut server, home) = server_at_home("refuse");
+    let part = "// @description A board.\n// @source https://example.com/board page\n// @pin FAR [40, 1, 1.6] io 3.3V\ncube([20, 10, 1.6]);\n";
+    let (is_error, report) = server.report("save_part", json!({ "name": "board", "code": part }));
+    assert!(is_error && report["why"] == "check_part finds errors in it", "{report}");
+    assert!(!home.join("Documents/Code2Form/libraries/electronics/board.c2f").exists());
+    let circuit = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nightlight/nightlight.c2fc");
+    let (is_error, _) = server.report("fit", json!({ "path": circuit, "clearance": 20 }));
+    assert!(is_error);
+    let _ = std::fs::remove_dir_all(home);
+}

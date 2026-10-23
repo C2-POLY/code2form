@@ -113,6 +113,7 @@ pub fn tools() -> Vec<Value> {
                 "clearance": {
                     "type": "number",
                     "minimum": 0,
+                    "maximum": c2f_geom::SEARCH,
                     "default": c2f_geom::CLEARANCE,
                     "description": "The room each part needs around it, in millimeters.",
                 },
@@ -337,7 +338,10 @@ fn check_circuit(args: &Value) -> Result<Vec<Value>, String> {
 fn fit_tool(args: &Value) -> Result<Vec<Value>, String> {
     let clearance = match args.get("clearance") {
         None => c2f_geom::CLEARANCE,
-        Some(value) => value.as_f64().filter(|mm| mm.is_finite() && *mm >= 0.0).ok_or("`clearance` is a length in millimeters, 0 or more")?,
+        Some(value) => value
+            .as_f64()
+            .filter(|mm| mm.is_finite() && (0.0..=c2f_geom::SEARCH).contains(mm))
+            .ok_or(format!("`clearance` is a length in millimeters, from 0 to {}", c2f_geom::SEARCH))?,
     };
     let (circuit, src, path) = load(args)?;
     let assembly = assemble(&circuit, &src, &path);

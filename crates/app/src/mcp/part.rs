@@ -40,7 +40,7 @@ pub fn tools() -> Vec<Value> {
                             `// @mount_hole` and `// @port` annotations in its millimeters, and its sheet: \
                             `// @description` (what it is and does, a sentence or two), `// @spec key: value` lines (supply, \
                             current, interface, size...: only figures the sources give) and a `// @source URL label` for \
-                            each page used. Refuses a file that does not parse, whose annotations have errors, or that \
+                            each page used. Refuses a file that does not parse, that check_part finds errors in, whose annotations have errors, or that \
                             lacks a `@description` or a `@source`; refuses to replace a part unless `overwrite` is true.",
             "inputSchema": schema_of(json!({
                 "name": { "type": "string", "description": "The part's file name without `.c2f`, and its module's name: letters, digits and `_`, not starting with a digit." },
@@ -186,6 +186,11 @@ fn save_part(args: &Value) -> Result<Vec<Value>, String> {
     let path = folder.join(format!("{name}.c2f"));
     if path.exists() && !overwrite {
         return Err(format!("{} already exists: pass `overwrite: true` to replace it", path.display()));
+    }
+    // What check_part finds wrong, before anything is written.
+    let check = report(code, None, folder.to_str());
+    if check["ok"] != true {
+        return Err(pretty(&json!({ "saved": false, "why": "check_part finds errors in it", "check": check })));
     }
     std::fs::create_dir_all(&folder).map_err(|err| format!("cannot make {}: {err}", folder.display()))?;
     std::fs::write(&path, code).map_err(|err| format!("cannot write {}: {err}", path.display()))?;

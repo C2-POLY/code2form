@@ -41,7 +41,12 @@ pub fn run(args: &[String]) -> ExitCode {
         };
         match value.and_then(|v| v.parse::<f64>().ok()).filter(|mm| mm.is_finite() && *mm >= 0.0) {
             Some(mm) if option == "--margin" => margin = Some(mm),
-            Some(mm) => clearance = Some(mm),
+            // Gaps are measured up to SEARCH: a larger clearance could not be told.
+            Some(mm) if mm <= c2f_geom::SEARCH => clearance = Some(mm),
+            Some(_) => {
+                eprintln!("error: --clearance takes a length in millimeters, from 0 to {}", c2f_geom::SEARCH);
+                return ExitCode::from(2);
+            }
             None => {
                 eprintln!("error: {option} takes a length in millimeters, 0 or more");
                 return ExitCode::from(2);
