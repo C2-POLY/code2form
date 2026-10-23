@@ -234,6 +234,15 @@ mod tests {
     }
 
     #[test]
+    fn marked_parts_are_shown_where_their_transformations_put_them() {
+        let model = rendered("translate([50, 0, 0]) rotate([0, 0, 90]) %cube([5, 2, 1]); translate([0, 20, 0]) #cube(3);");
+        assert_eq!(model.backgrounds.bounds(), Some(([48.0, 0.0, 0.0], [50.0, 5.0, 1.0])));
+        assert_eq!(model.highlights.bounds(), Some(([0.0, 20.0, 0.0], [3.0, 23.0, 3.0])));
+        // The model itself is the highlighted cube, built once.
+        assert_eq!(model.stats.volume, 27.0);
+    }
+
+    #[test]
     fn no_stl_for_flat_or_empty_models() {
         for src in ["square(5);", "cube(0);", ""] {
             let model = rendered(src);

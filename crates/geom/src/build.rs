@@ -113,6 +113,9 @@ struct Builder {
     /// outlines carry no color, so the context they are built in does not
     /// matter.
     projections: Vec<(Node, Model)>,
+    /// The `multmatrix()`es around the node being built, innermost last:
+    /// a `#` or `%` part is shown where they put it.
+    placement: Vec<Matrix>,
 }
 
 impl Builder {
@@ -127,13 +130,21 @@ impl Builder {
         let model = self.node_inner(node, ctx);
         if node.background {
             // Shown, but not part of the model.
-            self.backgrounds.push(model);
+            let shown = self.placed(model);
+            self.backgrounds.push(shown);
             return Model::Empty;
         }
         if node.highlight {
-            self.highlights.push(model.clone());
+            let shown = self.placed(model.clone());
+            self.highlights.push(shown);
         }
         model
+    }
+
+    /// `model`, built in the frame of the node being built, in the
+    /// model's frame.
+    fn placed(&self, model: Model) -> Model {
+        self.placement.iter().rev().fold(model, |model, m| transform(model, m))
     }
 
     fn children(&mut self, node: &Node, ctx: Ctx) -> Vec<Model> {
@@ -166,7 +177,9 @@ impl Builder {
                 self.union(parts)
             }
             NodeKind::Transform(m) => {
+                self.placement.push(*m);
                 let parts = self.children(node, ctx);
+                self.placement.pop();
                 let model = self.union(parts);
                 transform(model, m)
             }
