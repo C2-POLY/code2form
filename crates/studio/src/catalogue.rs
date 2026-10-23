@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use eframe::egui::{self, Button, ColorImage, RichText, TextEdit, TextureHandle, TextureOptions, Vec2};
 use glam::Vec3;
 
+use crate::i18n::tr;
 use crate::pick::Ray;
 use crate::theme;
 
@@ -251,14 +252,18 @@ module {name}(length = 20, width = 15, thickness = 1.6) {{
 /// replace a file.
 pub fn create(folder: &Path, name: &str) -> Result<PathBuf, String> {
     if !valid_module_name(name) {
-        return Err("a part's name is letters, digits and `_`, not starting with a digit".to_string());
+        return Err(tr(
+            "a part's name is letters, digits and `_`, not starting with a digit",
+            "le nom d'un composant est fait de lettres, de chiffres et de `_`, sans commencer par un chiffre",
+        )
+        .to_string());
     }
-    std::fs::create_dir_all(folder).map_err(|err| format!("cannot make {}: {err}", folder.display()))?;
+    std::fs::create_dir_all(folder).map_err(|err| tr!("cannot make {}: {err}", "impossible de créer {} : {err}", folder.display()))?;
     let path = folder.join(format!("{name}.c2f"));
     if path.exists() {
-        return Err(format!("{} already exists", path.display()));
+        return Err(tr!("{} already exists", "{} existe déjà", path.display()));
     }
-    std::fs::write(&path, template(name)).map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+    std::fs::write(&path, template(name)).map_err(|err| tr!("cannot write {}: {err}", "impossible d'écrire {} : {err}", path.display()))?;
     Ok(path)
 }
 
@@ -418,24 +423,33 @@ impl Catalogue {
             })
             .clone();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Parts").strong().color(theme::palette().text));
+            ui.label(RichText::new(tr("Parts", "Composants")).strong().color(theme::palette().text));
             ui.label(RichText::new(format!("{}", entries.len())).color(theme::palette().text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("New part…").on_hover_text("Make a part from a template, in your parts folder").clicked()
+                if ui
+                    .button(tr("New part…", "Nouveau composant…"))
+                    .on_hover_text(tr(
+                        "Make a part from a template, in your parts folder",
+                        "Créer un composant à partir d'un modèle, dans votre dossier de composants",
+                    ))
+                    .clicked()
                 {
                     self.prompt = Some((String::new(), None));
                 }
-                if ui.small_button("⟳").on_hover_text("List the parts again").clicked() {
+                if ui.small_button("⟳").on_hover_text(tr("List the parts again", "Actualiser la liste des composants")).clicked() {
                     self.refresh();
                 }
             });
         });
         ui.add(
             TextEdit::singleline(&mut self.query)
-                .hint_text("Search name, description or pin")
+                .hint_text(tr("Search name, description or pin", "Rechercher un nom, une description ou une broche"))
                 .desired_width(f32::INFINITY),
         );
-        ui.label(RichText::new("Drag a part into the view, or press Add").size(11.5).color(theme::palette().text_dim));
+        ui.label(RichText::new(tr(
+            "Drag a part into the view, or press Add",
+            "Glissez un composant dans la vue, ou cliquez sur Ajouter",
+        )).size(11.5).color(theme::palette().text_dim));
         ui.add_space(4.0);
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -453,13 +467,13 @@ impl Catalogue {
                         }
                     })
                     .response
-                    .on_hover_text(format!("Drag {} into the view", entry.rel));
+                    .on_hover_text(tr!("Drag {} into the view", "Glissez {} dans la vue", entry.rel));
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&entry.name).strong().color(theme::palette().text));
                             let pins = entry.pins.len();
                             ui.label(
-                                RichText::new(format!("{pins} pin{}", if pins == 1 { "" } else { "s" }))
+                                RichText::new(tr!("{pins} pin{}", "{pins} broche{}", if pins == 1 { "" } else { "s" }))
                                     .size(11.5)
                                     .color(theme::palette().text_dim),
                             );
@@ -473,8 +487,8 @@ impl Catalogue {
                             );
                         }
                         if ui
-                            .add(Button::new("Add").small())
-                            .on_hover_text("Place it beside the circuit's parts")
+                            .add(Button::new(tr("Add", "Ajouter")).small())
+                            .on_hover_text(tr("Place it beside the circuit's parts", "Le placer à côté des composants du circuit"))
                             .clicked()
                         {
                             action = Some(Action::Add(entry.clone()));
@@ -497,14 +511,17 @@ impl Catalogue {
         let mut close = false;
         let modal = egui::Modal::new(egui::Id::new("new-part")).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("New part").heading().color(theme::palette().text));
+            ui.label(RichText::new(tr("New part", "Nouveau composant")).heading().color(theme::palette().text));
             ui.add_space(4.0);
             let folder = user_folder().map(|f| f.display().to_string()).unwrap_or_default();
             ui.label(
-                RichText::new(format!("A part made from a template, in {folder}")).color(theme::palette().text_dim),
+                RichText::new(tr!(
+                    "A part made from a template, in {folder}",
+                    "Un composant créé à partir d'un modèle, dans {folder}",
+                )).color(theme::palette().text_dim),
             );
             ui.add_space(6.0);
-            let field = ui.add(TextEdit::singleline(name).hint_text("name, as my_sensor").desired_width(f32::INFINITY));
+            let field = ui.add(TextEdit::singleline(name).hint_text(tr("name, as my_sensor", "nom, comme my_sensor")).desired_width(f32::INFINITY));
             field.request_focus();
             if let Some(problem) = problem.as_ref() {
                 ui.label(RichText::new(problem.as_str()).color(theme::palette().error));
@@ -512,8 +529,8 @@ impl Catalogue {
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("Create").clicked() || enter {
-                    match user_folder().ok_or("no home folder".to_string()).and_then(|f| create(&f, name.trim())) {
+                if ui.button(tr("Create", "Créer")).clicked() || enter {
+                    match user_folder().ok_or(tr("no home folder", "aucun dossier personnel").to_string()).and_then(|f| create(&f, name.trim())) {
                         Ok(path) => {
                             action = Some(Action::Created(path));
                             close = true;
@@ -521,7 +538,7 @@ impl Catalogue {
                         Err(why) => *problem = Some(why),
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr("Cancel", "Annuler")).clicked() {
                     close = true;
                 }
             });

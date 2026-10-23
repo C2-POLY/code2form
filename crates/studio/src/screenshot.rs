@@ -6,11 +6,12 @@
 //! `assembly:7` shows the assembly mode at its seventh wire; and
 //! `rewire:xiao.5V>mic.VDD`, a new wire dragged from one pin to another;
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
-//! `mic` mid-drag at x 40, y 10; `settings:view` shows a page of the
-//! settings (`app-icon`, `editor`, `view`, `export`, `libraries`,
-//! `shortcuts`); `play` plays a design that reads `$t`, and `exploded`
-//! draws its part()s apart (`play,exploded` does both).
-//! `CODE2FORM_APPEARANCE` picks the theme.
+//! `mic` mid-drag at x 40, y 10; `settings:model` shows a page of the
+//! settings (`general`, `appearance`, `editor`, `model`, `export`,
+//! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
+//! `exploded` draws its part()s apart (`play,exploded` does both).
+//! `CODE2FORM_APPEARANCE` picks the theme, `CODE2FORM_LANGUAGE` the
+//! language (`en` or `fr`).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

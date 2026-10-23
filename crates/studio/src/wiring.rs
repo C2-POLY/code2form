@@ -13,6 +13,7 @@ use c2f_geom::RenderMesh;
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::circuit::parse_color;
+use crate::i18n::tr;
 use crate::theme;
 
 /// The radius of a wire's tube, in millimeters.
@@ -164,7 +165,7 @@ impl Wiring {
     pub fn legend(&self) -> Vec<LegendEntry> {
         let mut entries: Vec<LegendEntry> = Vec::new();
         for (wire, &color) in self.circuit.wires.iter().zip(&self.colors) {
-            let name = wire.color.clone().unwrap_or_else(|| "no color".to_string());
+            let name = wire.color.clone().unwrap_or_else(|| tr("no color", "sans couleur").to_string());
             let at = match entries.iter().position(|e| e.name.eq_ignore_ascii_case(&name)) {
                 Some(at) => at,
                 None => {
@@ -215,7 +216,7 @@ pub fn paint_legend(painter: &egui::Painter, rect: Rect, right: f32, top: f32, e
             (entry, name, labels)
         })
         .collect();
-    let title = painter.layout_no_wrap("Wires".to_string(), FontId::proportional(12.5), p.overlay_text);
+    let title = painter.layout_no_wrap(tr("Wires", "Fils").to_string(), FontId::proportional(12.5), p.overlay_text);
     let name_width = rows.iter().map(|(_, n, _)| n.size().x).fold(0.0, f32::max);
     let labels_width = rows.iter().map(|(_, _, l)| l.size().x).fold(0.0, f32::max);
     let row_height = 18.0;

@@ -257,7 +257,7 @@ impl PartCache {
         let text = match c2f_eval::read_source(path) {
             Ok(text) => text,
             Err(err) => {
-                let line = Line::new(Level::Error, format!("Cannot read the enclosure {}: {err}", path.display()));
+                let line = Line::new(Level::Error, tr!("Cannot read the enclosure {}: {}", "Impossible de lire le boîtier {} : {}", path.display(), err));
                 return Some(Arc::new(PartRender::failed(vec![line])));
             }
         };
@@ -346,10 +346,10 @@ pub fn collision_lines(circuit: &Circuit, collisions: &[Collision]) -> Vec<Line>
         .map(|c| {
             let name = |i: usize| format!("`{}`", circuit.parts[i].name);
             let what = match c.other {
-                Some(other) => format!("{} and {} overlap", name(c.part), name(other)),
-                None => format!("{} runs into the enclosure", name(c.part)),
+                Some(other) => tr!("{} and {} overlap", "{} et {} se chevauchent", name(c.part), name(other)),
+                None => tr!("{} runs into the enclosure", "{} heurte le boîtier", name(c.part)),
             };
-            Line::new(Level::Warning, format!("Collision: {what} by {:.2} mm³", c.volume))
+            Line::new(Level::Warning, tr!("Collision: {} by {:.2} mm³", "Collision : {} de {:.2} mm³", what, c.volume))
         })
         .collect()
 }
@@ -441,7 +441,7 @@ pub fn label_lines(lines: Vec<Line>, path: &Path) -> Vec<Line> {
         .into_iter()
         .map(|line| match line.level {
             Level::Error if line.text.contains(&name) => line,
-            _ => Line::new(line.level, format!("{name}: {}", line.text)),
+            _ => Line::new(line.level, tr!("{}: {}", "{} : {}", name, line.text)),
         })
         .collect()
 }

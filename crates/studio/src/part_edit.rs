@@ -10,6 +10,7 @@ use c2f_circuit::{Circuit, Instance};
 use glam::Vec3;
 
 use crate::catalogue::coordinate;
+use crate::i18n::tr;
 use crate::pick::{self, Hit, Ray};
 use crate::rewire::{self, Side};
 use crate::wiring::Wiring;
@@ -108,7 +109,11 @@ fn vector(v: [f64; 3]) -> String {
 }
 
 fn changed() -> String {
-    "the circuit changed since it was read: try again once it is rendered".to_string()
+    tr(
+        "the circuit changed since it was read: try again once it is rendered",
+        "le circuit a changé depuis sa lecture : réessayez une fois le rendu fini",
+    )
+    .to_string()
 }
 
 /// The circuit's text with part `instance` moved to `at` (when given) and

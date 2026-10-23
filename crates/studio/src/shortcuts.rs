@@ -6,6 +6,8 @@ use std::cmp::Reverse;
 
 use eframe::egui::{Context, Event, InputState, Key, KeyboardShortcut, Modifiers};
 
+use crate::i18n::tr;
+
 /// What a shortcut does, in the order of the Shortcuts page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -81,23 +83,23 @@ impl Action {
 
     pub fn name(self) -> &'static str {
         match self {
-            Action::New => "New File",
-            Action::Open => "Open…",
-            Action::Save => "Save",
-            Action::SaveAs => "Save As…",
-            Action::CloseTab => "Close Tab",
-            Action::NextTab => "Next Tab",
-            Action::PreviousTab => "Previous Tab",
-            Action::Render => "Render",
-            Action::Export => "Export STL…",
-            Action::Find => "Find",
-            Action::FindReplace => "Find and Replace",
-            Action::FindNext => "Find Next",
-            Action::FindPrevious => "Find Previous",
-            Action::ZoomIn => "Larger Interface",
-            Action::ZoomOut => "Smaller Interface",
-            Action::ZoomReset => "Interface at 100%",
-            Action::Settings => "Settings…",
+            Action::New => tr("New File", "Nouveau fichier"),
+            Action::Open => tr("Open…", "Ouvrir…"),
+            Action::Save => tr("Save", "Enregistrer"),
+            Action::SaveAs => tr("Save As…", "Enregistrer sous…"),
+            Action::CloseTab => tr("Close Tab", "Fermer l'onglet"),
+            Action::NextTab => tr("Next Tab", "Onglet suivant"),
+            Action::PreviousTab => tr("Previous Tab", "Onglet précédent"),
+            Action::Render => tr("Render", "Rendu"),
+            Action::Export => tr("Export STL…", "Exporter en STL…"),
+            Action::Find => tr("Find", "Rechercher"),
+            Action::FindReplace => tr("Find and Replace", "Rechercher et remplacer"),
+            Action::FindNext => tr("Find Next", "Occurrence suivante"),
+            Action::FindPrevious => tr("Find Previous", "Occurrence précédente"),
+            Action::ZoomIn => tr("Larger Interface", "Agrandir l'interface"),
+            Action::ZoomOut => tr("Smaller Interface", "Réduire l'interface"),
+            Action::ZoomReset => tr("Interface at 100%", "Interface à 100 %"),
+            Action::Settings => tr("Settings…", "Réglages…"),
         }
     }
 
@@ -274,25 +276,32 @@ fn check(keys: KeyboardShortcut) -> Result<(), String> {
         Key::Escape,
     ];
     if editing.contains(&key) {
-        return Err(format!("{} moves or edits in the editor: pick other keys", key.name()));
+        return Err(tr!(
+            "{} moves or edits in the editor: pick other keys",
+            "{} déplace ou modifie dans l'éditeur : choisissez d'autres touches",
+            key.name()
+        ));
     }
     let function = key.name().strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok());
     if !(m.command || m.ctrl || m.alt || function) {
-        let with = if cfg!(target_os = "macos") { "⌘, ⌃ or ⌥" } else { "Ctrl or Alt" };
-        return Err(format!("Alone, these keys type text: add {with}, or use a function key"));
+        let with = if cfg!(target_os = "macos") { tr("⌘, ⌃ or ⌥", "⌘, ⌃ ou ⌥") } else { tr("Ctrl or Alt", "Ctrl ou Alt") };
+        return Err(tr!(
+            "Alone, these keys type text: add {with}, or use a function key",
+            "Seules, ces touches tapent du texte : ajoutez {with}, ou utilisez une touche de fonction"
+        ));
     }
     let command = Modifiers::COMMAND;
     let taken = [
-        (KeyboardShortcut::new(command, Key::Z), "Undo"),
-        (KeyboardShortcut::new(SHIFT_COMMAND, Key::Z), "Redo"),
-        (KeyboardShortcut::new(command, Key::X), "Cut"),
-        (KeyboardShortcut::new(command, Key::C), "Copy"),
-        (KeyboardShortcut::new(command, Key::V), "Paste"),
-        (KeyboardShortcut::new(command, Key::A), "Select All"),
-        (KeyboardShortcut::new(command, Key::Q), "Quit"),
+        (KeyboardShortcut::new(command, Key::Z), tr("Undo", "Annuler")),
+        (KeyboardShortcut::new(SHIFT_COMMAND, Key::Z), tr("Redo", "Rétablir")),
+        (KeyboardShortcut::new(command, Key::X), tr("Cut", "Couper")),
+        (KeyboardShortcut::new(command, Key::C), tr("Copy", "Copier")),
+        (KeyboardShortcut::new(command, Key::V), tr("Paste", "Coller")),
+        (KeyboardShortcut::new(command, Key::A), tr("Select All", "Tout sélectionner")),
+        (KeyboardShortcut::new(command, Key::Q), tr("Quit", "Quitter")),
     ];
     match taken.iter().find(|(k, _)| *k == keys) {
-        Some((_, name)) => Err(format!("These keys are {name}'s: pick others")),
+        Some((_, name)) => Err(tr!("These keys are {name}'s: pick others", "Ces touches sont celles de « {name} » : choisissez-en d'autres")),
         None => Ok(()),
     }
 }

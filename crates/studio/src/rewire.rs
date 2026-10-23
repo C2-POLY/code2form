@@ -10,6 +10,8 @@ use std::collections::HashSet;
 use c2f_circuit::check::{self, Severity};
 use c2f_circuit::{Circuit, End, Wire};
 
+use crate::i18n::tr;
+
 /// One end of a wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
@@ -76,7 +78,13 @@ fn quoted(circuit: &Circuit, end: End) -> String {
 /// The text of the circuit file `src`, which `circuit` was read from, with
 /// `edit` made; and where to put the cursor, as a char index.
 pub fn apply(src: &str, circuit: &Circuit, edit: Edit) -> Result<(String, usize), String> {
-    let changed = || "the circuit changed since it was read: try again once it is rendered".to_string();
+    let changed = || {
+        tr(
+            "the circuit changed since it was read: try again once it is rendered",
+            "le circuit a changé depuis sa lecture : réessayez une fois le rendu fini",
+        )
+        .to_string()
+    };
     match edit {
         Edit::Move { wire, side, to } => {
             let w = circuit.wires.get(wire).ok_or_else(changed)?;

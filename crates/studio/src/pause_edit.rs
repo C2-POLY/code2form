@@ -4,6 +4,8 @@
 
 use std::ops::Range;
 
+use crate::i18n::tr;
+
 /// A height as the source writes it: at most three decimals, no trailing
 /// zeros (`18.4`, `3`).
 pub fn number(z: f32) -> String {
@@ -24,10 +26,14 @@ pub fn add(src: &str, z: f32) -> (String, usize) {
 }
 
 /// Writes `z` in place of the height written as a number at `range`.
+fn source_changed() -> String {
+    tr("the source changed", "le code a changé").to_string()
+}
+
 pub fn set_height(src: &str, range: Range<usize>, z: f32) -> Result<(String, usize), String> {
-    let written = src.get(range.clone()).ok_or("the source changed")?;
+    let written = src.get(range.clone()).ok_or_else(source_changed)?;
     if written.parse::<f64>().is_err() {
-        return Err("the source changed".into());
+        return Err(source_changed());
     }
     let new = number(z);
     let cursor = src[..range.start].chars().count() + new.chars().count();
@@ -37,9 +43,13 @@ pub fn set_height(src: &str, range: Range<usize>, z: f32) -> Result<(String, usi
 /// Removes the `pause(...);` statement whose name starts at byte `call`,
 /// with its line when it stands alone on it.
 pub fn remove(src: &str, call: usize) -> Result<(String, usize), String> {
-    let end = statement_end(src, call).ok_or("the source changed")?;
+    let end = statement_end(src, call).ok_or_else(source_changed)?;
     if !after_statement(&src[..call]) {
-        return Err("this pause is the body of an `if` or a loop: remove it in the code".into());
+        return Err(tr(
+            "this pause is the body of an `if` or a loop: remove it in the code",
+            "cette pause est le corps d’un `if` ou d’une boucle : supprimez-la dans le code",
+        )
+        .into());
     }
     let line_start = src[..call].rfind('\n').map_or(0, |i| i + 1);
     let line_end = src[end..].find('\n').map_or(src.len(), |i| end + i + 1);

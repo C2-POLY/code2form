@@ -4,6 +4,25 @@
 use eframe::egui;
 
 use crate::app_icon::{self, Layout, Tint};
+use crate::i18n::tr;
+
+impl Tint {
+    /// As the settings list it, in the interface's language.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tint::Graphite => tr("Graphite", "Graphite"),
+            Tint::Green => tr("Green", "Vert"),
+            Tint::Red => tr("Red", "Rouge"),
+            Tint::Orange => tr("Orange", "Orange"),
+            Tint::Amber => tr("Amber", "Ambre"),
+            Tint::Teal => tr("Teal", "Sarcelle"),
+            Tint::Cyan => tr("Cyan", "Cyan"),
+            Tint::Indigo => tr("Indigo", "Indigo"),
+            Tint::Violet => tr("Violet", "Violet"),
+            Tint::Pink => tr("Pink", "Rose"),
+        }
+    }
+}
 
 /// The icon for eframe to show from the first frame: the Dock's on macOS,
 /// the window's elsewhere.
@@ -51,6 +70,7 @@ mod mac {
     use objc2_foundation::{NSBundle, NSSize};
 
     use crate::app_icon::{self, Layout, Tint};
+    use super::tr;
 
     /// The icon as an image macOS takes, 512 points of 1024 pixels.
     fn image(tint: Tint) -> Option<Retained<NSImage>> {
@@ -104,12 +124,12 @@ mod mac {
             // Not run from an app bundle, as with `cargo run`.
             return Ok(());
         }
-        let icon = if tint == Tint::default() { None } else { Some(image(tint).ok_or("cannot draw the icon")?) };
+        let icon = if tint == Tint::default() { None } else { Some(image(tint).ok_or(tr("cannot draw the icon", "impossible de dessiner l’icône"))?) };
         let done = NSWorkspace::sharedWorkspace().setIcon_forFile_options(
             icon.as_deref(),
             &bundle,
             NSWorkspaceIconCreationOptions(0),
         );
-        if done { Ok(()) } else { Err(format!("cannot change the icon of {bundle}")) }
+        if done { Ok(()) } else { Err(tr!("cannot change the icon of {}", "impossible de changer l’icône de {}", bundle)) }
     }
 }

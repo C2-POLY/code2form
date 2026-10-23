@@ -164,7 +164,11 @@ impl Renderer {
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let version = ShaderVersion::get(gl);
         if !version.is_new_shader_interface() {
-            return Err(format!("OpenGL shading language {version:?} is too old for the 3D view"));
+            return Err(tr!(
+                "OpenGL shading language {:?} is too old for the 3D view",
+                "Le langage de shaders OpenGL {:?} est trop ancien pour la vue 3D",
+                version
+            ));
         }
         let header = if version.is_embedded() {
             format!("{}precision highp float;\n", version.version_declaration())
@@ -652,7 +656,7 @@ unsafe fn compile(
             if !gl.get_shader_compile_status(shader) {
                 let log = gl.get_shader_info_log(shader);
                 gl.delete_shader(shader);
-                return Err(format!("shader compilation failed: {log}"));
+                return Err(tr!("shader compilation failed: {}", "échec de la compilation du shader : {}", log));
             }
             gl.attach_shader(program, shader);
             shaders.push(shader);
@@ -669,7 +673,7 @@ unsafe fn compile(
         }
         if !linked {
             gl.delete_program(program);
-            return Err(format!("shader linking failed: {log}"));
+            return Err(tr!("shader linking failed: {}", "échec de l’édition de liens du shader : {}", log));
         }
         Ok(program)
     }

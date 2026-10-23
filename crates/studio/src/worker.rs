@@ -22,6 +22,7 @@ use c2f_geom::{Model, RenderMesh, Rendered, Stats};
 
 use crate::circuit::{self, PartCache, PartRender};
 use crate::console::{Level, Line};
+use crate::i18n::tr;
 
 /// Reserved, not committed: deeply recursive scripts need a deep stack.
 pub const STACK: usize = 1 << 30;
@@ -304,7 +305,7 @@ fn render_source(
     }))
     .unwrap_or_else(
         |panic| {
-            console.push(Line::new(Level::Error, format!("internal error: {}", panic_message(&*panic))));
+            console.push(Line::new(Level::Error, tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic))));
             Err(None)
         },
     );
@@ -389,7 +390,7 @@ fn render_circuit(
         }
     }))
     .unwrap_or_else(|panic| {
-        console.push(Line::new(Level::Error, format!("internal error: {}", panic_message(&*panic))));
+        console.push(Line::new(Level::Error, tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic))));
         // Whatever the cache held when it broke is not to be trusted.
         *parts = PartCache::default();
         Err(None)
@@ -414,7 +415,7 @@ pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> Part
         pipeline(source, path, &[], 0.0, library_paths, report)
     }))
     .unwrap_or_else(|panic| {
-        console.push(Line::new(Level::Error, format!("internal error in {}: {}", path.display(), panic_message(&*panic))));
+        console.push(Line::new(Level::Error, tr!("internal error in {}: {}", "erreur interne dans {} : {}", path.display(), panic_message(&*panic))));
         Err(None)
     });
     let console = circuit::label_lines(console, path);
@@ -471,7 +472,7 @@ pub fn render_enclosure(
         Some(c2f_geom::render_in(&nodes, path.parent().unwrap_or(Path::new(""))))
     }))
     .unwrap_or_else(|panic| {
-        console.push(Line::new(Level::Error, format!("internal error in {}: {}", path.display(), panic_message(&*panic))));
+        console.push(Line::new(Level::Error, tr!("internal error in {}: {}", "erreur interne dans {} : {}", path.display(), panic_message(&*panic))));
         None
     });
     let console = circuit::label_lines(console, path);
@@ -556,7 +557,7 @@ fn pipeline(
 }
 
 fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
-    let Shown { rendered, program } = shown.ok_or("there is no model to export yet")?;
+    let Shown { rendered, program } = shown.ok_or_else(|| tr("there is no model to export yet", "il n’y a pas encore de modèle à exporter").to_string())?;
     if format == Format::Glb {
         return export_gltf(program, target, &options.gltf);
     }
@@ -568,14 +569,23 @@ fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &Ex
         Format::Svg => rendered.svg().map(String::into_bytes),
         Format::Dxf => rendered.dxf().map(String::into_bytes),
     }))
-    .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))?
+    .map_err(|panic| tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic)))?
     .ok_or_else(|| {
-        let kind = if Format::SOLID.contains(&format) { "empty or 2D" } else { "empty or 3D" };
-        format!("the model is {kind}, so there is nothing to export as {}", format.name())
+        let kind = if Format::SOLID.contains(&format) { tr("empty or 2D", "vide ou en 2D") } else { tr("empty or 3D", "vide ou en 3D") };
+        tr!(
+            "the model is {}, so there is nothing to export as {}",
+            "le modèle est {}, il n’y a donc rien à exporter en {}",
+            kind,
+            format.name()
+        )
     })?;
-    std::fs::write(target, bytes).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
-    let (count, what) = if rendered.is_2d { (rendered.stats.vertices, "vertices") } else { (rendered.stats.triangles, "triangles") };
-    Ok(format!("Exported {} {what} to {}", group_digits(count), target.display()))
+    std::fs::write(target, bytes).map_err(|err| tr!("cannot write {}: {}", "impossible d’écrire {} : {}", target.display(), err))?;
+    let (count, what) = if rendered.is_2d {
+        (rendered.stats.vertices, tr("vertices", "sommets"))
+    } else {
+        (rendered.stats.triangles, tr("triangles", "triangles"))
+    };
+    Ok(tr!("Exported {} {} to {}", "{} {} exportés dans {}", group_digits(count), what, target.display()))
 }
 
 /// Writes the program's model as a `.glb`, animated when it reads `$t`,
@@ -589,12 +599,17 @@ fn export_gltf(program: &mut c2f_eval::Program, target: &Path, options: &c2f_geo
         }
     }
     let glb = catch_unwind(AssertUnwindSafe(|| c2f_geom::program_glb(program, &options)))
-        .map_err(|panic| format!("internal error: {}", panic_message(&*panic)))??;
-    std::fs::write(target, &glb.bytes).map_err(|err| format!("cannot write {}: {err}", target.display()))?;
-    let frames = if glb.frames > 0 { format!(", animated over {} frames,", glb.frames) } else { String::new() };
-    let mut message = format!("Exported {} triangles{frames} to {}", group_digits(glb.triangles), target.display());
+        .map_err(|panic| tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic)))??;
+    std::fs::write(target, &glb.bytes).map_err(|err| tr!("cannot write {}: {}", "impossible d’écrire {} : {}", target.display(), err))?;
+    let frames = if glb.frames > 0 {
+        tr!(", animated over {} frames,", ", animés sur {} images,", glb.frames)
+    } else {
+        String::new()
+    };
+    let mut message =
+        tr!("Exported {} triangles{} to {}", "{} triangles{} exportés dans {}", group_digits(glb.triangles), frames, target.display());
     for warning in &glb.warnings {
-        message.push_str(&format!("\nWarning: {warning}"));
+        message.push_str(&tr!("\nWarning: {}", "\nAvertissement : {}", warning));
     }
     Ok(message)
 }
@@ -605,7 +620,7 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
     } else if let Some(s) = panic.downcast_ref::<String>() {
         s.clone()
     } else {
-        "the renderer panicked".to_string()
+        tr("the renderer panicked", "le moteur de rendu a planté").to_string()
     }
 }
 

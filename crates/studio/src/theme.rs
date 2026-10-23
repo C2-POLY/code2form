@@ -2,7 +2,11 @@
 //! colors of the theme shown are `palette()`'s, which `follow` sets at the
 //! start of each frame from the appearance the settings ask for.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+
+use crate::app_icon::Tint;
+use crate::i18n::tr;
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, Theme, Vec2, Visuals,
@@ -40,15 +44,15 @@ impl Appearance {
 
     pub fn name(self) -> &'static str {
         match self {
-            Appearance::System => "System",
-            Appearance::Light => "Light",
-            Appearance::Dark => "Dark",
+            Appearance::System => tr("System", "Système"),
+            Appearance::Light => tr("Light", "Clair"),
+            Appearance::Dark => tr("Dark", "Sombre"),
         }
     }
 }
 
 /// The colors of a theme.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Palette {
     pub dark: bool,
     pub accent: Color32,
@@ -271,9 +275,71 @@ pub static LIGHT: Palette = Palette {
 /// Whether `palette()` is the light theme's.
 static SHOWS_LIGHT: AtomicBool = AtomicBool::new(false);
 
+/// The accent shown: 0 for blue, else the icon tint's, from 1.
+static ACCENT: AtomicUsize = AtomicUsize::new(0);
+
+/// Each accent's dark and light palettes: blue's, then each tint's.
+fn palettes() -> &'static [[Palette; 2]] {
+    static PALETTES: OnceLock<Vec<[Palette; 2]>> = OnceLock::new();
+    PALETTES.get_or_init(|| {
+        let blue = [DARK.clone(), LIGHT.clone()];
+        let tints = Tint::ALL.iter().map(|&tint| [accented(&DARK, tint), accented(&LIGHT, tint)]);
+        std::iter::once(blue).chain(tints).collect()
+    })
+}
+
 /// The colors of the theme shown.
 pub fn palette() -> &'static Palette {
-    if SHOWS_LIGHT.load(Ordering::Relaxed) { &LIGHT } else { &DARK }
+    &palettes()[ACCENT.load(Ordering::Relaxed)][usize::from(SHOWS_LIGHT.load(Ordering::Relaxed))]
+}
+
+/// Buttons and highlights in `tint`'s color, or blue; whether it changed.
+pub fn set_accent(ctx: &egui::Context, tint: Option<Tint>) -> bool {
+    let index = tint.and_then(|t| Tint::ALL.iter().position(|&a| a == t)).map_or(0, |i| i + 1);
+    let changed = ACCENT.swap(index, Ordering::Relaxed) != index;
+    if changed {
+        restyle(ctx);
+    }
+    changed
+}
+
+/// `base` with its accent in `tint`'s colors: the icon's vivid square on
+/// the dark theme, its deep tile on the light one, both legible.
+fn accented(base: &Palette, tint: Tint) -> Palette {
+    let [tile, outer, inner] = tint.colors().map(|[r, g, b]| rgb(r, g, b));
+    let mut palette = base.clone();
+    if base.dark {
+        palette.accent = outer;
+        palette.accent_strong = mix(outer, inner, 0.45);
+        palette.accent_muted = mix(tile, base.bg, 0.35);
+    } else {
+        palette.accent = mix(tile, outer, 0.15);
+        palette.accent_strong = mix(tile, Color32::BLACK, 0.15);
+        palette.accent_muted = mix(inner, Color32::WHITE, 0.55);
+    }
+    // White, or the dark theme's background on a bright accent: whichever
+    // reads better.
+    let ratio = |text: Color32| {
+        let (a, b) = (luminance(text), luminance(palette.accent));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    };
+    palette.on_accent = if ratio(DARK.bg) > ratio(Color32::WHITE) { DARK.bg } else { Color32::WHITE };
+    palette
+}
+
+/// `a` and `b` mixed, `t` of the way to `b`.
+fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+    rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
+/// The relative luminance of an opaque color, from 0 to 1, as WCAG has it.
+fn luminance(c: Color32) -> f32 {
+    let channel = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
 }
 
 /// The theme `appearance` asks for: the system's, or dark when the system
@@ -361,12 +427,20 @@ pub fn set_code_size(ctx: &egui::Context, size: f32) {
     }
 }
 
+/// Gives egui both themes' colors, in the accent shown.
+fn restyle(ctx: &egui::Context) {
+    let [dark, light] = &palettes()[ACCENT.load(Ordering::Relaxed)];
+    for (theme, palette) in [(Theme::Dark, dark), (Theme::Light, light)] {
+        ctx.style_mut_of(theme, |style| style.visuals = visuals(palette));
+    }
+}
+
 /// Gives egui both themes, and shows the dark one until `follow` says.
 pub fn apply(ctx: &egui::Context) {
     ctx.set_theme(Theme::Dark);
-    for (theme, palette) in [(Theme::Dark, &DARK), (Theme::Light, &LIGHT)] {
+    restyle(ctx);
+    for theme in [Theme::Dark, Theme::Light] {
         ctx.style_mut_of(theme, |style| {
-            style.visuals = visuals(palette);
             style.text_styles = [
                 (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
                 (TextStyle::Body, FontId::new(13.5, FontFamily::Proportional)),
@@ -452,13 +526,6 @@ mod tests {
 
     /// The WCAG contrast ratio of two opaque colors, from 1 to 21.
     fn contrast(a: Color32, b: Color32) -> f32 {
-        fn luminance(c: Color32) -> f32 {
-            let channel = |v: u8| {
-                let v = f32::from(v) / 255.0;
-                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
-            };
-            0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
-        }
         let (a, b) = (luminance(a), luminance(b));
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
@@ -545,6 +612,26 @@ mod tests {
         report("light", &pairs);
         let poor: Vec<_> = pairs.iter().filter(|(_, ratio)| *ratio < 4.5).collect();
         assert!(poor.is_empty(), "under 4.5:1: {poor:?}");
+    }
+
+    /// Each icon's accent reads as well as blue: the light theme's pairs
+    /// all at 4.5:1, the dark theme's but the accent's own fills.
+    #[test]
+    fn every_accent_reads_well() {
+        let accent = |pair: &str| pair.contains("accent");
+        for tint in Tint::ALL {
+            let light = pairs(&accented(&LIGHT, tint));
+            let poor: Vec<_> = light.iter().filter(|(pair, ratio)| accent(pair) && *ratio < 4.5).collect();
+            assert!(poor.is_empty(), "{tint:?}, light, under 4.5:1: {poor:?}");
+            let dark = pairs(&accented(&DARK, tint));
+            let known = |pair: &str| pair.starts_with("on_accent ") || pair == "accent_strong on accent_muted";
+            let poor: Vec<_> =
+                dark.iter().filter(|(pair, ratio)| accent(pair) && !known(pair) && *ratio < 4.5).collect();
+            assert!(poor.is_empty(), "{tint:?}, dark, under 4.5:1: {poor:?}");
+            // Its own fills still read, if less than the rest.
+            let fills: Vec<_> = dark.iter().filter(|(pair, ratio)| known(pair) && *ratio < 3.0).collect();
+            assert!(fills.is_empty(), "{tint:?}, dark, under 3:1: {fills:?}");
+        }
     }
 
     /// The dark theme keeps its colors: these few were under 4.5:1 before

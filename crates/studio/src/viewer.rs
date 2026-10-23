@@ -12,6 +12,7 @@ use c2f_geom::RenderMesh;
 use glam::{Mat4, Vec2 as GVec2, Vec3, Vec4};
 
 use crate::camera::Camera;
+use crate::i18n::tr;
 use crate::pause_edit;
 use crate::pick::Ray;
 use crate::wiring::{Emphasis, shade};
@@ -69,6 +70,21 @@ pub const PRESETS: &[(&str, f32, f32)] = &[
     ("Left", 180.0, 0.0),
     ("Right", 0.0, 0.0),
 ];
+
+/// A standard view's name, as `PRESETS` writes it in English, in the
+/// interface's language.
+pub fn preset_label(name: &str) -> &'static str {
+    match name {
+        "Diagonal" => tr("Diagonal", "Diagonale"),
+        "Top" => tr("Top", "Dessus"),
+        "Bottom" => tr("Bottom", "Dessous"),
+        "Front" => tr("Front", "Face"),
+        "Back" => tr("Back", "Arrière"),
+        "Left" => tr("Left", "Gauche"),
+        "Right" => tr("Right", "Droite"),
+        _ => tr("View", "Vue"),
+    }
+}
 
 pub struct Viewer {
     renderer: Result<Arc<Mutex<Renderer>>, String>,
@@ -134,7 +150,7 @@ impl Viewer {
     pub fn new(gl: Option<&Arc<glow::Context>>) -> Self {
         let renderer = match gl {
             Some(gl) => Renderer::new(gl).map(|r| Arc::new(Mutex::new(r))),
-            None => Err("the 3D view needs the OpenGL (glow) renderer".to_string()),
+            None => Err(tr("the 3D view needs the OpenGL (glow) renderer", "la vue 3D nécessite le moteur de rendu OpenGL (glow)").to_string()),
         };
         let grid = Grid::for_bounds(None);
         if let Ok(renderer) = &renderer {
@@ -532,7 +548,7 @@ impl Viewer {
                 ui.painter().text(
                     rect.center(),
                     Align2::CENTER_CENTER,
-                    format!("3D view unavailable: {message}"),
+                    tr!("3D view unavailable: {message}", "Vue 3D indisponible : {message}"),
                     FontId::proportional(14.0),
                     theme::palette().error,
                 );
@@ -755,7 +771,7 @@ impl Viewer {
             badge_left_of(
                 painter,
                 handle - Vec2::new(14.0, 0.0),
-                &format!("Layer {layer} / {count} · {z:.2} mm"),
+                &tr!("Layer {layer} / {count} · {z:.2} mm", "Couche {layer} / {count} · {z:.2} mm"),
                 theme::palette().text,
             );
         }
@@ -763,18 +779,30 @@ impl Viewer {
         // The layer height, under the track.
         let field = Rect::from_center_size(Pos2::new(x - 18.0, track.bottom + 38.0), Vec2::new(76.0, 20.0));
         let height = egui::DragValue::new(&mut self.layer_height).range(0.05..=1.0).speed(0.005).max_decimals(2).suffix(" mm");
-        ui.put(field, height).on_hover_text("Layer height");
+        ui.put(field, height).on_hover_text(tr("Layer height", "Hauteur de couche"));
 
         if hovered_mark.is_some_and(movable) || self.dragging.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
         }
         let hint = match hovered_mark {
-            Some(i) if movable(i) => "Drag to move this pause · Right-click to remove it",
+            Some(i) if movable(i) => tr(
+                "Drag to move this pause · Right-click to remove it",
+                "Glissez pour déplacer cette pause · Clic droit pour la supprimer",
+            ),
             Some(i) if self.pauses[i].source.is_some() => {
-                "Its height is computed in the code, so it moves there · Right-click to remove it"
+                tr(
+                    "Its height is computed in the code, so it moves there · Right-click to remove it",
+                    "Sa hauteur est calculée dans le code : déplacez-la là · Clic droit pour la supprimer",
+                )
             }
-            Some(_) => "This pause is written in a library or an included file",
-            None => "Drag to pick a layer · Right-click to add a pause",
+            Some(_) => tr(
+                "This pause is written in a library or an included file",
+                "Cette pause est écrite dans une bibliothèque ou un fichier inclus",
+            ),
+            None => tr(
+                "Drag to pick a layer · Right-click to add a pause",
+                "Glissez pour choisir une couche · Clic droit pour ajouter une pause",
+            ),
         };
         let response = if self.dragging.is_none() { response.on_hover_text(hint) } else { response };
         response.context_menu(|ui| self.slider_menu(ui));
@@ -784,7 +812,7 @@ impl Viewer {
         match self.menu {
             Some(SliderMenu::Layer(layer)) => {
                 let z = self.layer_top(layer).unwrap_or(0.0);
-                if ui.button(format!("Add a pause at {} mm", pause_edit::number(z))).clicked() {
+                if ui.button(tr!("Add a pause at {} mm", "Ajouter une pause à {} mm", pause_edit::number(z))).clicked() {
                     self.edit = Some(PauseEdit::Add { z });
                     ui.close();
                 }
@@ -794,14 +822,17 @@ impl Viewer {
                 ui.label(egui::RichText::new(&mark.label).color(theme::palette().pause));
                 match &mark.source {
                     Some(source) => {
-                        if ui.button("Remove this pause").clicked() {
+                        if ui.button(tr("Remove this pause", "Supprimer cette pause")).clicked() {
                             self.edit = Some(PauseEdit::Remove { call: source.call });
                             ui.close();
                         }
                     }
                     None => {
                         ui.label(
-                            egui::RichText::new("Written in a library or an included file")
+                            egui::RichText::new(tr(
+                                "Written in a library or an included file",
+                                "Écrite dans une bibliothèque ou un fichier inclus",
+                            ))
                                 .color(theme::palette().text_dim),
                         );
                     }
@@ -845,7 +876,7 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
 
     if !status.has_model && !status.rendering {
         let title =
-            painter.layout_no_wrap("Nothing to show yet".into(), FontId::proportional(19.0), theme::palette().text);
+            painter.layout_no_wrap(tr("Nothing to show yet", "Rien à afficher pour l'instant").into(), FontId::proportional(19.0), theme::palette().text);
         let hint = painter.layout(
             status.empty_hint.into(),
             FontId::proportional(13.5),
@@ -871,16 +902,16 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     // Badges, top-left.
     let mut at = rect.left_top() + Vec2::splat(margin);
     if status.rendering {
-        let width = badge(painter, at, "Rendering…", theme::palette().accent_strong, true);
+        let width = badge(painter, at, tr("Rendering…", "Rendu…"), theme::palette().accent_strong, true);
         let spinner = Rect::from_center_size(at + Vec2::new(14.0, 12.0), Vec2::splat(12.0));
         egui::Spinner::new().size(12.0).color(theme::palette().accent_strong).paint_at(ui, spinner);
         at.x += width + 8.0;
     }
     if status.failed {
         let text = if status.has_model {
-            "Render failed: showing the last good model"
+            tr("Render failed: showing the last good model", "Échec du rendu : dernier modèle valide affiché")
         } else {
-            "Render failed: see the console"
+            tr("Render failed: see the console", "Échec du rendu : voir la console")
         };
         badge(painter, at, text, theme::palette().error, false);
     }
@@ -896,7 +927,10 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     painter.text(
         rect.right_bottom() - Vec2::new(margin, margin),
         Align2::RIGHT_BOTTOM,
-        "Drag: orbit   Right/Shift-drag: pan   Scroll: zoom   Double-click: fit",
+        tr(
+            "Drag: orbit   Right/Shift-drag: pan   Scroll: zoom   Double-click: fit",
+            "Glisser : orbite   Clic droit/Maj-glisser : déplacer   Molette : zoom   Double-clic : cadrer",
+        ),
         FontId::proportional(11.0),
         theme::palette().view_hint,
     );
@@ -922,9 +956,15 @@ fn badge(painter: &egui::Painter, at: Pos2, text: &str, color: Color32, spinner:
 /// The hint shown when there is nothing to draw.
 pub fn empty_hint(has_text: bool) -> &'static str {
     if has_text {
-        "The script ran but produced no geometry. Its echo output and warnings are in the console."
+        tr(
+            "The script ran but produced no geometry. Its echo output and warnings are in the console.",
+            "Le script s'est exécuté sans produire de géométrie. Ses sorties echo et ses avertissements sont dans la console.",
+        )
     } else {
-        "Write some code in the editor, for example \"cube(10);\", or open a .c2f or .scad file."
+        tr(
+            "Write some code in the editor, for example \"cube(10);\", or open a .c2f or .scad file.",
+            "Écrivez du code dans l'éditeur, par exemple « cube(10); », ou ouvrez un fichier .c2f ou .scad.",
+        )
     }
 }
 

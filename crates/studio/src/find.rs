@@ -6,6 +6,8 @@ use std::ops::Range;
 use eframe::egui::Color32;
 use eframe::egui::text::LayoutJob;
 
+use crate::i18n::tr;
+
 /// The byte ranges where `query` occurs in `text`, left to right and not
 /// overlapping. Without `case_sensitive`, letters match whatever their case.
 pub fn find_all(text: &str, query: &str, case_sensitive: bool) -> Vec<Range<usize>> {
@@ -85,9 +87,10 @@ pub fn replace_all(text: &str, matches: &[Range<usize>], replacement: &str) -> S
 /// The bar's count: "3 of 12", or "No results".
 pub fn count_label(count: usize, current: Option<usize>) -> String {
     match (count, current) {
-        (0, _) => "No results".to_string(),
-        (n, Some(i)) => format!("{} of {n}", i + 1),
-        (n, None) => format!("{n} found"),
+        (0, _) => tr("No results", "Aucun résultat").to_string(),
+        (n, Some(i)) => tr!("{} of {n}", "{} sur {n}", i + 1),
+        (1, None) => tr("1 found", "1 trouvée").to_string(),
+        (n, None) => tr!("{n} found", "{n} trouvées"),
     }
 }
 

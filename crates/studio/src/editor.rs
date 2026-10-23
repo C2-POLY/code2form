@@ -11,6 +11,7 @@ use eframe::egui::{
 };
 
 use crate::find;
+use crate::i18n::tr;
 use crate::highlight::Highlighter;
 use crate::shortcuts::{self, Action};
 use crate::theme;
@@ -312,16 +313,16 @@ impl Editor {
             let font = theme::code_font();
             let mut searched = false;
             ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), 22.0), Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(small_button("×")).on_hover_text("Close (Esc)").clicked() {
+                if ui.add(small_button("×")).on_hover_text(tr("Close (Esc)", "Fermer (Échap)")).clicked() {
                     actions.push(FindAction::Close);
                 }
                 let any = !self.find.matches.is_empty() && !self.find.query.is_empty();
                 let [next_keys, previous_keys] = self.find_keys.map(|k| shortcuts::describe(ui.ctx(), &k));
-                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text(format!("Next match ({next_keys})"));
+                let next = ui.add_enabled(any, small_button("⏷")).on_hover_text(tr!("Next match ({next_keys})", "Occurrence suivante ({next_keys})"));
                 if next.clicked() {
                     actions.push(FindAction::Step { forward: true });
                 }
-                let tip = format!("Previous match ({previous_keys})");
+                let tip = tr!("Previous match ({previous_keys})", "Occurrence précédente ({previous_keys})");
                 let previous = ui.add_enabled(any, small_button("⏶")).on_hover_text(tip);
                 if previous.clicked() {
                     actions.push(FindAction::Step { forward: false });
@@ -336,27 +337,35 @@ impl Editor {
                 ui.add_sized([68.0, 20.0], egui::Label::new(RichText::new(count).size(12.0).color(color)));
                 ui.add_space(4.0);
                 let case = ui.toggle_value(&mut self.find.case_sensitive, RichText::new("Aa").size(12.5));
-                searched |= case.on_hover_text("Match case").changed();
+                searched |= case.on_hover_text(tr("Match case", "Respecter la casse")).changed();
                 let query = TextEdit::singleline(&mut self.find.query)
                     .id(query_id)
                     .font(font.clone())
-                    .hint_text("Find")
+                    .hint_text(tr("Find", "Rechercher"))
                     .desired_width(field_width(ui));
                 searched |= ui.add(query).changed();
             });
             if self.find.replace {
                 ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), 22.0), Layout::right_to_left(Align::Center), |ui| {
                     let any = self.find.current.is_some() && !self.find.query.is_empty();
-                    if ui.add_enabled(any, Button::new("Replace All")).on_hover_text("Replace every match").clicked() {
+                    if ui
+                        .add_enabled(any, Button::new(tr("Replace All", "Tout remplacer")))
+                        .on_hover_text(tr("Replace every match", "Remplacer toutes les occurrences"))
+                        .clicked()
+                    {
                         actions.push(FindAction::ReplaceAll);
                     }
-                    if ui.add_enabled(any, Button::new("Replace")).on_hover_text("Replace this match").clicked() {
+                    if ui
+                        .add_enabled(any, Button::new(tr("Replace", "Remplacer")))
+                        .on_hover_text(tr("Replace this match", "Remplacer cette occurrence"))
+                        .clicked()
+                    {
                         actions.push(FindAction::Replace);
                     }
                     let replacement = TextEdit::singleline(&mut self.find.replacement)
                         .id(replacement_id)
                         .font(font)
-                        .hint_text("Replace")
+                        .hint_text(tr("Replace", "Remplacer"))
                         .desired_width(field_width(ui));
                     ui.add(replacement);
                 });
