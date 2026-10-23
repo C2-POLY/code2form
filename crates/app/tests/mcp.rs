@@ -876,7 +876,7 @@ fn a_brief_is_saved_with_requirements_a_tool_measures_and_read_back() {
     let (is_error, report) = server.report("save_brief", json!({ "path": path, "text": vague }));
     assert!(is_error && report["saved"] == false, "{report}");
     assert!(!path.exists());
-    let brief = "# Winder\n\nA 608 bearing carries the watch; the motor only turns it.\n\n## Requirements\n\n- mass < 400 g\n- torque margin >= 2\n- part \"Cradle\"\n- turns the watch gently\n\n```json loads\n{ \"ratio\": 1 }\n```\n";
+    let brief = "# Winder\n\nA 608 bearing carries the watch; the motor only turns it.\n\n## Requirements\n\n- mass < 400 g\n- torque margin >= 2\n- part \"Cradle\"\n- turns the watch gently\n\n```json loads\n{ \"axis\": { \"at\": [0, 0, 0], \"direction\": [1, 0, 0] }, \"supports\": [{ \"name\": \"motor\", \"at_mm\": 0, \"kind\": \"motor\" }], \"ratio\": 1 }\n```\n";
     let (is_error, report) = server.report("save_brief", json!({ "path": path, "text": brief }));
     assert!(!is_error, "{report}");
     let kinds: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["kind"].as_str().unwrap()).collect();
@@ -1064,8 +1064,37 @@ fn the_winder_holds_to_its_brief() {
     assert!(!is_error, "{report}");
     assert_eq!((&report["holds"], &report["fails"], &report["unmeasured"]), (&json!(9), &json!(0), &json!(2)), "{report}");
     let scenario: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("motor_alone.json")).unwrap()).unwrap();
-    let (_, report) = server.report("loads", scenario);
+    let (_, report) = server.report("loads", scenario.clone());
     assert!(report["margins"]["torque"].as_f64().unwrap() < 1.0, "{report}");
+    // Figures that cannot be: no stage for a reduction, a negative torque.
+    let mut wrong = scenario.clone();
+    wrong["ratio"] = json!(5);
+    wrong["stages"] = json!(0);
+    assert!(server.report("loads", wrong).0);
+    let mut wrong = scenario;
+    wrong["motor"]["torque_mNm"] = json!(-29.4);
+    assert!(server.report("loads", wrong).0);
     let (is_error, _) = server.report("check_circuit", json!({ "path": dir.join("winder.c2fc") }));
     assert!(!is_error);
+}
+
+#[test]
+fn a_brief_whose_blocks_cannot_be_measured_from_is_refused_and_fails() {
+    let mut server = Server::start();
+    let dir = temp_dir("brief-blocks");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let brief = dir.join("brief.md");
+    let text = "# A\n\n## Requirements\n\n- mass < 1 g\n- torque margin >= 2\n- mass < 400\n\n```json mass\n{ \"material\": \"PLAA\" }\n```\n\n```json loads\n{ \"motr\": {} }\n```\n";
+    let (is_error, report) = server.report("save_brief", json!({ "path": brief, "text": text }));
+    assert!(is_error && report["why"].as_array().unwrap().len() == 2, "{report}");
+    // Written by hand, it is checked all the same: what its blocks are for fails.
+    std::fs::write(&brief, text).unwrap();
+    let design = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nightlight/nightlight.c2f");
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": design }));
+    assert!(is_error && report["ok"] == false, "{report}");
+    let statuses: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["status"].as_str().unwrap()).collect();
+    assert_eq!(statuses, ["fails", "fails", "unmeasured"], "{report}");
+    assert!(report["requirements"][2]["why"].as_str().unwrap().contains("`mass < 400 g`"), "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

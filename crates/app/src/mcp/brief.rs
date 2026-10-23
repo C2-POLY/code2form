@@ -93,6 +93,18 @@ fn save_brief(args: &Value) -> Result<Vec<Value>, String> {
         );
     }
     why.extend(brief.errors.iter().map(|(line, message)| format!("line {line}: {message}")));
+    // The tools' blocks must be what the tools take, or nothing measures
+    // what they are for.
+    if let Some(block) = &brief.mass {
+        if let Err(err) = crate::mass::options(block) {
+            why.push(format!("the ```json mass``` block is not what mass_properties takes: {err}"));
+        }
+    }
+    if let Some(block) = &brief.loads {
+        if let Err(err) = scenario(block) {
+            why.push(format!("the ```json loads``` block is not what loads takes: {err}"));
+        }
+    }
     if !why.is_empty() {
         return Err(pretty(&json!({ "saved": false, "why": why, "requirements": requirements(&brief) })));
     }
@@ -103,7 +115,22 @@ fn save_brief(args: &Value) -> Result<Vec<Value>, String> {
         std::fs::create_dir_all(folder).map_err(|err| format!("cannot make {}: {err}", folder.display()))?;
     }
     std::fs::write(&path, brief_text).map_err(|err| format!("cannot write {}: {err}", path.display()))?;
-    Ok(vec![text(pretty(&json!({ "saved": true, "path": path.display().to_string(), "requirements": requirements(&brief) })))])
+    let warnings: Vec<String> = brief
+        .requirements
+        .iter()
+        .filter_map(|r| r.hint.as_ref().map(|hint| format!("line {}: `{}`: {hint}", r.line, r.text)))
+        .collect();
+    let saved = json!({ "saved": true, "path": path.display().to_string(), "requirements": requirements(&brief), "warnings": warnings });
+    Ok(vec![text(pretty(&saved))])
+}
+
+/// A `loads` block read as the `loads` tool reads its arguments.
+fn scenario(block: &Value) -> Result<c2f_circuit::loads::Scenario, String> {
+    let mut block = block.clone();
+    if let Some(object) = block.as_object_mut() {
+        object.remove("working_dir");
+    }
+    serde_json::from_value(block).map_err(|err| err.to_string())
 }
 
 fn read_brief_tool(args: &Value) -> Result<Vec<Value>, String> {
@@ -174,6 +201,10 @@ struct Measured {
     mass: Result<(f64, Option<f64>), String>,
     /// The torque margin and the motor's radial load margin, from `loads`.
     margins: Result<(Option<f64>, Option<f64>), String>,
+    /// The brief's `mass` or `loads` block cannot be measured from: what
+    /// it is for then fails rather than going unmeasured.
+    mass_broken: bool,
+    loads_broken: bool,
 }
 
 fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
@@ -186,9 +217,13 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
         margins: Err("the brief has no ```json loads``` block saying what the motor turns".into()),
         pieces: None,
         components: None,
+        mass_broken: false,
+        loads_broken: false,
     };
     let mut notes: Vec<String> = Vec::new();
-    let mass_options = crate::mass::options(brief.mass.as_ref().unwrap_or(&json!({})));
+    let mass_options = crate::mass::options(brief.mass.as_ref().unwrap_or(&json!({})))
+        .map_err(|err| format!("the brief's ```json mass``` block is wrong: {err}"));
+    measured.mass_broken = mass_options.is_err();
     // The design's nodes and folder, weighed once the circuit's parts are known.
     let mut design_nodes: Option<(Vec<c2f_eval::node::Node>, PathBuf)> = None;
     let mut circuit_mass: Option<Result<c2f_geom::MassReport, String>> = None;
@@ -248,7 +283,10 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
     }
     if let Some(scenario) = &brief.loads {
         let dir = brief_path.parent().filter(|p| !p.as_os_str().is_empty());
-        measured.margins = crate::loads::evaluate(scenario, dir).map(|report| (report.margins.torque, report.margins.motor_radial));
+        measured.margins = crate::loads::evaluate(scenario, dir)
+            .map(|report| (report.margins.torque, report.margins.motor_radial))
+            .map_err(|err| format!("the brief's ```json loads``` block cannot be measured: {err}"));
+        measured.loads_broken = measured.margins.is_err();
     }
     let results: Vec<Value> = brief.requirements.iter().map(|r| measure(r, &measured)).collect();
     let ok = results.iter().all(|r| r["status"] != Status::Fails.name());
@@ -308,25 +346,28 @@ fn measure(requirement: &Requirement, measured: &Measured) -> Value {
             }
         },
         Rule::Mass(op, bound) => match &measured.mass {
-            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Err(why) => (if measured.mass_broken { Status::Fails } else { Status::Unmeasured }, Value::Null, why.clone()),
             Ok((grams, _)) => compare(*op, *grams, *bound, "g", "the total mass, printed as the ```json mass``` block says"),
         },
         Rule::Tipping(op, bound) => match &measured.mass {
-            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Err(why) => (if measured.mass_broken { Status::Fails } else { Status::Unmeasured }, Value::Null, why.clone()),
             Ok((_, None)) => (Status::Unmeasured, Value::Null, "nothing rests on the ground".into()),
             Ok((_, Some(degrees))) => compare(*op, *degrees, *bound, "°", "the smallest angle it leans before it tips"),
         },
         Rule::TorqueMargin(op, bound) => match &measured.margins {
-            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Err(why) => (if measured.loads_broken { Status::Fails } else { Status::Unmeasured }, Value::Null, why.clone()),
             Ok((None, _)) => (Status::Unmeasured, Value::Null, "the ```json loads``` block gives no motor torque".into()),
             Ok((Some(margin), _)) => compare(*op, *margin, *bound, "x", "the motor's torque over the torque needed"),
         },
         Rule::RadialLoadMargin(op, bound) => match &measured.margins {
-            Err(why) => (Status::Unmeasured, Value::Null, why.clone()),
+            Err(why) => (if measured.loads_broken { Status::Fails } else { Status::Unmeasured }, Value::Null, why.clone()),
             Ok((_, None)) => (Status::Unmeasured, Value::Null, "the ```json loads``` block gives no motor radial load limit, or the motor carries none".into()),
             Ok((_, Some(margin))) => compare(*op, *margin, *bound, "x", "the motor's largest radial load over the one it carries"),
         },
-        Rule::Other => (Status::Unmeasured, Value::Null, "no tool measures it: the user checks it".into()),
+        Rule::Other => match &requirement.hint {
+            Some(hint) => (Status::Unmeasured, Value::Null, format!("not read as a measure: {hint}")),
+            None => (Status::Unmeasured, Value::Null, "no tool measures it: the user checks it".into()),
+        },
     };
     json!({ "line": requirement.line, "text": requirement.text, "status": status.name(), "measured": value, "why": why })
 }

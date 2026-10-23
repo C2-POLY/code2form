@@ -45,7 +45,7 @@ impl Kind {
     /// of [`Kind::unit`] one of it makes.
     fn units(self) -> &'static [(&'static str, f64)] {
         match self {
-            Kind::Mass => &[("g", 1.0), ("kg", 1000.0), ("mg", 0.001), ("oz", 28.349_523_125)],
+            Kind::Mass => &[("g", 1.0), ("gram", 1.0), ("grams", 1.0), ("kg", 1000.0), ("mg", 0.001), ("oz", 28.349_523_125)],
             Kind::Torque => &[
                 ("mn·m", 1.0),
                 ("mnm", 1.0),
@@ -62,7 +62,7 @@ impl Kind {
                 ("oz·in", 7.061_552),
             ],
             Kind::Speed => &[("rpm", 1.0), ("tr/min", 1.0), ("r/min", 1.0), ("rps", 60.0)],
-            Kind::Force => &[("n", 1.0), ("kn", 1000.0), ("kgf", 9.806_65), ("gf", 0.009_806_65), ("lbf", 4.448_222)],
+            Kind::Force => &[("n", 1.0), ("newton", 1.0), ("newtons", 1.0), ("kn", 1000.0), ("kgf", 9.806_65), ("gf", 0.009_806_65), ("lbf", 4.448_222)],
         }
     }
 }
@@ -90,10 +90,14 @@ pub fn kind_of(key: &str) -> Option<Kind> {
 /// `None` for a key that holds no quantity.
 pub fn figure(spec: &Spec) -> Option<Result<f64, String>> {
     let kind = kind_of(&spec.key)?;
-    Some(read(&spec.value, kind).ok_or_else(|| {
-        let units: Vec<&str> = kind.units().iter().map(|(u, _)| *u).collect();
-        format!("`{}` takes a number and its unit, as `12 {}` ({})", spec.key, kind.unit(), units.join(", "))
-    }))
+    Some(match read(&spec.value, kind) {
+        Some(value) if value < 0.0 => Err(format!("`{}` is not negative: {}", spec.key, spec.value.trim())),
+        Some(value) => Ok(value),
+        None => {
+            let units: Vec<&str> = kind.units().iter().map(|(u, _)| *u).collect();
+            Err(format!("`{}` takes a number and its unit, as `12 {}` ({})", spec.key, kind.unit(), units.join(", ")))
+        }
+    })
 }
 
 /// The figure the specs give for `key`, in its kind's unit.
@@ -101,7 +105,9 @@ pub fn spec_figure(specs: &[Spec], key: &str) -> Option<f64> {
     specs.iter().find(|s| s.key.trim().eq_ignore_ascii_case(key)).and_then(|s| figure(s)?.ok())
 }
 
-/// The first number of `text` followed by a unit of `kind`, in its unit.
+/// The first number of `text` followed by a unit of `kind`, in its unit;
+/// a `-` just before it makes it negative. A comma between digits is a
+/// decimal comma, as French writes it: `1,5 g` is 1.5 g.
 pub fn read(text: &str, kind: Kind) -> Option<f64> {
     let text = fold(text);
     let chars: Vec<char> = text.chars().collect();
@@ -126,8 +132,11 @@ pub fn read(text: &str, kind: Kind) -> Option<f64> {
             j += 1;
         }
         let unit: String = chars[j..].iter().take_while(|c| !c.is_whitespace() && !matches!(c, ',' | ';' | ')' | '(')).collect();
+        // A sentence's end after the unit: `3.3 g.`
+        let unit = unit.trim_end_matches(['.', ':', '!', '?']);
+        let sign = if start > 0 && chars[start - 1] == '-' && (start == 1 || !chars[start - 2].is_alphanumeric()) { -1.0 } else { 1.0 };
         if let Some(&(_, scale)) = kind.units().iter().find(|(u, _)| *u == unit) {
-            return Some(number * scale);
+            return Some(sign * number * scale);
         }
     }
     None
@@ -187,6 +196,11 @@ mod tests {
         // The first number with a unit of the kind, not the voltage before it.
         assert!(close(read("at 5 V: 34 mN·m", Kind::Torque), 34.0));
         assert_eq!(read("34", Kind::Torque), None);
+        assert!(close(read("3.3 g.", Kind::Mass), 3.3));
+        assert!(close(read("12 grams", Kind::Mass), 12.0));
+        assert!(close(read("1,5 g", Kind::Mass), 1.5));
+        assert!(close(read("-5 g", Kind::Mass), -5.0));
+        assert!(close(read("5 newtons", Kind::Force), 5.0));
         assert_eq!(read("M3 screws", Kind::Mass), None);
     }
 
@@ -195,6 +209,7 @@ mod tests {
         let spec = |key: &str, value: &str| Spec { key: key.into(), value: value.into(), span: c2f_lang::Span::new(0, 0) };
         assert!(close(figure(&spec("Mass", "3.3 g")).unwrap().ok(), 3.3));
         assert!(figure(&spec("torque", "strong")).unwrap().is_err());
+        assert!(figure(&spec("mass", "-5 g")).unwrap().unwrap_err().contains("not negative"));
         assert!(figure(&spec("supply", "5 V")).is_none());
         let specs = [spec("mass", "12 g"), spec("stall torque", "0.3 N·m")];
         assert!(close(spec_figure(&specs, "stall torque"), 300.0));

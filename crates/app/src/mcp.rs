@@ -264,16 +264,11 @@ fn tools() -> Value {
     ]);
     if let Some(tools) = tools.as_array_mut() {
         tools.extend(circuit::tools());
-    }
-    // Writing a part from its supplier's pages.
-    if let Some(tools) = tools.as_array_mut() {
+        // Writing a part from its supplier's pages.
         tools.extend(part::tools());
+        // The plan's brief, and what measures a design against it.
         tools.extend(brief::tools());
-    }
-    if let Some(tools) = tools.as_array_mut() {
         tools.extend(mass::tools());
-    }
-    if let Some(tools) = tools.as_array_mut() {
         tools.extend(loads::tools());
     }
     tools

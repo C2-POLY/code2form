@@ -89,6 +89,9 @@ pub struct Requirement {
     pub text: String,
     pub rule: Rule,
     pub line: usize,
+    /// For a line that starts as a measured requirement but does not read
+    /// as one (`mass < 400`, without its unit): how to write it.
+    pub hint: Option<String>,
 }
 
 impl Requirement {
@@ -115,14 +118,17 @@ pub struct Brief {
 pub fn read_brief(text: &str) -> Brief {
     let mut brief = Brief::default();
     let mut in_requirements = false;
-    let mut block: Option<(usize, String, String)> = None;
+    // An open fence: its line, the tool it is for (none for any other
+    // block, whose lines are skipped), and its text so far.
+    let mut block: Option<(usize, Option<String>, String)> = None;
     for (index, line) in text.lines().enumerate() {
         let number = index + 1;
         let trimmed = line.trim();
         if let Some((start, name, body)) = &mut block {
             if trimmed.starts_with("```") {
-                let (start, name, body) = (*start, std::mem::take(name), std::mem::take(body));
+                let (start, name, body) = (*start, name.take(), std::mem::take(body));
                 block = None;
+                let Some(name) = name else { continue };
                 match serde_json::from_str::<serde_json::Value>(&body) {
                     Ok(value) if value.is_object() => match name.as_str() {
                         "mass" => brief.mass = Some(value),
@@ -139,12 +145,11 @@ pub fn read_brief(text: &str) -> Brief {
         }
         if let Some(info) = trimmed.strip_prefix("```") {
             let mut words = info.split_whitespace();
-            if words.next() == Some("json") {
-                if let Some(name @ ("mass" | "loads")) = words.next() {
-                    block = Some((number, name.to_string(), String::new()));
-                    continue;
-                }
-            }
+            let name = match (words.next(), words.next()) {
+                (Some("json"), Some(name @ ("mass" | "loads"))) => Some(name.to_string()),
+                _ => None,
+            };
+            block = Some((number, name, String::new()));
             continue;
         }
         if let Some(title) = trimmed.strip_prefix("# ") {
@@ -160,12 +165,15 @@ pub fn read_brief(text: &str) -> Brief {
             let item = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* "));
             if let Some(item) = item {
                 let item = item.trim_start_matches("[ ]").trim_start_matches("[x]").trim();
-                brief.requirements.push(Requirement { text: item.to_string(), rule: rule(item), line: number });
+                let rule = rule(item);
+                let hint = if rule == Rule::Other { hint(item) } else { None };
+                brief.requirements.push(Requirement { text: item.to_string(), rule, line: number, hint });
             }
         }
     }
     if let Some((start, name, _)) = block {
-        brief.errors.push((start, format!("the `{name}` block is not closed with ```")));
+        let what = name.map_or("block".to_string(), |name| format!("`{name}` block"));
+        brief.errors.push((start, format!("the {what} is not closed with ```")));
     }
     brief
 }
@@ -173,7 +181,10 @@ pub fn read_brief(text: &str) -> Brief {
 /// What a requirement's text asks.
 fn rule(text: &str) -> Rule {
     let folded = fold(text);
-    let after = |names: &[&str]| names.iter().find_map(|name| folded.strip_prefix(name).map(str::trim));
+    // A name as a whole word: `masse` is not `mass` followed by `e`.
+    let after = |names: &[&str]| {
+        names.iter().find_map(|name| folded.strip_prefix(name).filter(|rest| !rest.starts_with(char::is_alphabetic)).map(str::trim))
+    };
     let quoted = || {
         let start = text.find('"')? + 1;
         let end = start + text[start..].find('"')?;
@@ -227,6 +238,31 @@ fn rule(text: &str) -> Rule {
         }
     }
     Rule::Other
+}
+
+/// How to write a line that starts as a measured requirement but does not
+/// read as one.
+fn hint(text: &str) -> Option<String> {
+    let folded = fold(text);
+    let starts = |names: &[&str]| names.iter().any(|name| folded.strip_prefix(name).is_some_and(|rest| !rest.starts_with(char::is_alphabetic)));
+    let example = if starts(&["total mass", "masse totale", "mass", "masse"]) {
+        "`mass < 400 g`: a comparison, a number and its unit (g, kg)"
+    } else if starts(&["tipping angle", "angle de basculement", "tipping", "basculement"]) {
+        "`tipping > 15°`: a comparison and an angle in degrees"
+    } else if starts(&["torque margin", "marge de couple"]) {
+        "`torque margin >= 2`: a comparison and a number"
+    } else if starts(&["radial load margin", "marge de charge radiale"]) {
+        "`radial load margin >= 2`: a comparison and a number"
+    } else if starts(&["size", "taille"]) {
+        "`size <= 220 x 220 x 250 mm`: at most three sides in millimeters"
+    } else if starts(&["part", "piece"]) {
+        "`part \"Name\"`: the part()'s name in quotes"
+    } else if starts(&["component", "composant"]) {
+        "`component \"electronics/file.c2f\"`: the part file in quotes"
+    } else {
+        return None;
+    };
+    Some(format!("write it as {example}, for a tool to measure it"))
 }
 
 /// The comparison at the start of `text`, and what follows it.
@@ -320,6 +356,23 @@ The watch turns on a cradle at the front of the shaft.
         assert_eq!(rules[2], &Rule::TorqueMargin(Op::AtLeast, 2.0));
         assert_eq!(rules[1], &Rule::Tipping(Op::More, 15.0));
         assert_eq!(rules[3], &Rule::Part("Berceau".into()));
+    }
+
+    #[test]
+    fn a_name_is_a_whole_word_and_a_miswritten_line_gets_a_hint() {
+        let brief = read_brief("# A\n## Requirements\n- masse < 400 g\n- masse ≤ 0,4 kg\n- mass < 400\n- glows softly\n");
+        let rules: Vec<&Rule> = brief.requirements.iter().map(|r| &r.rule).collect();
+        assert_eq!(rules, [&Rule::Mass(Op::Less, 400.0), &Rule::Mass(Op::AtMost, 400.0), &Rule::Other, &Rule::Other]);
+        assert!(brief.requirements[2].hint.as_deref().unwrap().contains("`mass < 400 g`"));
+        assert_eq!(brief.requirements[3].hint, None);
+    }
+
+    #[test]
+    fn what_is_fenced_is_not_read() {
+        let brief = read_brief("# A\n## Requirements\n```text\n## Notes\n```\n- mass < 1 g\n## Notes\n```\n## Requirements\n```\n- mass < 2 g\n");
+        let rules: Vec<&Rule> = brief.requirements.iter().map(|r| &r.rule).collect();
+        assert_eq!(rules, [&Rule::Mass(Op::Less, 1.0)]);
+        assert!(brief.errors.is_empty(), "{:?}", brief.errors);
     }
 
     #[test]

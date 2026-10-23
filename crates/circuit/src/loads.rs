@@ -504,6 +504,24 @@ pub fn analyse(scenario: &Scenario) -> Result<Report, String> {
     if let Some(load) = scenario.loads.iter().find(|l| !(l.mass_g == 0.0 || positive(l.mass_g))) {
         return Err(format!("the load `{}` must have a mass of 0 g or more", load.name));
     }
+    match scenario.stages {
+        Some(0) if scenario.ratio != 1.0 => return Err("`stages` is 0 only without a reduction (`ratio` 1)".into()),
+        Some(s) if s > 10 => return Err(format!("`stages` is the number of gear stages, 0 to 10, not {s}")),
+        _ => {}
+    }
+    if let Some(motor) = &scenario.motor {
+        let figures = [
+            ("torque_mNm", motor.torque_mnm),
+            ("stall_torque_mNm", motor.stall_torque_mnm),
+            ("holding_torque_mNm", motor.holding_torque_mnm),
+            ("speed_rpm", motor.speed_rpm),
+            ("max_radial_load_N", motor.max_radial_load_n),
+            ("max_axial_load_N", motor.max_axial_load_n),
+        ];
+        if let Some((name, value)) = figures.iter().find_map(|(name, v)| v.filter(|v| !positive(*v)).map(|v| (name, v))) {
+            return Err(format!("`motor.{name}` must be more than 0, not {value}"));
+        }
+    }
     if let Some(e) = scenario.efficiency.filter(|e| !(positive(*e) && *e <= 1.0)) {
         return Err(format!("`efficiency` must be over 0 and at most 1, not {e}"));
     }
@@ -715,7 +733,9 @@ pub fn analyse(scenario: &Scenario) -> Result<Report, String> {
                     ));
                     if margin < target {
                         let t = torque.unwrap_or(0.0);
-                        let found = RATIOS.iter().copied().filter(|&r| r > scenario.ratio).find(|&r| t * r * STAGE_EFFICIENCY.powi(stages_for(r) as i32) >= target * needed);
+                        // A given efficiency holds for any ratio; else each stage loses its share.
+                        let eff_for = |r: f64| scenario.efficiency.unwrap_or_else(|| STAGE_EFFICIENCY.powi(stages_for(r) as i32));
+                        let found = RATIOS.iter().copied().filter(|&r| r > scenario.ratio).find(|&r| t * r * eff_for(r) >= target * needed);
                         let mut warning = format!(
                             "the motor gives {} mN·m at the shaft for {} needed: a margin of {}, under {}",
                             num(at_shaft),
@@ -725,7 +745,7 @@ pub fn analyse(scenario: &Scenario) -> Result<Report, String> {
                         );
                         match found {
                             Some(r) => {
-                                let eff = STAGE_EFFICIENCY.powi(stages_for(r) as i32);
+                                let eff = eff_for(r);
                                 ratio_needed = Some(target * needed / (t * eff));
                                 suggested_ratio = Some(r);
                                 warning.push_str(&format!(

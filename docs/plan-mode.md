@@ -131,8 +131,9 @@ can on purpose.
 
 ![The boards and the motor in the frame](images/winder/2-build.png)
 
-Before showing the result, `check_brief` measures the design and its
-circuit against the brief:
+Before showing the result, `check_brief` measures the design
+(`watch_winder.c2f`) and its circuit (`winder.c2fc`, given as `circuit`:
+the design does not name it, its frame does) against the brief:
 
 ```
 holds       mass < 600 g                 476.6 g
@@ -145,8 +146,10 @@ unmeasured  prints without supports      for you to check
 unmeasured  quiet enough for a bedroom   for you to check
 ```
 
-If a later change drops the gears, for example, the torque margin falls
-back under 2 and `check_brief` says so.
+The mass and the tipping angle are measured on the design as it is. The
+torque margin comes from the brief's `loads` block, which the review
+wrote: change the gears or the motor in the design, and change that block
+with them. If a later version drops the pinion, `part "pinion"` fails.
 
 ## The tools
 
