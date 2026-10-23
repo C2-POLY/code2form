@@ -189,7 +189,9 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
     };
     let mut notes: Vec<String> = Vec::new();
     let mass_options = crate::mass::options(brief.mass.as_ref().unwrap_or(&json!({})));
-    let mut design_mass: Option<Result<c2f_geom::MassReport, String>> = None;
+    // The design's nodes and folder, weighed once the circuit's parts are known.
+    let mut design_nodes: Option<(Vec<c2f_eval::node::Node>, PathBuf)> = None;
+    let mut circuit_mass: Option<Result<c2f_geom::MassReport, String>> = None;
     let mut circuit_path = string("circuit").map(PathBuf::from);
     if let Some(design) = string("design") {
         let mut design_args = json!({ "path": design });
@@ -214,11 +216,11 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
         // leaves it empty, and its name is the design's.
         let pieces: Vec<(String, [f64; 3])> = sizes.filter(|(_, size)| size.iter().any(|s| *s > 0.0)).collect();
         measured.pieces = Some(pieces);
-        design_mass = Some(mass_options.clone().and_then(|options| c2f_geom::mass_properties(&evaluated.nodes, &base_dir, &options)));
         if circuit_path.is_none() {
             let (annotations, _) = c2f_lang::annotations::read(&src);
             circuit_path = annotations.circuit.map(|link| base_dir.join(link.path));
         }
+        design_nodes = Some((evaluated.nodes, base_dir));
     } else {
         notes.push("no `design` given: its pieces and sizes are not measured".into());
     }
@@ -227,10 +229,21 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
         let circuit = c2f_circuit::parse(&src, path, &c2f_eval::default_library_paths())
             .map_err(|_| format!("{} does not read: check it with `check_circuit`", path.display()))?;
         measured.components = Some(circuit.parts.iter().map(|p| p.part.clone()).collect());
-        // The circuit weighs its components too.
-        design_mass = Some(mass_options.clone().and_then(|options| crate::mass::circuit(&circuit, &src, path, options)));
+        // The circuit gives its components' masses, where it places them.
+        circuit_mass = Some(mass_options.clone().and_then(|options| crate::mass::circuit(&circuit, &src, path, options)));
     }
-    if let Some(report) = design_mass {
+    // The design is what is printed, which its circuit's enclosure may
+    // only be a piece of: weigh it, with the circuit's components in it.
+    let report = match (design_nodes, circuit_mass) {
+        (Some((nodes, base_dir)), circuit) => Some(mass_options.and_then(|mut options| {
+            if let Some(circuit) = circuit {
+                options.components = circuit?.components;
+            }
+            c2f_geom::mass_properties(&nodes, &base_dir, &options)
+        })),
+        (None, circuit) => circuit,
+    };
+    if let Some(report) = report {
         measured.mass = report.map(|r| (r.total, r.stability.map(|s| s.min_tipping_deg)));
     }
     if let Some(scenario) = &brief.loads {
