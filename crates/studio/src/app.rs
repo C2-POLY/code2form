@@ -47,6 +47,10 @@ use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 /// way in a third of a second.
 const EXPLODE_SPEED: f32 = 3.0;
 
+/// How far apart the exploded view first draws the parts: a quarter of the
+/// way, enough to see the gaps without losing the assembly.
+const EXPLODE_START: f32 = 0.25;
+
 const DESIGN_FILES: (&str, &str) = ("Code2Form design", "c2f");
 const SCAD_FILES: (&str, &str) = ("SCAD design", "scad");
 const CIRCUIT_FILES: (&str, &str) = ("Code2Form circuit", "c2fc");
@@ -292,7 +296,7 @@ impl Tab {
             customizer_open: None,
             animation: Animation::default(),
             exploded: false,
-            explode_amount: 1.0,
+            explode_amount: EXPLODE_START,
             explode_shown: 0.0,
         }
     }
