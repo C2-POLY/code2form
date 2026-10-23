@@ -130,6 +130,13 @@ pub struct Viewer {
     pauses: Vec<PauseMark>,
     /// The text the scene was rendered from.
     scene_source: String,
+    /// A design's parts drawn apart, and how far apart, from 0
+    /// (assembled) to 1; the scene's solid, to show at 0.
+    exploded: Option<Arc<c2f_geom::Exploded>>,
+    explode: f32,
+    assembled: RenderMesh,
+    /// The box around the parts all the way apart, framed while exploded.
+    exploded_bounds: Option<(Vec3, Vec3)>,
     /// The pause being dragged on the slider, and the layer it is over.
     dragging: Option<(usize, u32)>,
     menu: Option<SliderMenu>,
@@ -176,6 +183,10 @@ impl Viewer {
             orbit_enabled: true,
             pauses: Vec::new(),
             scene_source: String::new(),
+            exploded: None,
+            explode: 0.0,
+            assembled: RenderMesh::default(),
+            exploded_bounds: None,
             dragging: None,
             menu: None,
             edit: None,
@@ -205,6 +216,10 @@ impl Viewer {
             None => Vec::new(),
         };
         self.scene_source = scene.source.clone();
+        self.exploded = scene.exploded.clone();
+        self.assembled = if self.exploded.is_some() { scene.solid.clone() } else { RenderMesh::default() };
+        self.exploded_bounds =
+            self.exploded.as_ref().and_then(|e| e.at(1.0).bounds()).map(|(lo, hi)| (Vec3::from(lo), Vec3::from(hi)));
         self.part_ranges = scene.parts.clone();
         self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
@@ -220,8 +235,35 @@ impl Viewer {
         }
         // The new solid comes in its own colors.
         self.recolor();
+        if self.explode > 0.0 {
+            self.show_exploded();
+        }
         if frame {
             self.view_all();
+        }
+    }
+
+    /// Whether the scene has parts to draw apart.
+    pub fn can_explode(&self) -> bool {
+        self.exploded.is_some()
+    }
+
+    /// Draws the parts `amount` of the way apart, from 0 (assembled) to 1.
+    pub fn set_explode(&mut self, amount: f32) {
+        let amount = amount.clamp(0.0, 1.0);
+        if amount != self.explode {
+            self.explode = amount;
+            self.show_exploded();
+        }
+    }
+
+    fn show_exploded(&mut self) {
+        let Some(exploded) = &self.exploded else { return };
+        let solid = if self.explode > 0.0 { exploded.at(self.explode) } else { self.assembled.clone() };
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_solid(solid);
+            }
         }
     }
 
@@ -334,12 +376,15 @@ impl Viewer {
         Ray { origin, direction, slack }
     }
 
-    /// The model's box and the overlay's, together.
+    /// The model's box and the overlay's, together, and the parts' all
+    /// the way apart while the view is exploded.
     fn drawn_bounds(&self) -> Option<(Vec3, Vec3)> {
-        match (self.bounds, self.overlay_bounds) {
+        let both = |a: Option<(Vec3, Vec3)>, b: Option<(Vec3, Vec3)>| match (a, b) {
             (Some((l1, h1)), Some((l2, h2))) => Some((l1.min(l2), h1.max(h2))),
             (a, b) => a.or(b),
-        }
+        };
+        let exploded = self.exploded_bounds.filter(|_| self.explode > 0.0);
+        both(both(self.bounds, self.overlay_bounds), exploded)
     }
 
     /// The box to frame: the model, or a default 20-unit cube around the
@@ -1005,6 +1050,7 @@ mod tests {
             source: String::new(),
             parts: Vec::new(),
             enclosure: 0..0,
+            exploded: None,
         }
     }
 

@@ -8,7 +8,8 @@
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
 //! `mic` mid-drag at x 40, y 10; `settings:model` shows a page of the
 //! settings (`general`, `appearance`, `editor`, `model`, `export`,
-//! `libraries`, `shortcuts`); `play` plays a design that reads `$t`.
+//! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
+//! `exploded` draws its part()s apart (`play,exploded` does both).
 //! `CODE2FORM_APPEARANCE` picks the theme, `CODE2FORM_LANGUAGE` the
 //! language (`en` or `fr`).
 

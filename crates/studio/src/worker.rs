@@ -47,6 +47,9 @@ pub struct Scene {
     /// For a circuit, the vertices of its enclosure in `solid`, after the
     /// parts': see-through.
     pub enclosure: std::ops::Range<usize>,
+    /// For a design with `part()`s, its parts drawn each on its own, for the
+    /// exploded view.
+    pub exploded: Option<Arc<c2f_geom::Exploded>>,
 }
 
 impl Scene {
@@ -289,8 +292,15 @@ fn render_source(
     let mut parameters = None;
     let mut annotation_error = None;
     let mut animated = false;
+    let mut exploded = None;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let report = Report { console: &mut console, parameters: &mut parameters, annotation_error: &mut annotation_error, animated: &mut animated };
+        let report = Report {
+            console: &mut console,
+            parameters: &mut parameters,
+            annotation_error: &mut annotation_error,
+            animated: &mut animated,
+            exploded: Some(&mut exploded),
+        };
         pipeline(source, path, values, t, library_paths, report)
     }))
     .unwrap_or_else(
@@ -313,6 +323,7 @@ fn render_source(
                 source: source.to_string(),
                 parts: Vec::new(),
                 enclosure: 0..0,
+                exploded: exploded.map(Arc::new),
             };
             (Ok(scene), Some(Shown { rendered, program }))
         }
@@ -394,7 +405,13 @@ pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> Part
     let mut console = Vec::new();
     let (mut parameters, mut annotation_error, mut animated) = (None, None, false);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let report = Report { console: &mut console, parameters: &mut parameters, annotation_error: &mut annotation_error, animated: &mut animated };
+        let report = Report {
+            console: &mut console,
+            parameters: &mut parameters,
+            annotation_error: &mut annotation_error,
+            animated: &mut animated,
+            exploded: None,
+        };
         pipeline(source, path, &[], 0.0, library_paths, report)
     }))
     .unwrap_or_else(|panic| {
@@ -482,6 +499,9 @@ struct Report<'a> {
     annotation_error: &'a mut Option<usize>,
     /// The program read `$t`.
     animated: &'a mut bool,
+    /// When asked for, the parts drawn each on its own, for the exploded
+    /// view.
+    exploded: Option<&'a mut Option<c2f_geom::Exploded>>,
 }
 
 /// Renders `source` at `path`, its parameters set to `values` and `$t` to
@@ -494,7 +514,7 @@ fn pipeline(
     library_paths: &[PathBuf],
     report: Report,
 ) -> Result<(Rendered, c2f_eval::Program), Option<usize>> {
-    let Report { console, parameters, annotation_error, animated } = report;
+    let Report { console, parameters, annotation_error, animated, exploded } = report;
     let mut program = match c2f_eval::Program::load(source, path, library_paths) {
         Ok(program) => program,
         Err(err) => {
@@ -527,8 +547,11 @@ fn pipeline(
         return Err(None);
     }
     // Data files (import(), surface()) are named relative to the main file.
-    let rendered = c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")))
-        .with_pauses(output.pauses);
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
+    let rendered = c2f_geom::render_in(&output.nodes, base_dir).with_pauses(output.pauses);
+    if let Some(exploded) = exploded {
+        *exploded = c2f_geom::exploded(&output.nodes, base_dir);
+    }
     console.extend(rendered.warnings.iter().map(|text| Line::new(Level::Warning, text.clone())));
     Ok((rendered, program))
 }
@@ -726,6 +749,19 @@ mod tests {
         let generation = worker.render("cube(1);".into(), path(), Vec::new(), 0.25);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!("no render") };
         assert!(!outcome.animated);
+    }
+
+    #[test]
+    fn a_design_with_parts_comes_with_its_exploded_view() {
+        let worker = Worker::spawn(egui::Context::default());
+        let generation = worker.render("cube(10); translate([0, 0, 10]) part(\"lid\") cube(10);".into(), path(), Vec::new(), 0.0);
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!("no render") };
+        let Ok(scene) = outcome.result else { panic!("the render failed") };
+        let exploded = scene.exploded.expect("an exploded view");
+        assert!(exploded.offsets()[0][2] > 0.0, "the lid lifts");
+        let generation = worker.render("cube(10);".into(), path(), Vec::new(), 0.0);
+        let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!("no render") };
+        assert!(outcome.result.unwrap().exploded.is_none());
     }
 
     #[test]
