@@ -166,7 +166,7 @@ pub fn paint_card(painter: &egui::Painter, rect: Rect, title: &str, lines: &[Str
         .collect();
     let width = lines.iter().map(|g| g.size().x).fold(title.size().x, f32::max) + 24.0;
     let height = title.size().y + lines.iter().map(|g| g.size().y + 3.0).sum::<f32>() + 22.0;
-    let card = Rect::from_min_size(rect.left_top() + Vec2::new(12.0, 44.0), Vec2::new(width, height));
+    let card = Rect::from_min_size(rect.left_top() + Vec2::new(12.0, 60.0), Vec2::new(width, height));
     let border = Stroke::new(1.0, p.line(28));
     painter.rect(card, CornerRadius::same(8), p.veil(185), border, StrokeKind::Inside);
     let mut y = card.top() + 9.0;

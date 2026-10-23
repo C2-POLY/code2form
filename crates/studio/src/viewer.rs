@@ -145,6 +145,17 @@ pub struct Viewer {
     grid: Grid,
     /// Width over height of the viewport, as last shown.
     aspect: f32,
+    /// The room the app's bars take over the view's edges: the view's own
+    /// badges, gizmo, hints and layer slider keep clear of it.
+    pub insets: Insets,
+}
+
+/// Room taken over the edges of the view, in points.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Insets {
+    pub top: f32,
+    pub bottom: f32,
+    pub right: f32,
 }
 
 impl Viewer {
@@ -194,6 +205,7 @@ impl Viewer {
             edit: None,
             grid,
             aspect: 1.5,
+            insets: Insets::default(),
         };
         viewer.reset();
         viewer
@@ -577,7 +589,7 @@ impl Viewer {
             self.layer_slider(ui, &painter, rect, &response);
         }
         self.paint_gizmo(&painter, rect);
-        paint_overlays(ui, &painter, rect, status);
+        paint_overlays(ui, &painter, rect, status, self.insets);
         response
     }
 
@@ -668,7 +680,13 @@ impl Viewer {
     fn layer_slider(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, rect: Rect, view: &egui::Response) {
         let (Some(count), Some((lo, hi))) = (self.layer_count(), self.heights) else { return };
         let x = rect.right() - 34.0;
-        let track = Track { top: rect.top() + 56.0, bottom: rect.bottom() - 84.0, count, lo, layer_height: self.layer_height };
+        let track = Track {
+            top: rect.top() + 56.0,
+            bottom: rect.bottom() - 84.0 - self.insets.bottom,
+            count,
+            lo,
+            layer_height: self.layer_height,
+        };
         if track.bottom - track.top < 40.0 {
             return;
         }
@@ -858,7 +876,7 @@ impl Viewer {
 
     /// A small X/Y/Z compass in the bottom-left corner.
     fn paint_gizmo(&self, painter: &egui::Painter, rect: Rect) {
-        let center = Pos2::new(rect.left() + 46.0, rect.bottom() - 46.0);
+        let center = Pos2::new(rect.left() + 46.0, rect.bottom() - self.insets.bottom - 46.0);
         let length = 28.0;
         let view = self.camera.view();
         let axes = [
@@ -885,7 +903,7 @@ impl Viewer {
     }
 }
 
-fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &Status) {
+fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &Status, insets: Insets) {
     let margin = 12.0;
 
     if !status.has_model && !status.rendering {
@@ -914,7 +932,7 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     }
 
     // Badges, top-left.
-    let mut at = rect.left_top() + Vec2::splat(margin);
+    let mut at = rect.left_top() + Vec2::new(margin, margin + insets.top);
     if status.rendering {
         let width = badge(painter, at, tr("Rendering…", "Rendu…"), theme::palette().accent_strong, true);
         let spinner = Rect::from_center_size(at + Vec2::new(14.0, 12.0), Vec2::splat(12.0));
@@ -933,13 +951,13 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     // Top-right: 2D note.
     if status.is_2d && status.has_model {
         let galley = painter.layout_no_wrap("2D".into(), FontId::proportional(12.0), theme::palette().text_dim);
-        let pos = Pos2::new(rect.right() - margin - galley.size().x - 16.0, rect.top() + margin);
+        let pos = Pos2::new(rect.right() - margin - insets.right - galley.size().x - 16.0, rect.top() + margin);
         badge(painter, pos, "2D", theme::palette().text_dim, false);
     }
 
     // Bottom-right: mouse help.
     painter.text(
-        rect.right_bottom() - Vec2::new(margin, margin),
+        rect.right_bottom() - Vec2::new(margin, margin + insets.bottom),
         Align2::RIGHT_BOTTOM,
         tr(
             "Drag: orbit   Right/Shift-drag: pan   Scroll: zoom   Double-click: fit",
