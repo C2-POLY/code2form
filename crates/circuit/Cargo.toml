@@ -11,6 +11,8 @@ c2f-lang.workspace = true
 # The `.c2fc` files, with the position of each value for errors.
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+# The tools' arguments in a brief, and the JSON Schema of the format.
+serde_json = "1"
 
 [dev-dependencies]
 c2f-eval.workspace = true
@@ -18,5 +20,3 @@ c2f-eval.workspace = true
 c2f-geom.workspace = true
 # Casts rays at a solid, to see that a wire clears an enclosure.
 manifold-rust = "0.18"
-# Reads the JSON Schema of the format.
-serde_json = "1"

@@ -92,12 +92,12 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part"]
+        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part", "save_brief", "read_brief"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
         let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
-        assert_eq!(takes_code, !["library_parts", "electrify"].contains(&tool["name"].as_str().unwrap()), "{tool}");
+        assert_eq!(takes_code, !["library_parts", "electrify", "save_brief", "read_brief"].contains(&tool["name"].as_str().unwrap()), "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);
@@ -322,7 +322,7 @@ fn prompts_lead_from_an_idea_to_its_electronics() {
     assert!(init["result"]["capabilities"]["prompts"].is_object());
     let list = server.request("prompts/list", json!({}));
     let names: Vec<&str> = list["result"]["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["design_object", "add_electronics"]);
+    assert_eq!(names, ["plan_object", "design_object", "add_electronics"]);
     let got = server.request(
         "prompts/get",
         json!({ "name": "add_electronics", "arguments": { "design": "box.c2f", "components": "https://example.com/sensor" } }),
@@ -767,4 +767,31 @@ fn save_part_refuses_what_check_part_finds_wrong_and_fit_a_clearance_it_cannot_m
     let (is_error, _) = server.report("fit", json!({ "path": circuit, "clearance": 20 }));
     assert!(is_error);
     let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn a_brief_is_saved_with_requirements_a_tool_measures_and_read_back() {
+    let mut server = Server::start();
+    let dir = temp_dir("brief");
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("winder/brief.md");
+    // Without a requirement a tool measures, it is refused.
+    let vague = "# Winder\n\n## Requirements\n\n- turns the watch gently\n";
+    let (is_error, report) = server.report("save_brief", json!({ "path": path, "text": vague }));
+    assert!(is_error && report["saved"] == false, "{report}");
+    assert!(!path.exists());
+    let brief = "# Winder\n\nA 608 bearing carries the watch; the motor only turns it.\n\n## Requirements\n\n- mass < 400 g\n- torque margin >= 2\n- part \"Cradle\"\n- turns the watch gently\n\n```json loads\n{ \"ratio\": 1 }\n```\n";
+    let (is_error, report) = server.report("save_brief", json!({ "path": path, "text": brief }));
+    assert!(!is_error, "{report}");
+    let kinds: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["mass", "torque margin", "part", "other"]);
+    // Not replaced unless asked.
+    let (is_error, _) = server.report("save_brief", json!({ "path": path, "text": brief }));
+    assert!(is_error);
+    let (is_error, content) = server.call("read_brief", json!({ "path": path }));
+    assert!(!is_error, "{content:?}");
+    assert_eq!(content[0]["text"], brief);
+    let report: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((&report["title"], &report["loads"]["ratio"], &report["requirements"][1]["value"]), (&json!("Winder"), &json!(1), &json!(2.0)));
+    let _ = std::fs::remove_dir_all(&dir);
 }

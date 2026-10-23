@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 
 use crate::Export;
 
+mod brief;
 mod circuit;
 mod part;
 mod prompts;
@@ -43,7 +44,9 @@ their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_bom` list its wires in order and its parts, `fit` says how its \
 parts fit in their enclosure. To go from an \
 idea to a printed object with its electronics, follow the prompts \
-`design_object` (the model first, approved by the user) then \
+`plan_object` (questions, a mechanical review and a brief the user \
+approves, written with `save_brief` and read with `read_brief`), \
+`design_object` (the model, held to the brief and approved by the user) then \
 `add_electronics` (`electrify` makes the approved design ready for its \
 circuit). To turn a mesh into \
 a design, `section` cuts it with a plane: its outlines give the sizes to \
@@ -259,6 +262,7 @@ fn tools() -> Value {
     // Writing a part from its supplier's pages.
     if let Some(tools) = tools.as_array_mut() {
         tools.extend(part::tools());
+        tools.extend(brief::tools());
     }
     tools
 }
@@ -317,7 +321,7 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "export" => export_tool,
         "section" => section_tool,
         "electrify" => electrify_tool,
-        _ => circuit::tool(name).or_else(|| part::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
+        _ => circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
     if !args.is_object() {
