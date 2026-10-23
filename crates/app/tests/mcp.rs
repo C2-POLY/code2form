@@ -92,7 +92,7 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom"]
+        ["render", "parameters", "image", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "check_part", "save_part"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
@@ -465,4 +465,158 @@ fn decode_png(png: &[u8]) -> (usize, usize, Vec<u8>) {
     assert_eq!(raw.len(), (width * 3 + 1) * height);
     let rgb = raw.chunks_exact(width * 3 + 1).flat_map(|row| row[1..].to_vec()).collect();
     (width, height, rgb)
+}
+
+/// A server whose home folder is a fresh one, so that the user's own parts
+/// are only those a test saves.
+fn server_at_home(name: &str) -> (Server, std::path::PathBuf) {
+    let home = temp_dir(name);
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    (Server::start_with(&[("HOME", home.as_os_str())]), home)
+}
+
+/// The `part` names of a `library_parts` report, in its order.
+fn part_names(report: &Value) -> Vec<String> {
+    report["parts"].as_array().unwrap().iter().map(|p| p["part"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn library_parts_have_a_sheet_and_answer_a_search() {
+    let (mut server, home) = server_at_home("search");
+    let (is_error, report) = server.report("library_parts", json!({}));
+    assert!(!is_error, "{report}");
+    // Every part; `lib/` holds the helpers they `use`, without pins.
+    for part in report["parts"].as_array().unwrap().iter().filter(|p| p["pins"] != 0) {
+        assert!(part["description"].is_string() && part["specs"].as_object().is_some_and(|s| !s.is_empty()), "{part}");
+        let sources = part["sources"].as_array().unwrap();
+        assert!(!sources.is_empty() && sources.iter().all(|s| s["url"].as_str().unwrap().starts_with("http")), "{part}");
+    }
+    let (_, report) = server.report("library_parts", json!({ "query": "micro I2S" }));
+    let inmp441 = &report["parts"][0];
+    assert_eq!(inmp441["part"], "electronics/inmp441.c2f", "{report}");
+    assert_eq!(inmp441["specs"]["supply"], "1.62 to 3.63 V (VDD)");
+    assert!(inmp441["score"].as_f64().unwrap() > 0.0);
+    assert!(inmp441["sources"][0]["url"].as_str().unwrap().contains("invensense"));
+    for (query, first) in [
+        ("driver 5V", "drv8833"),
+        ("driver moteur", "drv8833"),
+        ("ampli", "max98357a"),
+        ("haut-parleur", "speaker"),
+    ] {
+        let (_, report) = server.report("library_parts", json!({ "query": query }));
+        assert_eq!(part_names(&report).first().map(String::as_str), Some(&*format!("electronics/{first}.c2f")), "{query}: {report}");
+    }
+    let (_, report) = server.report("library_parts", json!({ "query": "capteur de température" }));
+    assert_eq!(report["parts"], json!([]));
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn check_part_finds_what_does_not_hold_together() {
+    let (mut server, home) = server_at_home("check");
+    // The library's parts are clean.
+    let library = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library/electronics");
+    let mut files: Vec<_> = std::fs::read_dir(&library).unwrap().map(|e| e.unwrap().path()).collect();
+    files.retain(|p| p.extension().is_some_and(|e| e == "c2f"));
+    assert!(files.len() >= 10);
+    for file in files {
+        let name = file.file_name().unwrap().to_string_lossy().into_owned();
+        let (is_error, report) = server.report("check_part", json!({ "path": format!("electronics/{name}") }));
+        assert!(!is_error && report["errors"] == json!([]) && report["warnings"] == json!([]), "{name}: {report}");
+        assert!(report["bounding_box"]["size"].is_array(), "{name}: {report}");
+    }
+
+    let part = "\
+// A board.
+// @pin VIN [1, 1, 1.6] power_in
+// @pin GND [1, 1, 1.6] ground
+// @pin FAR [40, 1, 1.6] io 3.3V
+// @mount_hole [18, 30] d=2
+// @port usb [0, 5, 1] +x [8, 3]
+// @spec supply 5 V
+cube([20, 10, 1.6]);
+";
+    let (is_error, report) = server.report("check_part", json!({ "code": part }));
+    assert!(is_error);
+    let errors: Vec<(String, u64)> = report["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["message"].as_str().unwrap().to_string(), e["line"].as_u64().unwrap()))
+        .collect();
+    let expect = [
+        ("expected `key: value`", 7),
+        ("power pin `VIN` has no voltage", 2),
+        ("pins `VIN` and `GND` are at the same place", 3),
+        ("pin `FAR` at [40, 1, 1.6] is outside the part", 4),
+        ("the mount hole at [18, 30, 0] is outside the part", 5),
+        ("port `usb` at [0, 5, 1] faces [1, 0, 0], into the part", 6),
+    ];
+    assert_eq!(errors.len(), expect.len(), "{report}");
+    for (start, line) in expect {
+        assert!(errors.iter().any(|(message, at)| message.starts_with(start) && *at == line), "{start}: {report}");
+    }
+    let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().map(|w| w["message"].as_str().unwrap()).collect();
+    assert!(warnings.iter().any(|w| w.contains("@description")) && warnings.iter().any(|w| w.contains("@source")), "{report}");
+
+    // A part that does not render says where it stops.
+    let (is_error, report) = server.report("check_part", json!({ "code": "// @description A.\n// @source https://a.b\ncube(;\n" }));
+    assert!(is_error);
+    let error = &report["errors"][0];
+    assert!(error["message"].as_str().unwrap().starts_with("the part does not render"), "{report}");
+    assert_eq!(error["line"], 3, "{report}");
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn save_part_writes_a_checked_part_into_the_users_library() {
+    let (mut server, home) = server_at_home("save");
+    let part = "\
+// @description A light sensor breakout: a 20 x 15 mm board with four pins.
+// @spec supply: 1.8 to 3.6 V
+// @spec interface: I2C
+// @source https://example.com/light-sensor product page
+// @pin VIN [6.19, 2, 1.6] power_in 3.6V
+// @pin GND [8.73, 2, 1.6] ground
+// @pin SCL [11.27, 2, 1.6] input 3.6V \"I2C clock\"
+// @pin SDA [13.81, 2, 1.6] io 3.6V \"I2C data\"
+module light_sensor() { cube([20, 15, 1.6]); }
+light_sensor();
+";
+    // Refused: a bad name, no sheet, a parse error, a badly written annotation.
+    let (is_error, _) = server.call("save_part", json!({ "name": "2 light", "code": part }));
+    assert!(is_error);
+    let bare = part.lines().filter(|l| !l.contains("@description") && !l.contains("@source")).collect::<Vec<_>>().join("\n");
+    let (is_error, content) = server.call("save_part", json!({ "name": "light_sensor", "code": bare }));
+    let message = content[0]["text"].as_str().unwrap();
+    assert!(is_error && message.contains("@description") && message.contains("@source"), "{message}");
+    let (is_error, report) = server.report("save_part", json!({ "name": "light_sensor", "code": format!("{part}cube(;\n") }));
+    assert!(is_error && report["why"] == "the part does not parse" && report["errors"][0]["line"] == 11, "{report}");
+    let (is_error, report) = server.report("save_part", json!({ "name": "light_sensor", "code": part.replace("3.6V \"I2C data\"", "3.6 V") }));
+    assert!(is_error && report["why"] == "its annotations have errors" && report["errors"][0]["line"] == 8, "{report}");
+    let folder = home.join("Documents/Code2Form/libraries/electronics");
+    assert!(!folder.join("light_sensor.c2f").exists());
+
+    // Saved, with its check.
+    let (is_error, report) = server.report("save_part", json!({ "name": "light_sensor.c2f", "code": part }));
+    assert!(!is_error, "{report}");
+    let path = folder.join("light_sensor.c2f");
+    assert_eq!(report["path"], path.display().to_string());
+    assert_eq!(report["part"], "electronics/light_sensor.c2f");
+    assert_eq!((&report["check"]["ok"], &report["check"]["pins"], &report["check"]["warnings"]), (&json!(true), &json!(4), &json!([])), "{report}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), part);
+    // The catalogue's search finds it, as a circuit names it.
+    let (_, report) = server.report("library_parts", json!({ "query": "capteur lumière I2C" }));
+    assert_eq!(part_names(&report), ["electronics/light_sensor.c2f"], "{report}");
+
+    // Not replaced, unless asked.
+    let changed = part.replace("four pins", "four pins and a window");
+    let (is_error, content) = server.call("save_part", json!({ "name": "light_sensor", "code": changed }));
+    assert!(is_error && content[0]["text"].as_str().unwrap().contains("overwrite"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), part);
+    let (is_error, report) = server.report("save_part", json!({ "name": "light_sensor", "code": changed, "overwrite": true }));
+    assert!(!is_error, "{report}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), changed);
+    let _ = std::fs::remove_dir_all(home);
 }

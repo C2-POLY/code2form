@@ -15,6 +15,19 @@
 //
 // Annotations are plain numbers. The board sits 0.04 mm up, on its pads.
 
+// @description Omnidirectional MEMS microphone with an I2S digital output, on
+// @description a round 14 mm board, for a microcontroller's I2S input.
+// @spec microphone: InvenSense (TDK) INMP441, MEMS, omnidirectional, bottom port
+// @spec output: I2S, 24-bit
+// @spec supply: 1.62 to 3.63 V (VDD)
+// @spec signal-to-noise ratio: 61 dBA
+// @spec sensitivity: -26 dBFS
+// @spec frequency response: 60 Hz to 15 kHz
+// @spec channel: L/R to GND for the left channel, to VDD for the right
+// @spec size: 14 mm across
+// @source https://invensense.tdk.com/products/digital/inmp441/ product page
+// @source https://invensense.tdk.com/wp-content/uploads/2015/02/INMP441.pdf datasheet
+
 use <lib/pin_header.c2f>
 
 /* [Build] */

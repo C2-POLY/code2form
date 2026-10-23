@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::Export;
 
 mod circuit;
+mod part;
 
 /// The protocol versions this server speaks, the latest first.
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -30,8 +31,11 @@ as JSON. `import()` reads STL, OBJ, 3MF, OFF, AMF, DXF and SVG, and STEP \
 when FreeCAD is installed. \
 `pause(z, message);` pauses a 3D print once it is done up to height `z`, \
 to drop magnets or nuts into closed cavities: the 3MF carries the pauses \
-for PrusaSlicer. For electronics, `library_parts` lists the parts and \
-`part_pins` their pins; a circuit (`.c2fc`, TOML) places parts and wires \
+for PrusaSlicer. For electronics, `library_parts` lists the parts (a `query` \
+such as `micro I2S` ranks them) and `part_pins` their pins; to add a \
+part from its supplier's product page and datasheet, write it with its \
+annotations and sheet, `check_part` it, then `save_part` it into the \
+user's library; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
 `circuit_bom` list its wires in order and its parts. To turn a mesh into \
@@ -220,6 +224,10 @@ fn tools() -> Value {
     if let Some(tools) = tools.as_array_mut() {
         tools.extend(circuit::tools());
     }
+    // Writing a part from its supplier's pages.
+    if let Some(tools) = tools.as_array_mut() {
+        tools.extend(part::tools());
+    }
     tools
 }
 
@@ -276,7 +284,7 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "image" => image_tool,
         "export" => export_tool,
         "section" => section_tool,
-        _ => circuit::tool(name).ok_or((-32602, format!("unknown tool: {name}")))?,
+        _ => circuit::tool(name).or_else(|| part::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
     if !args.is_object() {

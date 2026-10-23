@@ -98,6 +98,32 @@ up; facing up or down, `width` runs along the part's x and `height`
 along its y. The XIAO's USB-C is a sideways one:
 `// @port usb_c [8.9, 21, 2.83] +y [8.94, 3.26] "USB-C"`.
 
+### Add its sheet
+
+A part also carries its technical sheet, which the catalogue shows and
+searches (section 4) and an agent reads (section 7): what it is, its
+key figures and where they come from.
+
+```scad
+// @description Ambient light sensor on a 20 x 15 mm breakout board, read
+// @description over I2C, with two mount holes.
+// @spec supply: 1.8 to 3.6 V
+// @spec interface: I2C
+// @spec size: 20 x 15 x 1.6 mm
+// @source https://example.com/light-sensor product page
+// @source https://example.com/light-sensor.pdf datasheet
+```
+
+| Annotation | Form |
+|---|---|
+| `@description` | what the part is and does, a sentence or two; several lines make one description |
+| `@spec` | `key: value`, one figure per line: supply, current, interface, size... Each key once |
+| `@source` | a URL starting with `https://` or `http://`, then an optional label (plain or `"quoted"`) |
+
+Their text runs to the end of the line. Give only figures your sources
+state, and a `@source` for each page they come from. The parts of the
+library each have one, from their maker's product page and datasheet.
+
 ### Check what you wrote
 
 Put the annotations at the top of the file and save it as
@@ -135,7 +161,10 @@ error: unknown pin field `3.6`: expected a direction (up, down, +x, -y, [x, y, z
   |                                     ^^^
 ```
 
-`c2f check` reports the same errors with the syntax errors of the file.
+`c2f pins` prints the sheet too, `@description` joined into one line.
+`c2f check` reports the same errors with the syntax errors of the file:
+a `@spec` without its `:`, a `@source` that is not a web address, a key
+or a URL given twice.
 
 Positions and sizes are plain numbers. They do not follow the file's
 variables: if a parameter moves a pin, the annotation stays where the
@@ -150,11 +179,18 @@ modules, capacitors, a speaker, a DC motor and a touch plate (see
 
 ```console
 $ c2f pins library/electronics/dc_motor.c2f
-19: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
-20: @pin - [0, 5, 7.55] -x passive 6V
-21: @mount_hole [25.1, -6, 7.55] d=2 +x
-22: @mount_hole [25.1, 6, 7.55] d=2 +x
-23: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
+19: @description Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies): the motor of toys and small robots, run from a few volts.
+22: @spec motor: brushed DC, size 130
+23: @spec voltage: up to 6 V as annotated; Mabuchi's FA-130RA is rated 1.5 to 3 V, check your copy
+24: @spec size: 20.1 x 15.1 x 25.1 mm without its boss
+25: @spec shaft: 2 mm across
+26: @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
+27: @source https://www.mabuchi-motor.com Mabuchi Motor (the FA-130RA product page and drawing)
+33: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
+34: @pin - [0, 5, 7.55] -x passive 6V
+35: @mount_hole [25.1, -6, 7.55] d=2 +x
+36: @mount_hole [25.1, 6, 7.55] d=2 +x
+37: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
 ```
 
 ## 2. Write a circuit
@@ -403,8 +439,18 @@ of every part under `electronics/` in the library folders: the
 library's, the app's and your own (`~/Documents/Code2Form/libraries/electronics`),
 a part found in several listed once, from the first folder searched.
 Each row shows a picture of the part, its name, the first sentence of
-its opening comment and its number of pins; the search field filters on
-the name, that sentence and the pins' names.
+its `@description` (or of its opening comment) and its number of pins.
+
+The search field ranks the parts that answer every word typed, best
+first: a word in the name weighs more than in the description, then the
+specs, then the pins' names and labels. Case and accents do not matter,
+French and English both work, and it knows the domain's synonyms:
+`micro I2S` finds the INMP441, `driver moteur` the DRV8833,
+`haut-parleur` the speaker, `ampli` the MAX98357A.
+
+Hover a part's name to see its sheet; click it to keep the sheet open
+under its row: its description, its specs, its pins by type (power,
+ground, inputs and outputs...) and its sources as links.
 
 - **Drag a picture into the view**: the part goes where you drop it, on
   the ground (z = 0), to the nearest 0.1 mm. Dropping outside the view
@@ -618,12 +664,14 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 
 | Tool | Does |
 |---|---|
-| `library_parts` | lists the library's electronics parts, by the name a circuit gives as `part` |
+| `library_parts` | lists the library's electronics parts, by the name a circuit gives as `part`, with their description, specs and sources; `query` ranks them as the catalogue's search does |
 | `part_pins` | a part's pins, mount holes, ports and badly written annotations, from `code` or `path` |
 | `check_circuit` | the wiring checks, with `ok` false on an error |
 | `circuit_image` | a PNG of the circuit with its wires; `net` (as `xiao.GND`) highlights one net |
 | `circuit_wires` | the wiring list |
 | `circuit_bom` | the bill of materials |
+| `check_part` | a part's annotations checked against its rendered shape (see below) |
+| `save_part` | writes a part into your parts folder, then checks it (see below) |
 
 The circuit tools take the circuit as `code` (its parts found from
 `working_dir`, then the library) or as a file `path`. A typical request:
@@ -632,3 +680,33 @@ ESP32-S3 that drives a DC motor through a DRV8833: look up the parts'
 pins, check the circuit until it has no errors, and show me the
 wiring." Then open `robot.c2fc` in the app and wire it in Assembly
 mode.
+
+### Create a part from its product page
+
+When the library lacks a part, an agent that can read the web writes it
+from the supplier's product page and datasheet: the board drawn as a
+module of the file's name, its pins, mount holes and ports, and its
+sheet (section 1). Code2Form does not fetch the pages itself; its tools
+check what the agent wrote and file it.
+
+- `check_part` (`code`, or a `path`) reads the annotations, renders the
+  part with its default parameters and compares the two. Errors, with
+  their line, make `ok` false: a badly written annotation, a part that
+  does not render, a pin or a mount hole outside the part's bounding box
+  (by more than 0.5 mm), two pins at the same place, a port whose
+  direction points into the part rather than out of it, a power pin
+  without its voltage. A missing `@description` or `@source` is a
+  warning. The report also gives the bounding box and how many pins,
+  holes, ports, specs and sources the part has.
+- `save_part` (`name`, `code`, `overwrite`) writes `NAME.c2f` into your
+  parts folder, `~/Documents/Code2Form/libraries/electronics`, the one
+  the catalogue's **New part...** uses: the catalogue lists it, and a
+  circuit names it `electronics/NAME.c2f`. It refuses a file that does
+  not parse, whose annotations have errors, or without a `@description`
+  and at least one `@source`, and it does not replace a part unless
+  `overwrite` is true. It returns the path and the `check_part` report.
+
+A typical request: "Find the Adafruit BME280 breakout's product page and
+datasheet, write it as a Code2Form part with its pins, mount holes and
+sheet, check it until it has no errors, and save it as
+`bme280_breakout`." Then **⟳** in the catalogue lists it.

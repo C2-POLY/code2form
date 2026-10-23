@@ -37,6 +37,20 @@
 //! ```text
 //! // @circuit grogu.c2fc
 //! ```
+//!
+//! A part also carries its technical sheet, which the catalogue shows and
+//! searches: what it does, its key figures as `key: value`, and the pages
+//! it comes from, each a URL and an optional label.
+//!
+//! ```text
+//! // @description I2S MEMS microphone on a round 14 mm board.
+//! // @spec supply: 1.62 to 3.63 V
+//! // @source https://invensense.tdk.com/products/digital/inmp441/ product page
+//! ```
+//!
+//! Their text runs to the end of the line. Several `@description` lines
+//! make one description, so that a long one wraps as the file's other
+//! comments do.
 
 use std::fmt;
 
@@ -46,19 +60,55 @@ use crate::dump::{number, string};
 use crate::span::Span;
 
 /// What a part declares for wiring and mounting, in source order within
-/// each kind, and the circuit an enclosure is made for.
+/// each kind, its technical sheet, and the circuit an enclosure is made
+/// for.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Annotations {
     pub pins: Vec<Pin>,
     pub mount_holes: Vec<MountHole>,
     pub ports: Vec<Port>,
     pub circuit: Option<CircuitLink>,
+    pub description: Option<Description>,
+    pub specs: Vec<Spec>,
+    pub sources: Vec<Source>,
 }
 
 impl Annotations {
     pub fn is_empty(&self) -> bool {
-        self.pins.is_empty() && self.mount_holes.is_empty() && self.ports.is_empty() && self.circuit.is_none()
+        self.pins.is_empty()
+            && self.mount_holes.is_empty()
+            && self.ports.is_empty()
+            && self.circuit.is_none()
+            && self.description.is_none()
+            && self.specs.is_empty()
+            && self.sources.is_empty()
     }
+}
+
+/// `// @description ...`: what the part is and does, in a sentence or two.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Description {
+    /// Its lines joined by spaces.
+    pub text: String,
+    /// The first line's annotation.
+    pub span: Span,
+}
+
+/// `// @spec supply: 2.7 to 10.8 V`: one figure of the part's sheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Spec {
+    pub key: String,
+    pub value: String,
+    pub span: Span,
+}
+
+/// `// @source https://... label`: a page the part's sheet comes from, its
+/// product page or its datasheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Source {
+    pub url: String,
+    pub label: Option<String>,
+    pub span: Span,
 }
 
 /// `// @circuit grogu.c2fc`: the circuit file whose parts an enclosure
@@ -194,6 +244,10 @@ pub fn read(src: &str) -> (Annotations, Vec<Diagnostic>) {
             "mount_hole" => lex(fields, fields_start).and_then(|items| reader.mount_hole(items, span)),
             "port" => lex(fields, fields_start).and_then(|items| reader.port(items, span)),
             "circuit" => lex(fields, fields_start).and_then(|items| reader.circuit(items, span)),
+            // The sheet's text is free: it is not split into fields.
+            "description" => reader.description(fields, span),
+            "spec" => reader.spec(fields, span),
+            "source" => reader.source(fields, fields_start, span),
             // Other `@words` belong to someone else.
             _ => continue,
         };
@@ -347,6 +401,62 @@ impl What {
 }
 
 impl Reader {
+    fn description(&mut self, text: &str, span: Span) -> Result<(), Diagnostic> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(Diagnostic::new("expected the part's description, as in `@description A motor driver.`", span));
+        }
+        match &mut self.annotations.description {
+            Some(description) => {
+                description.text.push(' ');
+                description.text.push_str(text);
+            }
+            None => self.annotations.description = Some(Description { text: text.to_string(), span }),
+        }
+        Ok(())
+    }
+
+    fn spec(&mut self, text: &str, span: Span) -> Result<(), Diagnostic> {
+        let expected = "expected `key: value`, as in `@spec supply: 2.7 to 10.8 V`";
+        let (key, value) = text.split_once(':').ok_or_else(|| Diagnostic::new(expected, span))?;
+        let (key, value) = (key.trim(), value.trim());
+        if key.is_empty() || value.is_empty() {
+            return Err(Diagnostic::new(expected, span));
+        }
+        if self.annotations.specs.iter().any(|spec| spec.key.to_lowercase() == key.to_lowercase()) {
+            return Err(Diagnostic::new(format!("the part already has a spec `{key}`"), span));
+        }
+        self.annotations.specs.push(Spec { key: key.to_string(), value: value.to_string(), span });
+        Ok(())
+    }
+
+    fn source(&mut self, text: &str, base: usize, span: Span) -> Result<(), Diagnostic> {
+        let start = text.len() - text.trim_start().len();
+        let rest = &text[start..];
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let url = &rest[..end];
+        let url_span = Span::new(base + start, base + start + end);
+        if url.is_empty() {
+            return Err(Diagnostic::new(
+                "expected the source's URL, as in `@source https://www.ti.com/product/DRV8833`",
+                span,
+            ));
+        }
+        let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"));
+        if host.is_none_or(|host| host.is_empty() || host.starts_with('/')) {
+            return Err(Diagnostic::new("a source is a web address starting with https:// or http://", url_span));
+        }
+        if self.annotations.sources.iter().any(|source| source.url == url) {
+            return Err(Diagnostic::new("the part already gives this source", url_span));
+        }
+        // A label may be quoted, as the other annotations write theirs.
+        let label = rest[end..].trim();
+        let label = label.strip_prefix('"').and_then(|l| l.strip_suffix('"')).unwrap_or(label);
+        let label = (!label.is_empty()).then(|| label.to_string());
+        self.annotations.sources.push(Source { url: url.to_string(), label, span });
+        Ok(())
+    }
+
     fn circuit(&mut self, items: Vec<Item>, span: Span) -> Result<(), Diagnostic> {
         if self.annotations.circuit.is_some() {
             return Err(Diagnostic::new("the file already names its circuit", span));
@@ -582,6 +692,28 @@ impl fmt::Display for CircuitLink {
     }
 }
 
+impl fmt::Display for Description {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "@description {}", self.text)
+    }
+}
+
+impl fmt::Display for Spec {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "@spec {}: {}", self.key, self.value)
+    }
+}
+
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "@source {}", self.url)?;
+        if let Some(label) = &self.label {
+            write!(f, " {label}")?;
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for MountHole {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "@mount_hole {} d={} {}", vector(&self.position), number(self.diameter), direction(self.direction))
@@ -615,6 +747,9 @@ mod tests {
         printed.extend(annotations.mount_holes.iter().map(|a| (a.span, a.to_string())));
         printed.extend(annotations.ports.iter().map(|a| (a.span, a.to_string())));
         printed.extend(annotations.circuit.iter().map(|a| (a.span, a.to_string())));
+        printed.extend(annotations.description.iter().map(|a| (a.span, a.to_string())));
+        printed.extend(annotations.specs.iter().map(|a| (a.span, a.to_string())));
+        printed.extend(annotations.sources.iter().map(|a| (a.span, a.to_string())));
         printed.sort_by_key(|(span, _)| span.start);
         let lines = LineIndex::new(src);
         let errors = errors
@@ -747,6 +882,72 @@ cube(10);
                 "5: the file already names its circuit",
             ]
         );
+    }
+
+    #[test]
+    fn a_part_carries_its_sheet() {
+        let src = "\
+// @description I2S MEMS microphone
+//   @description on a round board.
+// @spec supply: 1.62 to 3.63 V
+// @spec interface : I2S, 24-bit
+// @source https://invensense.tdk.com/products/digital/inmp441/ product page
+// @source http://example.com/a.pdf \"datasheet, rev. 1.1\"
+// @source https://example.com/b
+cube(1);
+";
+        let (printed, errors) = read_text(src);
+        assert_eq!(errors, Vec::<String>::new());
+        assert_eq!(
+            printed,
+            [
+                "@description I2S MEMS microphone on a round board.",
+                "@spec supply: 1.62 to 3.63 V",
+                "@spec interface: I2S, 24-bit",
+                "@source https://invensense.tdk.com/products/digital/inmp441/ product page",
+                "@source http://example.com/a.pdf datasheet, rev. 1.1",
+                "@source https://example.com/b",
+            ]
+        );
+        let (annotations, _) = read(src);
+        assert_eq!(annotations.sources[1].label.as_deref(), Some("datasheet, rev. 1.1"));
+        assert_eq!(annotations.sources[2].label, None);
+        assert!(!annotations.is_empty());
+    }
+
+    #[test]
+    fn a_badly_written_sheet_gives_errors_with_their_line() {
+        let src = "\
+// @description
+// @spec supply 5 V
+// @spec : 5 V
+// @spec supply:
+// @spec Supply: 5 V
+// @spec supply: 3.3 V
+// @source
+// @source www.ti.com
+// @source https://
+// @source https://www.ti.com/product/DRV8833
+// @source https://www.ti.com/product/DRV8833 again
+";
+        let (printed, errors) = read_text(src);
+        assert_eq!(printed, ["@spec Supply: 5 V", "@source https://www.ti.com/product/DRV8833"]);
+        assert_eq!(
+            errors,
+            [
+                "1: expected the part's description, as in `@description A motor driver.`",
+                "2: expected `key: value`, as in `@spec supply: 2.7 to 10.8 V`",
+                "3: expected `key: value`, as in `@spec supply: 2.7 to 10.8 V`",
+                "4: expected `key: value`, as in `@spec supply: 2.7 to 10.8 V`",
+                "6: the part already has a spec `supply`",
+                "7: expected the source's URL, as in `@source https://www.ti.com/product/DRV8833`",
+                "8: a source is a web address starting with https:// or http://",
+                "9: a source is a web address starting with https:// or http://",
+                "11: the part already gives this source",
+            ]
+        );
+        let (_, errors) = read(src);
+        assert_eq!(&src[errors[6].span.range()], "www.ti.com");
     }
 
     #[test]
