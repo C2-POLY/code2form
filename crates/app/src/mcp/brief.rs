@@ -1,8 +1,9 @@
 //! The MCP tools of a design's brief (see `c2f_circuit::brief`): the plan
-//! ends by writing it with `save_brief`, and the next steps, or the next
-//! session, start by reading it with `read_brief`.
+//! ends by writing it with `save_brief`, the next steps, or the next
+//! session, start by reading it with `read_brief`, and `check_brief`
+//! measures the design and its circuit against its requirements.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use c2f_circuit::brief::{Brief, Requirement, Rule, read_brief};
 use serde_json::{Value, json};
@@ -32,6 +33,24 @@ pub fn tools() -> Vec<Value> {
             }), &["path", "text"]),
         }),
         json!({
+            "name": "check_brief",
+            "title": "Check a design against its brief",
+            "description": "Measures a design (`design`, a .c2f file) and its circuit (`circuit`, a .c2fc file; by default the \
+                            one the design names with `// @circuit`) against the requirements of their brief (`brief`). \
+                            Each requirement `holds`, `fails` or is `unmeasured`, with the value measured and why: the \
+                            pieces the design draws (`part \"Name\"`), the components the circuit uses (`component`), \
+                            each piece's size against the printer (`size <= X x Y x Z mm`, the piece turned to fit), \
+                            and the mass, tipping and margins measured by `mass_properties` and `loads` from the brief's \
+                            ```json mass``` and ```json loads``` blocks. `ok` is false when one fails. Run it before \
+                            showing a design or a build to the user.",
+            "inputSchema": schema_of(json!({
+                "brief": { "type": "string", "description": "The brief's .md file." },
+                "design": { "type": "string", "description": "The design's .c2f file." },
+                "circuit": { "type": "string", "description": "Its circuit's .c2fc file, if not the one the design names." },
+                "parameters": { "type": "object", "description": "Customizer values for the design, as the other tools take them." },
+            }), &["brief"]),
+        }),
+        json!({
             "name": "read_brief",
             "title": "Read a design's brief",
             "description": "Reads a brief written by `save_brief`: its text, its requirements (each with its line, what it \
@@ -49,6 +68,7 @@ pub fn tool(name: &str) -> Option<Tool> {
     Some(match name {
         "save_brief" => save_brief,
         "read_brief" => read_brief_tool,
+        "check_brief" => check_brief,
         _ => return None,
     })
 }
@@ -122,4 +142,139 @@ pub fn requirements(brief: &Brief) -> Vec<Value> {
             json!({ "line": r.line, "text": r.text, "kind": kind, "op": op, "value": value, "checkable": r.checkable() })
         })
         .collect()
+}
+
+/// How a requirement stands against the design.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Status {
+    Holds,
+    Fails,
+    Unmeasured,
+}
+
+impl Status {
+    fn name(self) -> &'static str {
+        match self {
+            Status::Holds => "holds",
+            Status::Fails => "fails",
+            Status::Unmeasured => "unmeasured",
+        }
+    }
+}
+
+/// What the design and its circuit give to measure the requirements with.
+#[derive(Default)]
+struct Measured {
+    /// Each piece's name and size, in millimeters.
+    pieces: Option<Vec<(String, [f64; 3])>>,
+    /// The part files the circuit names, as it names them.
+    components: Option<Vec<String>>,
+}
+
+fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
+    let string = |key: &str| args.get(key).and_then(Value::as_str);
+    let brief_path = PathBuf::from(string("brief").ok_or("`brief` names the brief's .md file")?);
+    let brief_text = std::fs::read_to_string(&brief_path).map_err(|err| format!("cannot read {}: {err}", brief_path.display()))?;
+    let brief = read_brief(&brief_text);
+    let mut measured = Measured::default();
+    let mut notes: Vec<String> = Vec::new();
+    let mut circuit_path = string("circuit").map(PathBuf::from);
+    if let Some(design) = string("design") {
+        let mut design_args = json!({ "path": design });
+        if let Some(parameters) = args.get("parameters") {
+            design_args["parameters"] = parameters.clone();
+        }
+        let (program, src) = super::load(&design_args)?;
+        let evaluated = c2f_eval::evaluate(&program);
+        if let Some(error) = evaluated.error {
+            return Err(format!("the design does not render: {error}"));
+        }
+        let base_dir = program.files[0].path.parent().unwrap_or(Path::new("")).to_path_buf();
+        let options = c2f_geom::PartsOptions { name: "design".into(), ..Default::default() };
+        let (parts, _) = c2f_geom::parts_json(&evaluated.nodes, &base_dir, &options)?;
+        let parts: Value = serde_json::from_str(&parts).map_err(|err| err.to_string())?;
+        let sizes = parts["parts"].as_array().into_iter().flatten().filter_map(|part| {
+            let (lo, hi) = (part["bounds"]["min"].as_array()?, part["bounds"]["max"].as_array()?);
+            let size: [f64; 3] = std::array::from_fn(|i| hi[i].as_f64().unwrap_or(0.0) - lo[i].as_f64().unwrap_or(0.0));
+            Some((part["name"].as_str()?.to_string(), size))
+        });
+        // The root holds what is outside any part(); a design of pieces
+        // leaves it empty, and its name is the design's.
+        let pieces: Vec<(String, [f64; 3])> = sizes.filter(|(_, size)| size.iter().any(|s| *s > 0.0)).collect();
+        measured.pieces = Some(pieces);
+        if circuit_path.is_none() {
+            let (annotations, _) = c2f_lang::annotations::read(&src);
+            circuit_path = annotations.circuit.map(|link| base_dir.join(link.path));
+        }
+    } else {
+        notes.push("no `design` given: its pieces and sizes are not measured".into());
+    }
+    if let Some(path) = &circuit_path {
+        let src = std::fs::read_to_string(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+        let circuit = c2f_circuit::parse(&src, path, &c2f_eval::default_library_paths())
+            .map_err(|_| format!("{} does not read: check it with `check_circuit`", path.display()))?;
+        measured.components = Some(circuit.parts.iter().map(|p| p.part.clone()).collect());
+    }
+    let results: Vec<Value> = brief.requirements.iter().map(|r| measure(r, &measured)).collect();
+    let ok = results.iter().all(|r| r["status"] != Status::Fails.name());
+    let count = |status: Status| results.iter().filter(|r| r["status"] == status.name()).count();
+    let report = json!({
+        "ok": ok,
+        "holds": count(Status::Holds),
+        "fails": count(Status::Fails),
+        "unmeasured": count(Status::Unmeasured),
+        "requirements": results,
+        "notes": notes,
+    });
+    if ok { Ok(vec![text(pretty(&report))]) } else { Err(pretty(&report)) }
+}
+
+/// A requirement measured: its line and text, `holds`, `fails` or
+/// `unmeasured`, the value measured and why.
+fn measure(requirement: &Requirement, measured: &Measured) -> Value {
+    let (status, value, why): (Status, Value, String) = match &requirement.rule {
+        Rule::Part(name) => match &measured.pieces {
+            None => (Status::Unmeasured, Value::Null, "give the `design` to find its pieces".into()),
+            Some(pieces) => {
+                let names: Vec<&str> = pieces.iter().map(|(n, _)| n.as_str()).collect();
+                if names.contains(&name.as_str()) {
+                    (Status::Holds, json!(name), format!("the design draws part(\"{name}\")"))
+                } else {
+                    (Status::Fails, json!(names), format!("the design draws no part(\"{name}\"): its pieces are {}", names.join(", ")))
+                }
+            }
+        },
+        Rule::Component(file) => match &measured.components {
+            None => (Status::Unmeasured, Value::Null, "the design names no circuit, and none is given".into()),
+            Some(files) if files.contains(file) => (Status::Holds, json!(file), format!("the circuit uses {file}")),
+            Some(files) => (Status::Fails, json!(files), format!("the circuit does not use {file}")),
+        },
+        Rule::Size(bed) => match &measured.pieces {
+            None => (Status::Unmeasured, Value::Null, "give the `design` to measure its pieces".into()),
+            Some(pieces) => {
+                // A piece fits when, turned, its sides fit the bed's.
+                let mut room = *bed;
+                room.sort_by(f64::total_cmp);
+                let too_big: Vec<String> = pieces
+                    .iter()
+                    .filter(|(_, size)| {
+                        let mut sides = *size;
+                        sides.sort_by(f64::total_cmp);
+                        (0..3).any(|i| sides[i] > room[i] + 1e-6)
+                    })
+                    .map(|(name, size)| format!("{name} ({:.1} x {:.1} x {:.1} mm)", size[0], size[1], size[2]))
+                    .collect();
+                let sizes: Vec<Value> = pieces.iter().map(|(name, size)| json!({ "piece": name, "size": size })).collect();
+                if too_big.is_empty() {
+                    (Status::Holds, json!(sizes), "every piece fits, turned if need be".into())
+                } else {
+                    (Status::Fails, json!(sizes), format!("too big for the printer: {}", too_big.join(", ")))
+                }
+            }
+        },
+        Rule::Mass(..) | Rule::Tipping(..) => (Status::Unmeasured, Value::Null, "measured by `mass_properties`".into()),
+        Rule::TorqueMargin(..) | Rule::RadialLoadMargin(..) => (Status::Unmeasured, Value::Null, "measured by `loads`".into()),
+        Rule::Other => (Status::Unmeasured, Value::Null, "no tool measures it: the user checks it".into()),
+    };
+    json!({ "line": requirement.line, "text": requirement.text, "status": status.name(), "measured": value, "why": why })
 }

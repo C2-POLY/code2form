@@ -92,12 +92,12 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part", "save_brief", "read_brief"]
+        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part", "save_brief", "check_brief", "read_brief"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
         let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
-        assert_eq!(takes_code, !["library_parts", "electrify", "save_brief", "read_brief"].contains(&tool["name"].as_str().unwrap()), "{tool}");
+        assert_eq!(takes_code, !["library_parts", "electrify", "save_brief", "check_brief", "read_brief"].contains(&tool["name"].as_str().unwrap()), "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);
@@ -793,5 +793,28 @@ fn a_brief_is_saved_with_requirements_a_tool_measures_and_read_back() {
     assert_eq!(content[0]["text"], brief);
     let report: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
     assert_eq!((&report["title"], &report["loads"]["ratio"], &report["requirements"][1]["value"]), (&json!("Winder"), &json!(1), &json!(2.0)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_brief_measures_the_pieces_components_and_size() {
+    let mut server = Server::start();
+    let dir = temp_dir("check-brief");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nightlight");
+    let brief = dir.join("brief.md");
+    let text = "# Night light\n\n## Requirements\n\n- part \"Base\"\n- part \"Dome\"\n- component \"electronics/neopixel_ring_12.c2f\"\n- size <= 220 x 220 x 250 mm\n- glows softly\n";
+    std::fs::write(&brief, text).unwrap();
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": example.join("nightlight.c2f") }));
+    assert!(!is_error, "{report}");
+    let statuses: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["status"].as_str().unwrap()).collect();
+    assert_eq!(statuses, ["holds", "holds", "holds", "holds", "unmeasured"], "{report}");
+    // A piece the design lacks, a component the circuit lacks, a printer too small.
+    let text = "# Night light\n\n## Requirements\n\n- part \"Lid\"\n- component \"electronics/drv8833.c2f\"\n- size <= 60 x 60 x 60 mm\n";
+    std::fs::write(&brief, text).unwrap();
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": example.join("nightlight.c2f") }));
+    assert!(is_error && report["fails"] == 3, "{report}");
+    assert!(report["requirements"][2]["why"].as_str().unwrap().contains("Base"), "{report}");
     let _ = std::fs::remove_dir_all(&dir);
 }
