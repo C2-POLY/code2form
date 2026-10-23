@@ -1,0 +1,6 @@
+{
+  "axis": { "at": [0, 0, 0], "direction": [1, 0, 0] },
+  "loads": [{ "name": "watch", "mass_g": 150, "at": [35, 20, 0] }],
+  "supports": [{ "name": "motor", "at_mm": 0, "kind": "motor", "part": "gear_motor.c2f" }],
+  "shaft": { "d_mm": 5, "material": "steel" }
+}

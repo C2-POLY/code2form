@@ -4,12 +4,14 @@ use std::process::ExitCode;
 
 mod circuit;
 mod mass;
+mod loads;
 mod mcp;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
        c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>
        c2f mass [--material <name>] [--infill <%>] [--wall <mm>] [-D name=value]... <file>
+       c2f loads [--json] <scenario.json>
        c2f mcp
 
 commands:
@@ -49,6 +51,11 @@ commands:
           PETG, ABS, ASA, TPU, nylon, or a density in g/cm3, default
           PLA), --infill (percent, default 20), --wall (mm, default
           0.8); a circuit's parts weigh what their `// @spec mass` says
+  loads   the static loads on a shaft a motor turns, from a JSON
+          scenario (- reads stdin) as the MCP `loads` tool takes it: the
+          torque needed, each support's reaction, the shaft's deflection,
+          the margins against the motor's and bearings' figures and a
+          reduction when the torque falls short (--json: as JSON)
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout
 
 circuit commands, on a `.c2fc` circuit:
@@ -256,6 +263,9 @@ fn run() -> ExitCode {
     }
     if args.first().is_some_and(|arg| arg == "mass") {
         return mass::run(&args[1..]);
+    }
+    if args.first().is_some_and(|arg| arg == "loads") {
+        return loads::run(&args[1..]);
     }
     let Some(options) = Options::parse(&args) else {
         eprintln!("{USAGE}");

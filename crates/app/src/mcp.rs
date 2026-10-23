@@ -14,6 +14,7 @@ use crate::Export;
 mod brief;
 mod circuit;
 mod mass;
+mod loads;
 mod part;
 mod prompts;
 
@@ -45,7 +46,9 @@ their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_bom` list its wires in order and its parts, `fit` says how its \
 parts fit in their enclosure. `mass_properties` weighs a design or a \
 circuit as printed, with its center of gravity and the angle it tips at. \
-To go from an \
+`loads` gives what turns a shaft: \
+the torque a motor must give a shaft, what its supports take and the \
+margins, to decide on a bearing, a reduction or another motor. To go from an \
 idea to a printed object with its electronics, follow the prompts \
 `plan_object` (questions, a mechanical review and a brief the user \
 approves, written with `save_brief` and read with `read_brief`), \
@@ -270,6 +273,9 @@ fn tools() -> Value {
     if let Some(tools) = tools.as_array_mut() {
         tools.extend(mass::tools());
     }
+    if let Some(tools) = tools.as_array_mut() {
+        tools.extend(loads::tools());
+    }
     tools
 }
 
@@ -327,7 +333,7 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "export" => export_tool,
         "section" => section_tool,
         "electrify" => electrify_tool,
-        _ => circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
+        _ => circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
     if !args.is_object() {
