@@ -4,6 +4,10 @@
 //! frame: a background gradient, the grid, the opaque model, the axes and
 //! the outlines of the print's pauses, a circuit's wires and pin dots,
 //! then the translucent parts with depth writes off, the pause planes last.
+//!
+//! A section cuts the model, or a circuit's enclosure, along a plane in the
+//! fragment shader: moving it, or the enclosure's opacity, only changes
+//! uniforms, never the meshes uploaded.
 
 use eframe::egui_glow::ShaderVersion;
 use eframe::glow::{self, HasContext};
@@ -31,6 +35,44 @@ const PAUSE_OUTLINE: [f32; 4] = [0.45, 0.90, 1.0, 1.0];
 const NO_CUT: f32 = 1e30;
 /// Keeps what lies exactly at the cut, such as a pause plane at its height.
 const CUT_TOLERANCE: f32 = 1e-4;
+/// No section: no point lies beyond this plane.
+const NO_SECTION: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+/// A cut through the model across an axis, to look inside: what lies
+/// beyond `at` along `axis` (0 for x, 1 for y, 2 for z) is not drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Section {
+    pub axis: usize,
+    pub at: f32,
+}
+
+impl Section {
+    pub const AXES: [&'static str; 3] = ["X", "Y", "Z"];
+
+    /// The plane as the shader takes it, `[n, d]`: a point `p` is cut
+    /// away when `dot(n, p) > d`.
+    pub fn plane(self) -> [f32; 4] {
+        let mut plane = [0.0; 4];
+        plane[self.axis.min(2)] = 1.0;
+        plane[3] = self.at + CUT_TOLERANCE;
+        plane
+    }
+
+    /// Whether `p` is drawn, as the shader decides it: checks the plane.
+    #[cfg(test)]
+    fn keeps(self, p: [f32; 3]) -> bool {
+        let [x, y, z, d] = self.plane();
+        x * p[0] + y * p[1] + z * p[2] <= d
+    }
+
+    /// A section as a screenshot names it: `z:20`, an axis and where.
+    pub fn parse(text: &str) -> Option<Self> {
+        let (axis, at) = text.split_once(':')?;
+        let axis = Self::AXES.iter().position(|a| a.eq_ignore_ascii_case(axis.trim()))?;
+        let at = at.trim().parse::<f32>().ok().filter(|v| v.is_finite())?;
+        Some(Section { axis, at })
+    }
+}
 
 /// What to draw this frame.
 #[derive(Clone, Copy)]
@@ -42,6 +84,11 @@ pub struct Frame {
     pub show_pauses: bool,
     /// The layer view: what lies above this height is not drawn.
     pub cut: Option<f32>,
+    /// What a section cuts away: the model, or a circuit's enclosure but
+    /// not its parts or wires.
+    pub section: Option<Section>,
+    /// How opaque a circuit's enclosure is, from 0 to 1.
+    pub enclosure_opacity: f32,
     /// The color of the parts without `color()`, in place of
     /// `c2f_geom::DEFAULT_COLOR`.
     pub model_color: [f32; 3],
@@ -100,6 +147,8 @@ struct MeshProgram {
     pass: Option<glow::UniformLocation>,
     cut: Option<glow::UniformLocation>,
     cut_face: Option<glow::UniformLocation>,
+    section: Option<glow::UniformLocation>,
+    alpha: Option<glow::UniformLocation>,
     default_color: Option<glow::UniformLocation>,
     model_color: Option<glow::UniformLocation>,
 }
@@ -130,6 +179,21 @@ enum Pass {
     All = 2,
 }
 
+/// How a draw cuts and shades what it draws.
+#[derive(Clone, Copy)]
+struct Style {
+    section: Option<Section>,
+    /// The inside of a cut solid shows as the cut face.
+    cap: bool,
+    /// Scales the vertices' alpha.
+    alpha: f32,
+}
+
+impl Style {
+    const PLAIN: Style = Style { section: None, cap: false, alpha: 1.0 };
+    const SOLID: Style = Style { section: None, cap: true, alpha: 1.0 };
+}
+
 pub struct Renderer {
     mesh: MeshProgram,
     line: LineProgram,
@@ -158,6 +222,10 @@ pub struct Renderer {
     /// A design's solid to draw instead of the scene's: its parts apart,
     /// or back together, in the exploded view.
     pending_solid: Option<RenderMesh>,
+    /// The scene is a circuit's, and where its enclosure is in the solid:
+    /// a section cuts only that.
+    circuit: bool,
+    enclosure: std::ops::Range<usize>,
 }
 
 impl Renderer {
@@ -199,6 +267,8 @@ impl Renderer {
                     pass: gl.get_uniform_location(mesh, "u_pass"),
                     cut: gl.get_uniform_location(mesh, "u_cut"),
                     cut_face: gl.get_uniform_location(mesh, "u_cut_face"),
+                    section: gl.get_uniform_location(mesh, "u_section"),
+                    alpha: gl.get_uniform_location(mesh, "u_alpha"),
                     default_color: gl.get_uniform_location(mesh, "u_default_color"),
                     model_color: gl.get_uniform_location(mesh, "u_model_color"),
                     program: mesh,
@@ -236,7 +306,9 @@ impl Renderer {
                 solid_mesh: RenderMesh::default(),
                 pending_colors: None,
                 pending_positions: None,
-            pending_solid: None,
+                pending_solid: None,
+                circuit: false,
+                enclosure: 0..0,
             })
         }
     }
@@ -300,6 +372,8 @@ impl Renderer {
                     self.pause_planes = upload_mesh(gl, &pause_planes(&heights, footprint));
                     self.pause_outlines = upload_lines(gl, &pause_outlines(&heights, footprint));
                 }
+                self.circuit = !scene.parts.is_empty();
+                self.enclosure = scene.enclosure.clone();
                 // Only a circuit recolors its solid.
                 self.solid_mesh = if scene.parts.is_empty() { RenderMesh::default() } else { scene.solid };
             }
@@ -392,10 +466,10 @@ impl Renderer {
             gl.depth_mask(true);
             gl.disable(glow::BLEND);
             if let Some(solid) = &self.solid {
-                self.draw_mesh(gl, frame, solid, Pass::Opaque, true);
+                self.draw_solid(gl, frame, solid, Pass::Opaque);
             }
             for overlay in [&self.wires, &self.pins].into_iter().flatten() {
-                self.draw_mesh(gl, frame, overlay, Pass::Opaque, false);
+                self.draw_mesh(gl, frame, overlay, Pass::Opaque, Style::PLAIN);
             }
             gl.enable(glow::BLEND);
 
@@ -419,22 +493,24 @@ impl Renderer {
             for culled in [glow::FRONT, glow::BACK] {
                 gl.cull_face(culled);
                 if let Some(solid) = &self.solid {
-                    self.draw_mesh(gl, frame, solid, Pass::Translucent, true);
+                    self.draw_solid(gl, frame, solid, Pass::Translucent);
                 }
                 // `#` and `%` parts often share faces with the model (the
                 // walls of a hole they cut): pull them forward to win.
                 gl.enable(glow::POLYGON_OFFSET_FILL);
                 gl.polygon_offset(-1.0, -4.0);
+                // A design's are cut with it; a circuit's belong to its parts.
+                let style = Style { section: frame.section.filter(|_| !self.circuit), ..Style::PLAIN };
                 if let Some(backgrounds) = &self.backgrounds {
-                    self.draw_mesh(gl, frame, backgrounds, Pass::All, false);
+                    self.draw_mesh(gl, frame, backgrounds, Pass::All, style);
                 }
                 if let Some(highlights) = &self.highlights {
-                    self.draw_mesh(gl, frame, highlights, Pass::All, false);
+                    self.draw_mesh(gl, frame, highlights, Pass::All, style);
                 }
                 gl.disable(glow::POLYGON_OFFSET_FILL);
                 if frame.show_pauses {
                     if let Some(planes) = &self.pause_planes {
-                        self.draw_mesh(gl, frame, planes, Pass::All, false);
+                        self.draw_mesh(gl, frame, planes, Pass::All, Style::PLAIN);
                     }
                 }
             }
@@ -449,20 +525,63 @@ impl Renderer {
         }
     }
 
-    /// Draws a mesh, cut at the layer view's height; `solid` colors the
-    /// inside of a cut model as the cut face.
-    unsafe fn draw_mesh(&self, gl: &glow::Context, frame: &Frame, buffer: &GpuBuffer, pass: Pass, solid: bool) {
+    /// Draws the solid: a design's cut by the section; a circuit's parts
+    /// whole, and its enclosure cut and as opaque as the frame says.
+    unsafe fn draw_solid(&self, gl: &glow::Context, frame: &Frame, solid: &GpuBuffer, pass: Pass) {
+        let all = 0..solid.count as usize;
+        unsafe {
+            if !self.circuit {
+                let style = Style { section: frame.section, ..Style::SOLID };
+                return self.draw_range(gl, frame, solid, all, pass, style);
+            }
+            let enclosure = self.enclosure.start.min(all.end)..self.enclosure.end.min(all.end);
+            self.draw_range(gl, frame, solid, 0..enclosure.start, pass, Style::SOLID);
+            if frame.enclosure_opacity > 0.0 {
+                // The scene's enclosure is ENCLOSURE_ALPHA see-through.
+                let alpha = frame.enclosure_opacity / crate::circuit::ENCLOSURE_ALPHA;
+                // Only an opaque enclosure shows its cut face: through a
+                // see-through one, its inner walls would all turn red.
+                let cap = frame.enclosure_opacity >= 0.999;
+                let style = Style { section: frame.section, cap, alpha };
+                self.draw_range(gl, frame, solid, enclosure.clone(), pass, style);
+            }
+            self.draw_range(gl, frame, solid, enclosure.end..all.end, pass, Style::SOLID);
+        }
+    }
+
+    unsafe fn draw_mesh(&self, gl: &glow::Context, frame: &Frame, buffer: &GpuBuffer, pass: Pass, style: Style) {
+        unsafe { self.draw_range(gl, frame, buffer, 0..buffer.count as usize, pass, style) }
+    }
+
+    /// Draws vertices `range` of a mesh, cut at the layer view's height
+    /// and by the style's section; the style's `cap` colors the inside of
+    /// a cut model as the cut face.
+    unsafe fn draw_range(
+        &self,
+        gl: &glow::Context,
+        frame: &Frame,
+        buffer: &GpuBuffer,
+        range: std::ops::Range<usize>,
+        pass: Pass,
+        style: Style,
+    ) {
+        if range.is_empty() {
+            return;
+        }
         unsafe {
             gl.use_program(Some(self.mesh.program));
             gl.uniform_1_f32(self.mesh.cut.as_ref(), frame.cut.map_or(NO_CUT, |z| z + CUT_TOLERANCE));
-            gl.uniform_1_i32(self.mesh.cut_face.as_ref(), i32::from(solid && frame.cut.is_some()));
+            let cut = frame.cut.is_some() || style.section.is_some();
+            gl.uniform_1_i32(self.mesh.cut_face.as_ref(), i32::from(style.cap && cut));
+            gl.uniform_4_f32_slice(self.mesh.section.as_ref(), &style.section.map_or(NO_SECTION, Section::plane));
+            gl.uniform_1_f32(self.mesh.alpha.as_ref(), style.alpha);
             gl.uniform_matrix_4_f32_slice(self.mesh.view.as_ref(), false, &frame.view.to_cols_array());
             gl.uniform_matrix_4_f32_slice(self.mesh.projection.as_ref(), false, &frame.projection.to_cols_array());
             gl.uniform_1_i32(self.mesh.pass.as_ref(), pass as i32);
             gl.uniform_3_f32_slice(self.mesh.default_color.as_ref(), &c2f_geom::DEFAULT_COLOR[..3]);
             gl.uniform_3_f32_slice(self.mesh.model_color.as_ref(), &frame.model_color);
             gl.bind_vertex_array(Some(buffer.vao));
-            gl.draw_arrays(glow::TRIANGLES, 0, buffer.count);
+            gl.draw_arrays(glow::TRIANGLES, range.start as i32, range.len() as i32);
         }
     }
 
@@ -690,9 +809,9 @@ uniform vec3 u_model_color;
 out vec3 v_position;
 out vec3 v_normal;
 out vec4 v_color;
-out float v_height;
+out vec3 v_world;
 void main() {
-    v_height = a_position.z;
+    v_world = a_position;
     vec4 p = u_view * vec4(a_position, 1.0);
     v_position = p.xyz;
     v_normal = mat3(u_view) * a_normal;
@@ -707,14 +826,17 @@ const MESH_FRAGMENT: &str = r#"
 in vec3 v_position;
 in vec3 v_normal;
 in vec4 v_color;
-in float v_height;
+in vec3 v_world;
 uniform int u_pass;
 uniform float u_cut;
 uniform int u_cut_face;
+uniform vec4 u_section;
+uniform float u_alpha;
 out vec4 f_color;
 void main() {
-    if (v_height > u_cut) discard;
-    float alpha = v_color.a;
+    if (v_world.z > u_cut) discard;
+    if (dot(u_section.xyz, v_world) > u_section.w) discard;
+    float alpha = min(v_color.a * u_alpha, 1.0);
     if (u_pass == 0 && alpha < 0.999) discard;
     if (u_pass == 1 && alpha >= 0.999) discard;
     // A cut model shows the inside of its walls: drawn flat, in red, they
@@ -805,3 +927,32 @@ void main() {
     f_color = vec4(color, 1.0);
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_section_cuts_away_what_lies_beyond_it() {
+        let section = Section { axis: 2, at: 20.0 };
+        assert_eq!(section.plane(), [0.0, 0.0, 1.0, 20.0 + CUT_TOLERANCE]);
+        assert!(section.keeps([100.0, -50.0, 19.0]));
+        assert!(section.keeps([0.0, 0.0, 20.0]), "what lies at the cut stays");
+        assert!(!section.keeps([0.0, 0.0, 21.0]));
+        let across_x = Section { axis: 0, at: -5.0 };
+        assert!(across_x.keeps([-6.0, 99.0, 99.0]) && !across_x.keeps([0.0, 0.0, 0.0]));
+        // No section keeps everything.
+        let [x, y, z, d] = NO_SECTION;
+        assert!(x * 1e9 + y * 1e9 + z * 1e9 <= d);
+    }
+
+    #[test]
+    fn a_section_reads_as_an_axis_and_where() {
+        assert_eq!(Section::parse("z:20"), Some(Section { axis: 2, at: 20.0 }));
+        assert_eq!(Section::parse("X: -12.5"), Some(Section { axis: 0, at: -12.5 }));
+        assert_eq!(Section::parse("y:3"), Some(Section { axis: 1, at: 3.0 }));
+        assert_eq!(Section::parse("w:3"), None);
+        assert_eq!(Section::parse("z"), None);
+        assert_eq!(Section::parse("z:inf"), None);
+    }
+}
