@@ -30,6 +30,7 @@ file's name taking the same parameters as its customizer.
 | `speaker.c2f` | 28 mm 8 ohm speaker |
 | `dc_motor.c2f` | Size 130 DC motor |
 | `touch_plate.c2f` | Copper plate for a capacitive touch pad |
+| `neopixel_ring_12.c2f` | Adafruit NeoPixel Ring 12 (12 RGB LEDs) |
 
 Each file starts with a link to the manufacturer's documentation and says
 which dimensions come from it and which are estimated: check those

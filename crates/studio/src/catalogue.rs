@@ -6,12 +6,18 @@
 //! Adding a part writes a `[parts.NAME]` table into the circuit's text,
 //! after its last part, as one step to undo: the file keeps its comments
 //! and layout.
+//!
+//! The search ranks the parts by what they declare ([`c2f_circuit::search`],
+//! which the MCP server's `library_parts` shares), and a part's sheet (its
+//! description, specs, sources and pins by type) opens under its row.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::SystemTime;
 
+use c2f_circuit::search::{self, Document};
+use c2f_lang::annotations::{Annotations, PinKind};
 use eframe::egui::{self, Button, ColorImage, RichText, TextEdit, TextureHandle, TextureOptions, Vec2};
 use glam::Vec3;
 
@@ -33,11 +39,16 @@ pub struct Entry {
     pub path: PathBuf,
     /// The file's stem.
     pub name: String,
-    /// The first sentence of the file's opening comment.
+    /// The first sentence of its `@description`, else of the file's
+    /// opening comment.
     pub description: String,
     /// Its pins' names.
     pub pins: Vec<String>,
     pub modified: Option<SystemTime>,
+    /// Its sheet and its pins, as the file declares them.
+    pub annotations: Annotations,
+    /// What the search reads of it.
+    pub document: Document,
 }
 
 /// The parts under `electronics/` in each of `roots`, the first folder
@@ -61,12 +72,21 @@ pub fn list(roots: &[PathBuf]) -> Vec<Entry> {
             }
             let source = c2f_eval::read_source(&path).unwrap_or_default();
             let (annotations, _) = c2f_lang::annotations::read(&source);
+            let name = file.trim_end_matches(".c2f").to_string();
+            // The search reads the whole description, the row its first
+            // sentence.
+            let full = match &annotations.description {
+                Some(description) => description.text.clone(),
+                None => description(&source),
+            };
             entries.push(Entry {
+                description: first_sentence(&full),
+                document: Document::new(&name, &rel, &full, &annotations),
                 rel,
-                name: file.trim_end_matches(".c2f").to_string(),
-                description: description(&source),
-                pins: annotations.pins.into_iter().map(|p| p.name).collect(),
+                name,
+                pins: annotations.pins.iter().map(|p| p.name.clone()).collect(),
                 modified: std::fs::metadata(&path).and_then(|m| m.modified()).ok(),
+                annotations,
                 path,
             });
         }
@@ -85,7 +105,12 @@ pub fn description(source: &str) -> String {
         .map(|line| line.trim_start_matches('/').trim())
         .take_while(|line| !line.is_empty() && !line.starts_with('@') && !line.starts_with("http"))
         .collect();
-    let text = block.join(" ");
+    first_sentence(&block.join(" "))
+}
+
+/// The first sentence of `text`, at most a line or so: up to its first
+/// `. ` or `: `.
+pub fn first_sentence(text: &str) -> String {
     let end = [". ", ": "].iter().filter_map(|stop| text.find(stop)).min().unwrap_or(text.len());
     let sentence = text[..end].trim_end_matches('.');
     const MAX: usize = 110;
@@ -97,11 +122,95 @@ pub fn description(source: &str) -> String {
     }
 }
 
-/// Whether `entry` answers `query`: each of its words is in the name, the
-/// description or a pin's name, whatever the case.
-pub fn matches(entry: &Entry, query: &str) -> bool {
-    let haystack = format!("{} {} {}", entry.name, entry.description, entry.pins.join(" ")).to_lowercase();
-    query.split_whitespace().all(|word| haystack.contains(&word.to_lowercase()))
+/// The entries that answer `query`, best first; all of them, in order,
+/// for an empty query.
+pub fn search<'a>(entries: &'a [Entry], query: &str) -> Vec<&'a Entry> {
+    let documents: Vec<Document> = entries.iter().map(|e| e.document.clone()).collect();
+    search::rank(&documents, query).into_iter().map(|(index, _)| &entries[index]).collect()
+}
+
+/// The kinds of pin a sheet sums up, in the order it lists them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinGroup {
+    Power,
+    Ground,
+    Signal,
+    Passive,
+    Unconnected,
+}
+
+impl PinGroup {
+    fn of(kind: PinKind) -> PinGroup {
+        match kind {
+            PinKind::PowerIn | PinKind::PowerOut => PinGroup::Power,
+            PinKind::Ground => PinGroup::Ground,
+            PinKind::Io | PinKind::Input | PinKind::Output => PinGroup::Signal,
+            PinKind::Passive => PinGroup::Passive,
+            PinKind::Nc => PinGroup::Unconnected,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PinGroup::Power => tr("Power", "Alimentation"),
+            PinGroup::Ground => tr("Ground", "Masse"),
+            PinGroup::Signal => tr("Inputs and outputs", "Entrées et sorties"),
+            PinGroup::Passive => tr("Passive", "Passives"),
+            PinGroup::Unconnected => tr("Not connected", "Non connectées"),
+        }
+    }
+}
+
+/// A part's pins by group, each with its pins' names in the file's order;
+/// the groups without pins left out.
+pub fn pin_groups(annotations: &Annotations) -> Vec<(PinGroup, Vec<String>)> {
+    let mut groups: Vec<(PinGroup, Vec<String>)> = Vec::new();
+    for group in [PinGroup::Power, PinGroup::Ground, PinGroup::Signal, PinGroup::Passive, PinGroup::Unconnected] {
+        let names: Vec<String> =
+            annotations.pins.iter().filter(|pin| PinGroup::of(pin.kind) == group).map(|pin| pin.name.clone()).collect();
+        if !names.is_empty() {
+            groups.push((group, names));
+        }
+    }
+    groups
+}
+
+/// A part's sheet: its description, specs, sources as links, and pins by
+/// group.
+fn sheet(ui: &mut egui::Ui, entry: &Entry) {
+    let palette = theme::palette();
+    let annotations = &entry.annotations;
+    if let Some(description) = &annotations.description {
+        ui.add(egui::Label::new(RichText::new(&description.text).color(palette.text)).wrap());
+    }
+    if !annotations.specs.is_empty() {
+        egui::Grid::new(("sheet-specs", &entry.rel)).num_columns(2).spacing([8.0, 2.0]).show(ui, |ui| {
+            for spec in &annotations.specs {
+                ui.label(RichText::new(&spec.key).size(11.5).color(palette.text_dim));
+                ui.add(egui::Label::new(RichText::new(&spec.value).size(11.5).color(palette.text)).wrap());
+                ui.end_row();
+            }
+        });
+    }
+    for (group, names) in pin_groups(annotations) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("{} ({})", group.label(), names.len())).size(11.5).color(palette.text_dim));
+            ui.label(RichText::new(names.join(", ")).size(11.5).color(palette.text));
+        });
+    }
+    for source in &annotations.sources {
+        ui.hyperlink_to(source.label.as_deref().unwrap_or(&source.url), &source.url).on_hover_text(&source.url);
+    }
+    if annotations.description.is_none() && annotations.sources.is_empty() && annotations.specs.is_empty() {
+        ui.label(
+            RichText::new(tr(
+                "No sheet: the file has no @description, @spec or @source.",
+                "Pas de fiche : le fichier n'a ni @description, ni @spec, ni @source.",
+            ))
+            .size(11.5)
+            .color(palette.text_dim),
+        );
+    }
 }
 
 /// The part names a circuit's text gives, from its `[parts.NAME]` headers.
@@ -196,29 +305,28 @@ pub fn on_ground(ray: &Ray) -> Option<[f64; 2]> {
 /// The user's own parts folder, a default library folder: where new parts
 /// go.
 pub fn user_folder() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("HOME")?).join(c2f_eval::USER_LIBRARIES).join(FOLDER))
-}
-
-/// Whether `name` makes a part file's name and module.
-pub fn valid_module_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    c2f_eval::user_parts_folder()
 }
 
 /// A new part's file, in the library's style: a board with two pins and a
 /// mount hole, sized in the customizer.
 pub fn template(name: &str) -> String {
     format!(
-        r#"// {name}: a new part. Describe it here in a sentence: the catalogue
-// shows that first sentence under the part's name.
+        r#"// {name}: a new part.
 //
 // A part is a design whose comments declare its pins (`// @pin`), its
 // mount holes (`// @mount_hole`) and its ports (`// @port`), in its own
 // coordinates: the circuit places it with `at` and `rotate`. Draw the
 // board with its corner at the origin and its parts' side up, then put
 // each pin where a wire meets it: name, position, direction, type,
-// voltage and a "label".
+// voltage and a "label". Its sheet says what it is (`// @description`),
+// its key figures (`// @spec key: value`) and where they come from
+// (`// @source`, its product page or datasheet): the catalogue shows it
+// and searches it.
+
+// @description {name}: a new part. Say here what it is and does, in a
+// @description sentence or two.
+// @spec supply: 5 V
 
 /* [Size] */
 // Length of the board.
@@ -251,7 +359,7 @@ module {name}(length = 20, width = 15, thickness = 1.6) {{
 /// Writes a new part `name` from the template into `folder`; refuses to
 /// replace a file.
 pub fn create(folder: &Path, name: &str) -> Result<PathBuf, String> {
-    if !valid_module_name(name) {
+    if !c2f_circuit::part::valid_name(name) {
         return Err(tr(
             "a part's name is letters, digits and `_`, not starting with a digit",
             "le nom d'un composant est fait de lettres, de chiffres et de `_`, sans commencer par un chiffre",
@@ -368,7 +476,7 @@ fn store(path: &Path, modified: Option<SystemTime>, rgb: &[u8]) {
 /// What the panel asks of the app.
 pub enum Action {
     /// Add this part at a free spot.
-    Add(Entry),
+    Add(Box<Entry>),
     /// A part was made: open it.
     Created(PathBuf),
 }
@@ -385,6 +493,8 @@ pub struct Catalogue {
     prompt: Option<(String, Option<String>)>,
     /// The library folders set in Settings, searched before the default ones.
     folders: Vec<PathBuf>,
+    /// The part whose sheet is open, by its `rel`.
+    selected: Option<String>,
 }
 
 impl Catalogue {
@@ -395,6 +505,7 @@ impl Catalogue {
             thumbnails: Thumbnails::spawn(ctx.clone()),
             prompt: None,
             folders: Vec::new(),
+            selected: None,
         }
     }
 
@@ -443,7 +554,10 @@ impl Catalogue {
         });
         ui.add(
             TextEdit::singleline(&mut self.query)
-                .hint_text(tr("Search name, description or pin", "Rechercher un nom, une description ou une broche"))
+                .hint_text(tr(
+                    "Search: name, use, spec or pin, as \"I2S microphone\"",
+                    "Rechercher : nom, usage, caractéristique ou broche, comme « micro I2S »",
+                ))
                 .desired_width(f32::INFINITY),
         );
         ui.label(RichText::new(tr(
@@ -453,7 +567,7 @@ impl Catalogue {
         ui.add_space(4.0);
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for entry in entries.iter().filter(|e| matches(e, &self.query)) {
+            for entry in search(&entries, &self.query) {
                 let thumbnail = self.thumbnails.get(&ctx, entry);
                 ui.horizontal(|ui| {
                     let id = ui.id().with(("catalogue", &entry.rel));
@@ -470,7 +584,20 @@ impl Catalogue {
                     .on_hover_text(tr!("Drag {} into the view", "Glissez {} dans la vue", entry.rel));
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&entry.name).strong().color(theme::palette().text));
+                            let open = self.selected.as_ref() == Some(&entry.rel);
+                            let name = RichText::new(&entry.name).strong().color(theme::palette().text);
+                            let response = ui.selectable_label(open, name).on_hover_ui(|ui| {
+                                ui.set_max_width(320.0);
+                                sheet(ui, entry);
+                                ui.label(
+                                    RichText::new(tr("Click to keep the sheet open", "Cliquez pour garder la fiche ouverte"))
+                                        .size(11.5)
+                                        .color(theme::palette().text_dim),
+                                );
+                            });
+                            if response.clicked() {
+                                self.selected = if open { None } else { Some(entry.rel.clone()) };
+                            }
                             let pins = entry.pins.len();
                             ui.label(
                                 RichText::new(tr!("{pins} pin{}", "{pins} broche{}", if pins == 1 { "" } else { "s" }))
@@ -491,10 +618,14 @@ impl Catalogue {
                             .on_hover_text(tr("Place it beside the circuit's parts", "Le placer à côté des composants du circuit"))
                             .clicked()
                         {
-                            action = Some(Action::Add(entry.clone()));
+                            action = Some(Action::Add(Box::new(entry.clone())));
                         }
                     });
                 });
+                if self.selected.as_ref() == Some(&entry.rel) {
+                    ui.add_space(2.0);
+                    sheet(ui, entry);
+                }
                 ui.separator();
             }
         });
@@ -582,13 +713,51 @@ mod tests {
             ("electronics/board.c2f", "Small board")
         );
         assert_eq!(entries[1].pins, ["A", "B"]);
-        assert!(matches(&entries[1], "BOARD a"));
-        assert!(matches(&entries[0], "i2s"));
-        assert!(!matches(&entries[0], "board"));
-        assert!(matches(&entries[0], ""));
+        let found = |query: &str| -> Vec<&str> { search(&entries, query).iter().map(|e| e.name.as_str()).collect() };
+        assert_eq!(found("BOARD b"), ["board"]);
+        assert_eq!(found("ampli i2s"), ["Amp"]);
+        assert_eq!(found(""), ["Amp", "board"]);
         for dir in [mine, library] {
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    #[test]
+    fn a_part_with_a_sheet_shows_it_and_is_searched_by_it() {
+        let dir = folder("sheet");
+        let driver = "\
+// A driver board, drawn.
+// @description Dual H-bridge motor driver. Runs two DC motors.
+// @spec logic: 3.3 V or 5 V
+// @source https://www.ti.com/product/DRV8833 product page
+// @pin VCC [0, 0, 0] power_in 10.8V
+// @pin GND [1, 0, 0] ground
+// @pin IN1 [2, 0, 0] input 5.75V
+// @pin OUT1 [3, 0, 0] output 10.8V
+// @pin VM [4, 0, 0] power_out 5V
+cube(1);
+";
+        std::fs::write(dir.join("electronics/driver.c2f"), driver).unwrap();
+        std::fs::write(dir.join("electronics/motor.c2f"), "// A DC motor.\n// @pin + [0, 0, 0]\ncube(1);\n").unwrap();
+        let entries = list(&[dir.clone()]);
+        let driver = entries.iter().find(|e| e.name == "driver").unwrap();
+        // The row shows the description's first sentence.
+        assert_eq!(driver.description, "Dual H-bridge motor driver");
+        let groups: Vec<(PinGroup, Vec<String>)> = pin_groups(&driver.annotations);
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            groups,
+            [
+                (PinGroup::Power, names(&["VCC", "VM"])),
+                (PinGroup::Ground, names(&["GND"])),
+                (PinGroup::Signal, names(&["IN1", "OUT1"])),
+            ]
+        );
+        let found = |query: &str| -> Vec<&str> { search(&entries, query).iter().map(|e| e.name.as_str()).collect() };
+        assert_eq!(found("moteur"), ["motor", "driver"]);
+        assert_eq!(found("driver 5V"), ["driver"]);
+        assert_eq!(found("pont en H"), ["driver"]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

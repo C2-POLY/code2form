@@ -49,6 +49,7 @@ pub fn edited(circuit: &Circuit, edit: Edit) -> Circuit {
             to,
             color: None,
             label: None,
+            via: Vec::new(),
             allow: Vec::new(),
             span: Default::default(),
             to_span: Default::default(),

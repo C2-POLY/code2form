@@ -1,0 +1,83 @@
+// ULN2003 stepper driver board, the green ZC-A0591 board sold with the
+// 28BYJ-48 (ELEGOO FR-EL-SM-003 kit), seen from its parts' side, its
+// IN1-IN4 header at the bottom (-y): the four LEDs A to D along the top
+// with R5 to R8 beside them, the white 5-pin socket the motor plugs into,
+// the ULN2003APG in its DIP-16 socket, the power pins (- +, 5-12 V) with
+// the jumper that powers the motor, the four input pins, and a hole in
+// each corner.
+//
+// Laid out from the seller's photos, scaled to the board's usual
+// 32 x 35 mm (within about 1 mm): to measure on the board itself. The
+// motor takes 5 V; the board passes its + pin to the socket's red pin
+// when the jumper is on.
+
+// @pin IN1 [5, 6, 1.6] input 5V "drives A"
+// @pin IN2 [7.54, 6, 1.6] input 5V "drives B"
+// @pin IN3 [10.08, 6, 1.6] input 5V "drives C"
+// @pin IN4 [12.62, 6, 1.6] input 5V "drives D"
+// @pin GND [25, 9, 1.6] ground "the - pin"
+// @pin VCC [27.54, 9, 1.6] power_in 12V "the + pin: 5 V for a 5 V motor"
+// @pin A [4.5, 22, 7] output 12V "socket pin 1 (the plug's blue wire)"
+// @pin B [7, 22, 7] output 12V "socket pin 2 (pink)"
+// @pin C [9.5, 22, 7] output 12V "socket pin 3 (yellow)"
+// @pin D [12, 22, 7] output 12V "socket pin 4 (orange)"
+// @pin M+ [14.5, 22, 7] power_out 5V "socket pin 5 (red): the + pin"
+// @mount_hole [2.5, 2.5] d=3
+// @mount_hole [29.5, 2.5] d=3
+// @mount_hole [2.5, 32.5] d=3
+// @mount_hole [29.5, 32.5] d=3
+
+$fn = 16;
+board = [32, 35, 1.6];
+
+// The board, its corners rounded and drilled.
+color("DarkSeaGreen") difference() {
+    hull() for (x = [1, board[0] - 1], y = [1, board[1] - 1]) translate([x, y, 0]) cylinder(r = 1, h = board[2]);
+    for (x = [2.5, board[0] - 2.5], y = [2.5, board[1] - 2.5]) translate([x, y, -1]) cylinder(d = 3, h = 4);
+}
+
+// The four LEDs, A to D, along the top: clear 3 mm domes.
+color("White", 0.6) for (i = [0:3]) translate([7 + i * 4.3, 30.5, board[2]]) {
+    cylinder(d = 3, h = 4);
+    translate([0, 0, 4]) sphere(d = 3);
+}
+
+// R5 to R8, on the right, lying across.
+for (i = [0:3]) translate([26.5, 19.5 + i * 2.4, board[2] + 0.8]) rotate([0, 90, 0]) {
+    color("Tan") cylinder(d = 1.6, h = 3.5, center = true);
+    color("Silver") cylinder(d = 0.5, h = 6, center = true);
+}
+
+// The motor's socket: a white JST XH 5-pin header, its opening up.
+translate([2, 19, board[2]]) {
+    color("WhiteSmoke") difference() {
+        cube([15, 6, 7]);
+        translate([0.8, 0.8, 1]) cube([13.4, 4.4, 7]);
+    }
+    color("Gold") for (i = [0:4]) translate([2.5 + i * 2.5 - 0.3, 2.7, 0]) cube([0.6, 0.6, 6]);
+}
+
+// The ULN2003APG in its DIP-16 socket.
+translate([2.5, 9.5, board[2]]) {
+    color("Black") cube([20.5, 8.5, 3]);
+    color("Silver") for (i = [0:7], y = [0.3, 7.6]) translate([0.8 + i * 2.54, y, 2.5]) cube([0.6, 0.6, 1.5]);
+    color([0.12, 0.12, 0.13]) translate([0.5, 1, 3]) cube([19.5, 6.5, 3.4]);
+}
+
+// The ceramic capacitor by the power pins.
+color("Orange") translate([22.5, 12, board[2]]) scale([1, 0.5, 1]) cylinder(d = 3.5, h = 4.5);
+
+// The power pins (- +, 5-12 V) and, above them, the jumper that sends
+// the + to the motor's socket.
+for (x = [25, 27.54]) {
+    color("Black") translate([x - 1.27, 7.73, board[2]]) cube([2.54, 2.54, 2.5]);
+    color("Gold") translate([x - 0.32, 8.68, board[2]]) cube([0.64, 0.64, 8.5]);
+}
+color("Black") translate([23.73, 12.73, board[2]]) cube([5.08, 2.54, 8.5]);
+
+// The four input pins, IN1 to IN4, straight up.
+for (i = [0:3]) {
+    x = 5 + i * 2.54;
+    color("Black") translate([x - 1.27, 4.73, board[2]]) cube([2.54, 2.54, 2.5]);
+    color("Gold") translate([x - 0.32, 5.68, board[2]]) cube([0.64, 0.64, 8.5]);
+}

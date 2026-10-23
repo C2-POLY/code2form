@@ -1,5 +1,5 @@
 //! `c2f obj`, `step`, `urdf`, `json` and `dxf --view`: the model for
-//! other programs.
+//! other programs; and `png`, pictures of it for people.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -61,6 +61,27 @@ fn urdf_needs_a_file_for_its_meshes() {
     std::fs::write(dir.join("missing"), "a file, not a folder").unwrap();
     let output = c2f(&dir, &["urdf", "-o", nowhere.to_str().unwrap()], ARM);
     assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn png_is_a_view_or_the_sheet_of_views() {
+    let dir = dir("png");
+    let target = dir.join("box.png");
+    let size = |output: &Output| {
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let png = std::fs::read(&target).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap()))
+    };
+    let out = target.to_str().unwrap();
+    assert_eq!(size(&c2f(&dir, &["png", "-o", out], "cube(10);")), (800, 600));
+    assert_eq!(size(&c2f(&dir, &["png", "--view", "top", "-o", out], "cube(10);")), (800, 600));
+    assert_eq!(size(&c2f(&dir, &["png", "--view", "sheet", "-o", out], "cube(10);")), (990, 816));
+    assert_eq!(size(&c2f(&dir, &["png", "--view", "sheet", "--section", "-o", out], "cube(10);")), (1480, 816));
+    // A section is a view of the sheet; an empty model has no picture.
+    assert_eq!(c2f(&dir, &["png", "--section", "-o", out], "cube(10);").status.code(), Some(2));
+    assert_eq!(c2f(&dir, &["png", "-o", out], "echo(1);").status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

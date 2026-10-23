@@ -7,7 +7,7 @@ mod mcp;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
-       c2f circuit <command> [--csv] [--margin <mm>] <file.c2fc>
+       c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>
        c2f mcp
 
 commands:
@@ -30,12 +30,17 @@ commands:
   section the outline where a plane cuts the solid, as JSON (--axis,
           --at, --tolerance): to measure a mesh before drawing it again;
           through the axis of a turned part, its profile
+  png     a picture of the model from --view (default diagonal), 800
+          by 600 pixels; --view sheet: its sheet of views, four sides
+          at one scale with its size in millimeters (--section adds a
+          cut through its middle)
   svg     evaluate, build the 2D geometry and print it as an SVG
   dxf     the same, as a DXF drawing; a 3D model seen from --view
   check   parse only and report syntax errors and badly written
           electronics annotations
   pins    print the pins, mount holes and ports a part declares
-          (`// @pin`, `// @mount_hole`, `// @port`), one per line
+          (`// @pin`, `// @mount_hole`, `// @port`) and its sheet
+          (`// @description`, `// @spec`, `// @source`), one per line
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout
 
 circuit commands, on a `.c2fc` circuit:
@@ -44,7 +49,12 @@ circuit commands, on a `.c2fc` circuit:
           together or to ground, a supply or ground left open, a
           wired nc pin) fail it; warnings (no common ground, a wired
           reserved pin, two outputs on a net, parts that run into
-          each other or into the enclosure) do not
+          each other or into the enclosure, wires that run into it)
+          do not
+  fit     how each part fits in the enclosure: its least room to the
+          enclosure and to the other parts, and warnings for a part
+          under the clearance, a port no cutout_for opens, a mount
+          hole with no standoff, a wire that runs into the enclosure
   wires   print the wiring list in the order to lay the wires: step,
           from pin to pin (with their labels), color, length and label;
           the length is the routed curve's plus a margin
@@ -56,6 +66,7 @@ circuit commands, on a `.c2fc` circuit:
   --csv   wires and bom as comma-separated values
   --margin <mm>  added to each wire's length (default 10: two stripped
           ends of 5 mm)
+  --clearance <mm>  the room fit wants around each part (default 0.5)
 
 options:
   -D name=value   sets a variable, as if assigned at the end of the file
@@ -65,7 +76,8 @@ options:
   -o <file>       writes the export to this file rather than printing it
   --view <view>   dxf of a 3D model: its outline seen from top, bottom,
                   front, back, left or right, or from <yaw>,<pitch> in
-                  degrees (default top)
+                  degrees (default top); png: those, diagonal or sheet
+  --section       png --view sheet: adds the model cut through its middle
   --density <kg/m3>  urdf: what the links weigh by volume (default 1240,
                   PLA's)
   --axis <x|y|z>  section: the axis the plane is across (default z)
@@ -113,6 +125,9 @@ struct Options {
     density: Option<f64>,
     /// `--axis`, `--at` and `--tolerance`, for `section`.
     section: (c2f_geom::Axis, f64, f64),
+    /// `--view sheet` and `--section`, for `png`.
+    sheet: bool,
+    cut: bool,
 }
 
 impl Options {
@@ -123,6 +138,7 @@ impl Options {
         let (mut still, mut animation_name) = (false, None);
         let (mut output, mut view, mut density) = (None, None, None);
         let mut section = (c2f_geom::Axis::Z, 0.0, 0.01);
+        let (mut sheet, mut cut) = (false, false);
         while let Some((arg, tail)) = rest.split_first() {
             rest = tail;
             let animation = gltf.animation.get_or_insert_with(Default::default);
@@ -137,6 +153,7 @@ impl Options {
                         "--duration" => animation.duration = positive(value)?,
                         "--fps" => animation.fps = positive(value)?,
                         "-o" => output = Some(value.clone()),
+                        "--view" if value == "sheet" => sheet = true,
                         "--view" => view = Some(parse_view(value)?),
                         "--density" => density = Some(positive(value)?),
                         "--axis" => section.0 = c2f_geom::Axis::named(value)?,
@@ -152,6 +169,10 @@ impl Options {
                 }
                 "--still" => {
                     still = true;
+                    continue;
+                }
+                "--section" => {
+                    cut = true;
                     continue;
                 }
                 _ => {}
@@ -184,7 +205,20 @@ impl Options {
         if still {
             gltf.animation = None;
         }
-        Some(Options { command: command.clone(), path, defines, parameter_file, parameter_set, gltf, output, view, density, section })
+        Some(Options {
+            command: command.clone(),
+            path,
+            defines,
+            parameter_file,
+            parameter_set,
+            gltf,
+            output,
+            view,
+            density,
+            section,
+            sheet,
+            cut,
+        })
     }
 
     /// The name of what is written: the output's stem, or the model's.
@@ -216,7 +250,7 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "obj", "step", "urdf", "json", "section", "svg", "dxf"]
+    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "obj", "step", "urdf", "json", "section", "png", "svg", "dxf"]
         .contains(&options.command.as_str())
     {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
@@ -232,6 +266,14 @@ fn run() -> ExitCode {
             eprintln!("error: a {name} file is binary; redirect it to a file: c2f {ext} {} > model.{ext}", options.path);
             return ExitCode::from(2);
         }
+    }
+    if options.command == "png" && options.output.is_none() && std::io::stdout().is_terminal() {
+        eprintln!("error: a PNG file is binary; redirect it to a file: c2f png {} > model.png", options.path);
+        return ExitCode::from(2);
+    }
+    if options.cut && !options.sheet {
+        eprintln!("error: --section goes with the sheet of views: c2f png --view sheet --section {}", options.path);
+        return ExitCode::from(2);
     }
     let path = Path::new(&options.path);
     let mut src = match c2f_eval::read_source(path) {
@@ -276,6 +318,7 @@ fn run() -> ExitCode {
             _ => ExitCode::FAILURE,
         },
         "section" => section(&program, &options),
+        "png" => png(&program, &options),
         // `csg`, or an export format.
         command => csg(&mut program, &src, Export::named(command), &options),
     }
@@ -289,6 +332,9 @@ fn pins(src: &str, file_name: &str) -> ExitCode {
     printed.extend(annotations.pins.iter().map(|a| (a.span, a.to_string())));
     printed.extend(annotations.mount_holes.iter().map(|a| (a.span, a.to_string())));
     printed.extend(annotations.ports.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.description.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.specs.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.sources.iter().map(|a| (a.span, a.to_string())));
     printed.sort_by_key(|(span, _)| span.start);
     let lines = c2f_lang::span::LineIndex::new(src);
     for (span, text) in printed {
@@ -526,6 +572,41 @@ fn section(program: &c2f_eval::Program, options: &Options) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Writes a picture of the model, or its sheet of views, as PNG.
+fn png(program: &c2f_eval::Program, options: &Options) -> ExitCode {
+    let output = c2f_eval::evaluate(program);
+    for line in &output.echo {
+        eprintln!("{line}");
+    }
+    for warning in &output.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    if let Some(error) = &output.error {
+        eprintln!("ERROR: {error}");
+        return ExitCode::FAILURE;
+    }
+    let rendered = render(program, &output);
+    for warning in &rendered.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    let picture = if options.sheet {
+        rendered.sheet(options.cut)
+    } else {
+        // The app's default view, at the size the MCP server draws.
+        let (yaw, pitch) = options.view.unwrap_or((-60.0, 28.0));
+        rendered.png(yaw as f32, pitch as f32, 800, 600)
+    };
+    let Some(bytes) = picture else {
+        eprintln!("error: the model is empty: nothing to draw");
+        return ExitCode::FAILURE;
+    };
+    if let Err(err) = emit(options.output.as_deref(), &bytes) {
+        eprintln!("error: cannot write the PNG: {err}");
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
 }
 
 /// Why the parts were not written: the model has none (a warning, as for

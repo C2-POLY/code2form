@@ -16,7 +16,7 @@ use crate::i18n::tr;
 use crate::pause_edit;
 use crate::pick::Ray;
 use crate::wiring::{Emphasis, shade};
-use crate::renderer::{self, Grid, Renderer};
+use crate::renderer::{self, Grid, Renderer, Section};
 use crate::theme;
 use crate::worker::Scene;
 
@@ -121,6 +121,15 @@ pub struct Viewer {
     /// shows.
     enclosure: std::ops::Range<usize>,
     show_enclosure: bool,
+    /// How opaque a circuit's enclosure is drawn, from 0 to 1.
+    pub enclosure_opacity: f32,
+    /// The section view: the model, or a circuit's enclosure, cut across
+    /// an axis to show the inside; and the box it cuts across.
+    pub section_view: bool,
+    section: Section,
+    section_bounds: Option<(Vec3, Vec3)>,
+    /// The color each part of a circuit shows most in.
+    part_colors: Vec<[f32; 4]>,
     /// A double-click frames the view; the app turns it off while the
     /// pointer is over something a double-click opens.
     pub frame_on_double_click: bool,
@@ -191,6 +200,11 @@ impl Viewer {
             part_emphasis: Vec::new(),
             enclosure: 0..0,
             show_enclosure: true,
+            enclosure_opacity: crate::circuit::ENCLOSURE_ALPHA,
+            section_view: false,
+            section: Section { axis: 2, at: f32::NAN },
+            section_bounds: None,
+            part_colors: Vec::new(),
             frame_on_double_click: true,
             orbit_enabled: true,
             pauses: Vec::new(),
@@ -242,6 +256,24 @@ impl Viewer {
         self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
         self.solid_positions = if scene.parts.is_empty() { Vec::new() } else { scene.solid.positions.clone() };
+        self.part_colors = scene
+            .parts
+            .iter()
+            .map(|r| main_color(scene.solid.positions.get(r.clone()).unwrap_or_default(), scene.solid.colors.get(r.clone()).unwrap_or_default()))
+            .collect();
+        // A circuit's section cuts its enclosure; a design's, the model.
+        self.section_bounds = if scene.is_2d {
+            None
+        } else if scene.parts.is_empty() {
+            self.bounds
+        } else {
+            points_bounds(scene.solid.positions.get(self.enclosure.clone()).unwrap_or_default())
+        };
+        // A cut that misses the new model starts again from its middle.
+        let range = self.section_range(self.section.axis);
+        if range.is_some_and(|(lo, hi)| !(lo..=hi).contains(&self.section.at)) {
+            self.set_section_axis(self.section.axis);
+        }
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
         self.menu = None;
@@ -342,6 +374,52 @@ impl Viewer {
     /// Whether the scene has an enclosure.
     pub fn has_enclosure(&self) -> bool {
         !self.enclosure.is_empty()
+    }
+
+    /// The color each part of a circuit shows most in, by part index.
+    pub fn part_colors(&self) -> &[[f32; 4]] {
+        &self.part_colors
+    }
+
+    /// Whether the section view can cut something: a design in 3D, or a
+    /// circuit's enclosure (its parts and wires are never cut).
+    pub fn can_section(&self) -> bool {
+        self.section_bounds.is_some()
+    }
+
+    /// Where the section is.
+    pub fn section(&self) -> Section {
+        self.section
+    }
+
+    /// The cut the frame draws: `None` when the section view is off.
+    fn shown_section(&self) -> Option<Section> {
+        (self.section_view && self.can_section()).then_some(self.section)
+    }
+
+    /// From where to where along `axis` a section cuts through what it
+    /// cuts.
+    pub fn section_range(&self, axis: usize) -> Option<(f32, f32)> {
+        let (lo, hi) = self.section_bounds?;
+        Some((lo[axis.min(2)], hi[axis.min(2)]))
+    }
+
+    /// Cuts across `axis`, at its middle.
+    pub fn set_section_axis(&mut self, axis: usize) {
+        let at = self.section_range(axis).map_or(0.0, |(lo, hi)| (lo + hi) * 0.5);
+        self.section = Section { axis: axis.min(2), at };
+    }
+
+    /// Moves the cut to `at` along its axis, within what it cuts.
+    pub fn set_section_at(&mut self, at: f32) {
+        let (lo, hi) = self.section_range(self.section.axis).unwrap_or((at, at));
+        self.section.at = at.clamp(lo, hi);
+    }
+
+    /// Turns the section view on, cut as `section` says.
+    pub fn show_section(&mut self, section: Section) {
+        self.section = Section { axis: section.axis.min(2), ..section };
+        self.section_view = true;
     }
 
     /// Gives the solid the theme's colors: greyed-out parts fade towards
@@ -558,6 +636,8 @@ impl Viewer {
                     show_axes: self.show_axes,
                     show_pauses: self.show_pauses,
                     cut: self.cut(),
+                    section: self.shown_section(),
+                    enclosure_opacity: if self.show_enclosure { self.enclosure_opacity.clamp(0.0, 1.0) } else { 0.0 },
                     model_color: self.model_color,
                     palette: theme::palette(),
                 };
@@ -968,6 +1048,29 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     );
 }
 
+/// The color that covers most of the triangles `positions` and `colors`
+/// make, by area: what a part shows in. Counted by vertex, the many small
+/// triangles of pins and chips would win over a board.
+fn main_color(positions: &[[f32; 3]], colors: &[[f32; 4]]) -> [f32; 4] {
+    let mut areas: Vec<([f32; 4], f32)> = Vec::new();
+    for (triangle, color) in positions.chunks_exact(3).zip(colors.chunks_exact(3)) {
+        let [a, b, c] = [0, 1, 2].map(|i| Vec3::from(triangle[i]));
+        let area = (b - a).cross(c - a).length();
+        match areas.iter_mut().find(|(c, _)| *c == color[0]) {
+            Some((_, total)) => *total += area,
+            None => areas.push((color[0], area)),
+        }
+    }
+    areas.into_iter().max_by(|x, y| x.1.total_cmp(&y.1)).map_or(c2f_geom::DEFAULT_COLOR, |(c, _)| c)
+}
+
+/// The box around `points`.
+fn points_bounds(points: &[[f32; 3]]) -> Option<(Vec3, Vec3)> {
+    let mut points = points.iter().map(|&p| Vec3::from(p));
+    let first = points.next()?;
+    Some(points.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p))))
+}
+
 /// A rounded label; returns its width.
 fn badge(painter: &egui::Painter, at: Pos2, text: &str, color: Color32, spinner: bool) -> f32 {
     let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(12.5), color);
@@ -1136,6 +1239,47 @@ mod tests {
                 _ => panic!("a right-click at y {y} has no fitting menu"),
             }
         }
+    }
+
+    #[test]
+    fn a_section_cuts_a_design_or_a_circuits_enclosure() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(scene(20.0), false);
+        assert!(viewer.can_section() && viewer.shown_section().is_none(), "the section view starts off");
+        // It starts at the middle of the model, across z.
+        assert_eq!(viewer.section(), Section { axis: 2, at: 10.0 });
+        viewer.set_section_axis(0);
+        viewer.set_section_at(50.0);
+        viewer.section_view = true;
+        assert_eq!(viewer.shown_section(), Some(Section { axis: 0, at: 20.0 }), "kept within the model");
+
+        // A circuit cuts its enclosure: a part from 0 to 5, the enclosure
+        // from -10 to 30.
+        let mut circuit = scene(5.0);
+        let start = circuit.solid.positions.len();
+        circuit.solid.push_triangle([[-10.0; 3], [30.0, -10.0, -10.0], [30.0; 3]], [[0.5; 4]; 3]);
+        circuit.parts = std::iter::once(0..start).collect();
+        circuit.enclosure = start..circuit.solid.positions.len();
+        viewer.set_scene(circuit, false);
+        assert_eq!(viewer.section_range(2), Some((-10.0, 30.0)));
+        assert_eq!(viewer.part_colors(), [[1.0; 4]]);
+        // Without an enclosure, nothing to cut.
+        let mut bare = scene(5.0);
+        bare.parts = std::iter::once(0..3).collect();
+        viewer.set_scene(bare, false);
+        assert!(!viewer.can_section() && viewer.shown_section().is_none());
+    }
+
+    #[test]
+    fn a_part_shows_in_its_main_color() {
+        let (red, grey) = ([1.0, 0.0, 0.0, 1.0], [0.5, 0.5, 0.5, 1.0]);
+        // Two small grey triangles and a large red one: red covers more.
+        let small = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let large = [[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 5.0, 0.0]];
+        let positions: Vec<[f32; 3]> = [small, small, large].concat();
+        let colors = [[grey; 3], [grey; 3], [red; 3]].concat();
+        assert_eq!(main_color(&positions, &colors), red);
+        assert_eq!(main_color(&[], &[]), c2f_geom::DEFAULT_COLOR);
     }
 
     #[test]

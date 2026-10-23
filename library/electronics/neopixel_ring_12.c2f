@@ -1,0 +1,62 @@
+// Adafruit NeoPixel Ring 12 (product 1643): twelve 5050 RGB LEDs with
+// their controllers built in, on a black ring of board, chained on a single
+// data line. Its center at the origin, its back at z = 0, the LEDs on top.
+// https://www.adafruit.com/product/1643
+//
+// From the product page: 36.8 mm across outside, 23.3 mm inside, twelve
+// LEDs (WS2812B or SK6812) powered at 5 V, about 18 mA per LED and color.
+// From Adafruit's NeoPixel guide: a 1.6 mm board under 2 mm LEDs, about
+// 3.6 mm in all. Estimated: where the four pads sit on the back (grouped
+// at the ring's -y side, 2.54 mm apart, as on photos of the board).
+//
+// The guide's wiring rules: ground first, then 5 V, then data; a 300 to
+// 500 ohm resistor near DIN helps; a 5 V ring wants 5 V data, so a 3.3 V
+// board may need a level shifter (74AHCT125) when the wire is long.
+//
+// Annotations are plain numbers.
+
+// @description Ring of twelve RGB LEDs, each with its own controller (WS2812B or
+// @description SK6812), 36.8 mm across, driven from one data pin at 5 V: the
+// @description light of a lamp, or a pattern of colors.
+// @spec LEDs: 12 x 5050 RGB, WS2812B or SK6812, a controller in each
+// @spec supply: 5 V
+// @spec current: about 18 mA per LED and color, 650 mA at full white
+// @spec data: one line in, one out to chain the next ring
+// @spec size: 36.8 mm outside, 23.3 mm inside, 3.6 mm thick
+// @source https://www.adafruit.com/product/1643 product page
+// @source https://learn.adafruit.com/adafruit-neopixel-uberguide/best-practices "NeoPixel wiring guide"
+
+// @pin GND  [-3.81, -15.4, 0] down ground
+// @pin 5V   [-1.27, -15.4, 0] down power_in 5V "power, 5 V"
+// @pin DIN  [1.27, -15.4, 0]  down input 5V "data in"
+// @pin DOUT [3.81, -15.4, 0]  down output 5V "data out, to chain"
+
+module neopixel_ring_12() {
+    $fn = 64;
+    outer = 36.8;
+    inner = 23.3;
+    t = 1.6;
+    led = 5;
+    led_h = 2;
+    leds = 12;
+
+    black = [0.08, 0.08, 0.09];
+    white = [0.94, 0.94, 0.92];
+    lens = [0.98, 0.97, 0.88];
+    tin = [0.78, 0.79, 0.80];
+
+    // The board.
+    color(black) difference() {
+        cylinder(d = outer, h = t);
+        translate([0, 0, -1]) cylinder(d = inner, h = t + 2);
+    }
+    // The LEDs, square, on the ring's mid-line, each with its round lens.
+    for (i = [0 : leds - 1]) rotate(360 / leds * i) translate([(outer + inner) / 4, 0, t]) {
+        color(white) translate([-led / 2, -led / 2, 0]) cube([led, led, led_h - 0.05]);
+        color(lens) translate([0, 0, led_h - 0.05]) cylinder(d = 3.6, h = 0.05, $fn = 24);
+    }
+    // The four pads on the back.
+    color(tin) for (x = [-3.81, -1.27, 1.27, 3.81]) translate([x - 0.9, -15.4 - 1.2, -0.02]) cube([1.8, 2.4, 0.02]);
+}
+
+neopixel_ring_12();

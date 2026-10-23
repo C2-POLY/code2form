@@ -12,6 +12,8 @@ use serde_json::{Map, Value, json};
 use crate::Export;
 
 mod circuit;
+mod part;
+mod prompts;
 
 /// The protocol versions this server speaks, the latest first.
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -20,7 +22,8 @@ const INSTRUCTIONS: &str = "\
 Code2Form models parts as programs in the .scad language. Give a tool the \
 program's text (`code`) or a file (`path`). `render` reports errors with \
 their line, echo output, warnings, the triangle count, the volume and the \
-bounding box; `image` returns a picture of the model from a view; \
+bounding box; `image` returns a picture of the model from a view, or with \
+view `sheet` four views at one scale with its size, to show for approval; \
 `parameters` lists the customizer parameters, which every tool can set \
 with `parameters`; `export` writes STL or 3MF (or SVG and DXF for 2D), \
 glTF (.glb) for game engines such as Godot and Unity, OBJ, STEP for CAD \
@@ -30,11 +33,19 @@ as JSON. `import()` reads STL, OBJ, 3MF, OFF, AMF, DXF and SVG, and STEP \
 when FreeCAD is installed. \
 `pause(z, message);` pauses a 3D print once it is done up to height `z`, \
 to drop magnets or nuts into closed cavities: the 3MF carries the pauses \
-for PrusaSlicer. For electronics, `library_parts` lists the parts and \
-`part_pins` their pins; a circuit (`.c2fc`, TOML) places parts and wires \
+for PrusaSlicer. For electronics, `library_parts` lists the parts (a `query` \
+such as `micro I2S` ranks them) and `part_pins` their pins; to add a \
+part from its supplier's product page and datasheet, write it with its \
+annotations and sheet, `check_part` it, then `save_part` it into the \
+user's library; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
-`circuit_bom` list its wires in order and its parts. To turn a mesh into \
+`circuit_bom` list its wires in order and its parts, `fit` says how its \
+parts fit in their enclosure. To go from an \
+idea to a printed object with its electronics, follow the prompts \
+`design_object` (the model first, approved by the user) then \
+`add_electronics` (`electrify` makes the approved design ready for its \
+circuit). To turn a mesh into \
 a design, `section` cuts it with a plane: its outlines give the sizes to \
 write it again with.";
 
@@ -90,6 +101,8 @@ fn handle(line: &str) -> Option<Value> {
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
         "tools/call" => call(&params),
+        "prompts/list" => Ok(prompts::list()),
+        "prompts/get" => prompts::get(&params),
         _ => Err((-32601, format!("method not found: {method}"))),
     };
     Some(match result {
@@ -109,7 +122,7 @@ fn initialize(params: &Value) -> Value {
     let version = asked.filter(|v| PROTOCOL_VERSIONS.contains(v)).unwrap_or(PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": version,
-        "capabilities": { "tools": {} },
+        "capabilities": { "tools": {}, "prompts": {} },
         "serverInfo": { "name": "code2form", "title": "Code2Form", "version": env!("CARGO_PKG_VERSION") },
         "instructions": INSTRUCTIONS,
     })
@@ -139,12 +152,35 @@ fn tools() -> Value {
             "description": "Renders a model and returns a PNG picture of it, framed to fit, in the app's colors, \
                             with the render report. Z is up; `front` looks along +Y, `top` down with X right and Y up, \
                             `diagonal` (or `isometric`) is the app's default view. A 2D model shows as a 1 mm slab, \
-                            best seen from `top`.",
+                            best seen from `top`. `sheet` is a sheet of views to show someone for approval: diagonal, \
+                            front, right and top, titled, at one scale, with the size in mm (width × depth × height) \
+                            and a scale bar; `section` adds the model cut through its middle (y = the box's center, \
+                            seen from the front, the cut hatched) to show inside a hollow part. A sheet has its own \
+                            size: `width` and `height` are ignored.",
             "inputSchema": schema(json!({
-                "view": { "type": "string", "enum": views, "default": "diagonal", "description": "Where the camera looks from." },
+                "view": { "type": "string", "enum": sheet_views(), "default": "diagonal", "description": "Where the camera looks from, or `sheet`." },
+                "section": { "type": "boolean", "default": false, "description": "With `view` = `sheet`: add a view cut through the middle." },
                 "width": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.0, "description": "In pixels." },
                 "height": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGE_SIZE, "default": IMAGE_SIZE.1, "description": "In pixels." },
             }), &[]),
+        },
+        {
+            "name": "electrify",
+            "title": "Make a design ready for its electronics",
+            "description": "Prepares an approved design (`path`, a .c2f file) for its electronics without \
+                            rewriting it: creates its circuit file beside it (`circuit`, by default the design's \
+                            name with .c2fc), whose enclosure is the design; names the circuit in the design \
+                            (// @circuit); moves the design's drawing, unchanged, into a module design(); and adds \
+                            empty modules electronics_cuts() (subtracted: cutout_for, holes_for, channel_for) and \
+                            electronics_mounts() (added: standoffs_for). A design made of pieces (part()) keeps \
+                            them: only the piece that holds the electronics (`piece`, needed when there are \
+                            several) takes the cuts and mounts, where the design draws it. Then place the parts and wires in the \
+                            circuit, and fill the two modules. Reports the volume before and after, which match.",
+            "inputSchema": schema_of(json!({
+                "path": { "type": "string", "description": "The design's .c2f file; it is rewritten." },
+                "circuit": { "type": "string", "description": "The circuit file's name, beside the design (default: <design>.c2fc)." },
+                "piece": { "type": "string", "description": "In a design made of pieces, the part() that holds the electronics." },
+            }), &["path"]),
         },
         {
             "name": "section",
@@ -220,6 +256,10 @@ fn tools() -> Value {
     if let Some(tools) = tools.as_array_mut() {
         tools.extend(circuit::tools());
     }
+    // Writing a part from its supplier's pages.
+    if let Some(tools) = tools.as_array_mut() {
+        tools.extend(part::tools());
+    }
     tools
 }
 
@@ -276,7 +316,8 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "image" => image_tool,
         "export" => export_tool,
         "section" => section_tool,
-        _ => circuit::tool(name).ok_or((-32602, format!("unknown tool: {name}")))?,
+        "electrify" => electrify_tool,
+        _ => circuit::tool(name).or_else(|| part::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
     };
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
     if !args.is_object() {
@@ -324,12 +365,32 @@ fn parameters_tool(args: &Value) -> Result<Vec<Value>, String> {
 }
 
 fn image_tool(args: &Value) -> Result<Vec<Value>, String> {
-    let (yaw, pitch, width, height) = view_and_size(args)?;
     let (rendered, report) = render(args)?;
-    let png = rendered
-        .png(yaw, pitch, width, height)
-        .ok_or_else(|| format!("the model is empty: nothing to draw\n{}", pretty(&report)))?;
+    let png = picture(&rendered, args)?.ok_or_else(|| format!("the model is empty: nothing to draw\n{}", pretty(&report)))?;
     Ok(vec![json!({ "type": "image", "data": base64(&png), "mimeType": "image/png" }), text(pretty(&report))])
+}
+
+/// The views `image` and `circuit_image` take: the presets, and the sheet.
+fn sheet_views() -> Vec<&'static str> {
+    c2f_geom::VIEWS.iter().map(|(name, _, _)| *name).chain(["isometric", "sheet"]).collect()
+}
+
+/// The picture the arguments ask for: the sheet of views for `view` =
+/// `sheet` (with a cut for `section`), else one view; `None` when there is
+/// nothing to draw.
+fn picture(rendered: &c2f_geom::Rendered, args: &Value) -> Result<Option<Vec<u8>>, String> {
+    let section = match args.get("section") {
+        None => false,
+        Some(v) => v.as_bool().ok_or("`section` must be true or false")?,
+    };
+    if args.get("view").and_then(Value::as_str) == Some("sheet") {
+        return Ok(rendered.sheet(section));
+    }
+    if section {
+        return Err("`section` goes with `view` = `sheet`".into());
+    }
+    let (yaw, pitch, width, height) = view_and_size(args)?;
+    Ok(rendered.png(yaw, pitch, width, height))
 }
 
 /// The camera's angles and the picture's size the arguments ask for.
@@ -348,6 +409,44 @@ fn view_and_size(args: &Value) -> Result<(f32, f32, usize, usize), String> {
         },
     };
     Ok((yaw, pitch, size("width", IMAGE_SIZE.0)?, size("height", IMAGE_SIZE.1)?))
+}
+
+fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let path = PathBuf::from(args.get("path").and_then(Value::as_str).ok_or("`path` names the design's .c2f file")?);
+    let src = std::fs::read_to_string(&path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+    let design_file = path.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("`path` names no file")?;
+    let circuit_file = match args.get("circuit").and_then(Value::as_str) {
+        Some(name) if name.ends_with(".c2fc") && !name.contains(['/', '\\']) => name.to_string(),
+        Some(name) => return Err(format!("`circuit` must be a file name ending in .c2fc, beside the design: {name}")),
+        None => format!("{}.c2fc", path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()),
+    };
+    let circuit_path = path.with_file_name(&circuit_file);
+    if circuit_path.exists() {
+        return Err(format!("{} exists already: name another with `circuit`", circuit_path.display()));
+    }
+    let before = render(&json!({ "path": path }))?.1;
+    let piece = args.get("piece").and_then(Value::as_str);
+    let done = c2f_circuit::electrify::electrify(&src, &design_file, &circuit_file, piece)?;
+    std::fs::write(&circuit_path, &done.circuit).map_err(|err| format!("cannot write {}: {err}", circuit_path.display()))?;
+    // Anything that fails from here leaves the design as it was, and no circuit.
+    let undo = |why: String| {
+        let _ = std::fs::write(&path, &src);
+        let _ = std::fs::remove_file(&circuit_path);
+        why
+    };
+    std::fs::write(&path, &done.design).map_err(|err| undo(format!("cannot write {}: {err}", path.display())))?;
+    let after = render(&json!({ "path": path })).map_err(undo)?.1;
+    let report = json!({
+        "ok": true,
+        "design": path.display().to_string(),
+        "circuit": circuit_path.display().to_string(),
+        "volume_before": before.get("volume"),
+        "volume_after": after.get("volume"),
+        "warnings": after.get("warnings"),
+        "next": "Place the parts and wires in the circuit file, check them with check_circuit and fit, \
+                 then fill electronics_cuts() and electronics_mounts() in the design.",
+    });
+    Ok(vec![text(pretty(&report))])
 }
 
 fn section_tool(args: &Value) -> Result<Vec<Value>, String> {

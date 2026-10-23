@@ -190,3 +190,117 @@ fn collisions_are_warnings() {
     assert_eq!(stderr.matches("collision").count(), 2, "{stderr}");
     assert_eq!(text(&output.stdout), "test.c2fc: 4 parts, 0 wires: no errors, 2 warnings\n");
 }
+
+/// The fit tests' circuit, `tests/fit/winder.c2fc`, in a folder of its own
+/// with `edit` made to its files (file, text, replacement).
+fn winder(name: &str, edits: &[(&str, &str, &str)]) -> Folder {
+    let dir = manifest().join("tests/fit");
+    let files = ["winder.c2fc", "frame.c2f", "parts/uln2003.c2f", "parts/stepper_28byj48.c2f"].map(|file| {
+        let mut text = std::fs::read_to_string(dir.join(file)).unwrap();
+        for (_, from, to) in edits.iter().filter(|(f, _, _)| *f == file) {
+            assert!(text.contains(from), "{file}: {from}");
+            text = text.replace(from, to);
+        }
+        (file, text)
+    });
+    let files: Vec<(&str, &str)> = files.iter().map(|(file, text)| (*file, text.as_str())).collect();
+    Folder::new(name, &files)
+}
+
+#[test]
+fn fit_gives_each_part_its_clearance_and_finds_a_port_left_closed() {
+    let output = c2f(&manifest().join("tests/fit"), &["fit", "winder.c2fc"]);
+    assert!(output.status.success());
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    // Each part's least room: the XIAO's to the back wall, the driver's to
+    // the left wall, the motor's boss in its 1 mm cutout.
+    let row = |part: &str| stdout.lines().find(|line| line.starts_with(part)).unwrap().split_whitespace().collect::<Vec<_>>();
+    assert_eq!(row("xiao")[1..3], ["3.50", "mm"], "{stdout}");
+    assert_eq!(row("driver")[1..3], ["6.00", "mm"], "{stdout}");
+    assert_eq!(row("motor")[1..3], ["1.00", "mm"], "{stdout}");
+    // The XIAO's USB-C faces the back wall, which has no opening for it.
+    assert_eq!(
+        stderr,
+        "WARNING: no cutout_for in front of port `xiao.usb_c`: the enclosure covers it at [26.5, 36.0, 5.6]\n",
+        "{stderr}"
+    );
+    assert!(stdout.ends_with("winder.c2fc: 3 parts, 1 warning\n"), "{stdout}");
+
+    // With its cutout, everything fits; a larger clearance finds the
+    // motor's shaft too close to the shelf.
+    let open = "    cutout_for(\"motor\", \"shaft\", clearance = 1);\n    cutout_for(\"xiao\", \"usb_c\");\n";
+    let folder = winder("fit-open", &[("frame.c2f", "    cutout_for(\"motor\", \"shaft\", clearance = 1);\n", open)]);
+    let output = c2f(&folder.0, &["fit", "winder.c2fc"]);
+    assert_eq!(text(&output.stderr), "");
+    assert!(text(&output.stdout).ends_with("winder.c2fc: 3 parts, everything fits with 0.5 mm of clearance\n"));
+    let stderr = text(&c2f(&folder.0, &["fit", "--clearance", "2", "winder.c2fc"]).stderr);
+    assert!(stderr.starts_with("WARNING: `motor` is 1.00 mm from the enclosure at ["), "{stderr}");
+    assert!(stderr.ends_with("], under the 2 mm clearance\n"), "{stderr}");
+    assert_eq!(c2f(&folder.0, &["check", "--clearance", "2", "winder.c2fc"]).status.code(), Some(2));
+}
+
+#[test]
+fn fit_tells_where_a_part_touches_and_which_holes_nothing_holds() {
+    // The driver against the left wall, its standoffs gone.
+    let folder = winder(
+        "fit-touch",
+        &[
+            ("winder.c2fc", "at = [-45, -5, 9]", "at = [-52, -5, 9]"),
+            ("frame.c2f", "standoffs_for(\"driver\", height = 5, screw = \"M3\");\n", ""),
+        ],
+    );
+    let output = c2f(&folder.0, &["fit", "winder.c2fc"]);
+    assert!(output.status.success());
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert!(stdout.lines().any(|line| line.starts_with("driver  0.00 mm")), "{stdout}");
+    let touch = stderr.lines().find(|line| line.contains("`driver` touches the enclosure at [-52.0, ")).unwrap_or_else(|| panic!("{stderr}"));
+    assert!(touch.starts_with("WARNING: "), "{touch}");
+    for hole in 1..=4 {
+        let message = format!("no standoff under mount hole {hole} of `driver` (at [");
+        assert!(stderr.contains(&message), "{stderr}");
+    }
+}
+
+#[test]
+fn check_finds_a_wire_through_a_wall() {
+    // The 5 V wire led out through the left wall.
+    let folder = winder("fit-wire", &[("winder.c2fc", "label = \"5 V\"\n", "label = \"5 V\"\nvia = [[-60, 0, 20]]\n")]);
+    let output = c2f(&folder.0, &["check", "winder.c2fc"]);
+    assert!(output.status.success());
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("WARNING: wire 1 (xiao.5V -> driver.VCC) runs into the enclosure at [-52.0, ")
+            && stderr.contains("], through a face facing +x: route it around with `via`, or carve it a channel_for(1)\n"),
+        "{stderr}"
+    );
+    assert_eq!(text(&output.stdout), "winder.c2fc: 3 parts, 4 wires: no errors, 1 warning\n");
+    // The same wire fits once it runs over the wall.
+    let folder = winder("fit-over", &[("winder.c2fc", "label = \"5 V\"\n", "label = \"5 V\"\nvia = [[-53.5, 0, 55]]\n")]);
+    let output = c2f(&folder.0, &["check", "winder.c2fc"]);
+    assert_eq!(text(&output.stdout), "winder.c2fc: 3 parts, 4 wires: no errors\n", "{}", text(&output.stderr));
+    // Its length to cut follows the detour.
+    let length = |dir: &Path| -> f64 {
+        let csv = text(&c2f(dir, &["wires", "--csv", "winder.c2fc"]).stdout);
+        csv.lines().nth(1).unwrap().rsplit(',').next().unwrap().parse().unwrap()
+    };
+    assert!(length(&folder.0) > length(&manifest().join("tests/fit")) + 40.0);
+}
+
+/// The night light that docs/idea-to-build.md makes: its circuit has
+/// nothing to say, every part fits, and its design keeps its three pieces.
+#[test]
+fn the_night_light_checks_and_fits_clean() {
+    let dir = manifest().join("../../examples/nightlight");
+    let check = c2f(&dir, &["check", "nightlight.c2fc"]);
+    assert!(check.status.success() && text(&check.stderr).is_empty(), "{}", text(&check.stderr));
+    assert!(text(&check.stdout).contains("no errors"), "{}", text(&check.stdout));
+    let fit = c2f(&dir, &["fit", "nightlight.c2fc"]);
+    assert!(fit.status.success() && !text(&fit.stderr).contains("WARNING"), "{}", text(&fit.stderr));
+    assert!(text(&fit.stdout).contains("everything fits"), "{}", text(&fit.stdout));
+    let json = Command::new(env!("CARGO_BIN_EXE_c2f")).args(["json", "nightlight.c2f"]).current_dir(&dir).output().unwrap();
+    assert!(json.status.success() && !text(&json.stderr).contains("WARNING"), "{}", text(&json.stderr));
+    let out = text(&json.stdout);
+    for piece in ["\"Base\"", "\"Top\"", "\"Dome\""] {
+        assert!(out.contains(piece), "{piece}: {out}");
+    }
+}
