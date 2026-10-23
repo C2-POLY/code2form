@@ -9,6 +9,8 @@
 // on photos (within about 0.5 mm): the felt and the magnet's cap. Still
 // estimated: the cone's shape and the wires' exact place. It has no
 // mount holes: glue it, or hold its rim in a ring.
+//
+// From Adafruit's page for its similar speaker: 6 g.
 
 // @description Small round speaker in a metal frame, 28 mm across and 5 mm
 // @description deep, on two wires: the sound of a small amplifier board.
@@ -16,6 +18,7 @@
 // @spec rating: 2 W, as sold
 // @spec size: 28 mm across, 5 mm deep
 // @spec wires: 60 mm leads with a JST PH 2-pin plug
+// @spec mass: 6 g
 // @source https://www.adafruit.com/product/1890 a similar 28 mm, 8 ohm speaker (Adafruit)
 
 // @pin + [-1.4, 11, 0.4] down passive "red wire"

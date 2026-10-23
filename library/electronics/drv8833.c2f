@@ -17,6 +17,9 @@
 //
 // Annotations are plain numbers. The board sits 0.04 mm up, on its pads
 // and the print underneath.
+//
+// Its mass is estimated, about 1.5 g without headers: Adafruit's DRV8833
+// breakout, a little bigger, weighs 1.5 g.
 
 // @description Dual H-bridge motor driver on a small breakout board: runs
 // @description two brushed DC motors, or one bipolar stepper motor, from 2.7
@@ -28,8 +31,10 @@
 // @spec control: PWM on IN1 to IN4; EEP (nSLEEP) high to run, ULT (nFAULT) low on a fault
 // @spec protection: overcurrent, undervoltage lockout, thermal shutdown
 // @spec size: 18.5 x 16 mm
+// @spec mass: 1.5 g without headers (estimated)
 // @source https://www.ti.com/product/DRV8833 product page
 // @source https://www.ti.com/lit/ds/symlink/drv8833.pdf datasheet
+// @source https://www.adafruit.com/product/3297 Adafruit's DRV8833 breakout (its mass)
 
 use <lib/pin_header.c2f>
 
