@@ -290,6 +290,8 @@ struct Tab {
     exploded: bool,
     explode_amount: f32,
     explode_shown: f32,
+    /// Radially, or along each part's axis.
+    explode_how: c2f_geom::Explode,
 }
 
 impl Tab {
@@ -331,6 +333,7 @@ impl Tab {
             exploded: false,
             explode_amount: EXPLODE_START,
             explode_shown: 0.0,
+            explode_how: c2f_geom::Explode::default(),
         }
     }
 
@@ -782,6 +785,7 @@ impl StudioApp {
                     self.doc.animation.play();
                 }
                 let explode = asks("exploded") && shown && !self.doc.exploded;
+                let along_axis = asks("axis");
                 match outcome.result {
                     Ok(scene) => {
                         self.doc.failed = false;
@@ -811,6 +815,10 @@ impl StudioApp {
                             self.doc.exploded = true;
                             self.doc.explode_amount = 1.0;
                             self.doc.explode_shown = 1.0;
+                            if along_axis {
+                                self.doc.explode_how = c2f_geom::Explode::Axis;
+                                self.doc.viewer.set_explode_how(c2f_geom::Explode::Axis);
+                            }
                             self.doc.viewer.set_explode(1.0);
                             self.doc.viewer.view_all();
                         }
@@ -1167,6 +1175,7 @@ impl StudioApp {
     /// with part()s, and while it is on, how far apart.
     fn explode_bar(&mut self, ctx: &egui::Context, rect: egui::Rect) {
         let mut amount = self.doc.explode_amount;
+        let mut how = self.doc.explode_how;
         let mut toggle = false;
         let on = self.doc.exploded;
         egui::Area::new(Id::new(("explode-bar", self.doc.id)))
@@ -1189,9 +1198,25 @@ impl StudioApp {
                                 .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
                                 .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
                             ui.add(slider).on_hover_text(tr("How far apart the parts are drawn", "L'écart entre les pièces"));
+                            ui.add_space(4.0);
+                            let radial = tr(
+                                "Each part carries on along the line from the center of gravity of what holds it",
+                                "Chaque pièce prolonge la ligne qui part du centre de gravité de ce qui la porte",
+                            );
+                            ui.selectable_value(&mut how, c2f_geom::Explode::Radial, tr("Radial", "Radiale"))
+                                .on_hover_text(radial);
+                            let axis = tr(
+                                "Each part slides along its own axis, the one it is built and turns about",
+                                "Chaque pièce glisse le long de son axe, celui autour duquel elle est construite et tourne",
+                            );
+                            ui.selectable_value(&mut how, c2f_geom::Explode::Axis, tr("Axis", "Axe")).on_hover_text(axis);
                         });
                     });
             });
+        if how != self.doc.explode_how {
+            self.doc.explode_how = how;
+            self.doc.viewer.set_explode_how(how);
+        }
         if amount != self.doc.explode_amount {
             self.doc.explode_amount = amount;
             // The slider moves the parts at once, without sliding.
