@@ -1,0 +1,38 @@
+// Deep groove ball bearings for the parts of the mechanical library, which
+// `use` this file: their sizes by designation, and how one looks.
+
+// The bearings the library knows: designation, bore d, outside diameter
+// D and width B, in millimeters (ISO 15, dimension series 10, 02 and 18).
+function bearing_sizes() = [
+    ["608", 8, 22, 7],
+    ["625", 5, 16, 5],
+    ["6800", 10, 19, 5],
+    ["6001", 12, 28, 8],
+];
+
+// [d, D, B] of the bearing `name`, undef for one the library does not know.
+function bearing_dimensions(name) =
+    let (found = [for (b = bearing_sizes()) if (b[0] == name) [b[1], b[2], b[3]]])
+    len(found) > 0 ? found[0] : undef;
+
+// The designations, as a sentence lists them.
+function bearing_names() = [for (b = bearing_sizes()) b[0]];
+
+// A shielded ball bearing of bore `d`, outside diameter `D` and width `B`,
+// its axis along z, its faces at z = 0 and z = B: the steel rings, their
+// outer corners chamfered, and the shields between them, set back a
+// little from the faces.
+module ball_bearing(d, D, B) {
+    $fn = 64;
+    ring = (D - d) / 4.5;
+    c = 0.3;
+    color([0.80, 0.81, 0.83]) rotate_extrude() {
+        // The outer ring, chamfered outside; the inner ring, inside.
+        polygon([[D / 2 - ring, 0], [D / 2 - c, 0], [D / 2, c], [D / 2, B - c], [D / 2 - c, B], [D / 2 - ring, B]]);
+        polygon([[d / 2 + c, 0], [d / 2 + ring, 0], [d / 2 + ring, B], [d / 2 + c, B], [d / 2, B - c], [d / 2, c]]);
+    }
+    color([0.60, 0.61, 0.64]) for (z = [0.2, B - 0.4]) translate([0, 0, z]) difference() {
+        cylinder(d = D - 2 * ring + 0.02, h = 0.2);
+        translate([0, 0, -1]) cylinder(d = d + 2 * ring - 0.02, h = 2.2);
+    }
+}

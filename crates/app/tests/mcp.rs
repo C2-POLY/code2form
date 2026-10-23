@@ -600,6 +600,86 @@ fn library_parts_have_a_sheet_and_answer_a_search() {
 }
 
 #[test]
+fn library_parts_lists_the_mechanical_parts_after_the_electronics() {
+    let (mut server, home) = server_at_home("mechanical");
+    let (is_error, report) = server.report("library_parts", json!({}));
+    assert!(!is_error, "{report}");
+    let names = part_names(&report);
+    let first_mechanical = names.iter().position(|n| n.starts_with("mechanical/")).expect("mechanical parts");
+    assert!(names[..first_mechanical].iter().all(|n| n.starts_with("electronics/")), "{names:?}");
+    assert!(names[first_mechanical..].iter().all(|n| n.starts_with("mechanical/")), "{names:?}");
+    let parts = report["parts"].as_array().unwrap();
+    let bearing = parts.iter().find(|p| p["part"] == "mechanical/bearing_608.c2f").expect("the 608");
+    assert_eq!(bearing["folder"], "mechanical");
+    assert_eq!(bearing["specs"]["dynamic load"], "3.45 kN");
+    assert_eq!(bearing["pins"], 0);
+    // Every mechanical part has its sheet, with its mass where it has one
+    // (the helpers have none); `lib/` holds what they `use`.
+    for part in parts.iter().filter(|p| p["folder"] == "mechanical" && !p["part"].as_str().unwrap().contains("/lib/")) {
+        assert!(part["description"].is_string() && part["specs"].as_object().is_some_and(|s| !s.is_empty()), "{part}");
+        assert!(part["sources"].as_array().is_some_and(|s| !s.is_empty()), "{part}");
+    }
+    for (query, first) in [
+        ("roulement 8 mm", "mechanical/bearing_608.c2f"),
+        ("vis M3", "mechanical/socket_screw.c2f"),
+        ("écrou", "mechanical/hex_nut.c2f"),
+        ("insert", "mechanical/heat_set_insert.c2f"),
+        ("accouplement", "mechanical/rigid_coupling.c2f"),
+        ("axe", "mechanical/shaft.c2f"),
+        ("moteur pas à pas", "electronics/stepper_28byj48.c2f"),
+    ] {
+        let (_, report) = server.report("library_parts", json!({ "query": query }));
+        assert_eq!(part_names(&report).first().map(String::as_str), Some(first), "{query}: {report}");
+    }
+    for query in ["pignon", "engrenage"] {
+        let (_, report) = server.report("library_parts", json!({ "query": query }));
+        let mut two = part_names(&report)[..2].to_vec();
+        two.sort();
+        assert_eq!(two, ["mechanical/gear_pair.c2f", "mechanical/spur_gear.c2f"], "{query}: {report}");
+    }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn gear_pair_meshes_at_the_center_distance() {
+    let mut server = Server::start();
+    // A 3:1 reduction of module 1: 17 and 51 teeth, 34 mm apart.
+    let code = "use <mechanical/gear_pair.c2f>\ngear_pair(ratio = 3, mod = 1, teeth = 17, thickness = 4);\n";
+    let (is_error, report) = server.report("render", json!({ "code": code }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["echo"], json!(["ECHO: \"gear_pair: 17 and 51 teeth, ratio 3, center distance 34 mm\""]));
+    // Halfway between the axes at the origin: the pinion's teeth reach
+    // 17 + 9.5 mm to the left, the wheel's 17 + 26.5 mm to the right.
+    let close = |value: &Value, expected: f64| (value.as_f64().unwrap() - expected).abs() < 0.2;
+    let bounds = &report["bounding_box"];
+    assert!(close(&bounds["min"][0], -26.5) && close(&bounds["max"][0], 43.5), "{report}");
+    assert!(close(&bounds["min"][1], -26.5) && close(&bounds["max"][1], 26.5), "{report}");
+    assert!(close(&bounds["size"][2], 4.0), "{report}");
+    // Not centered, the pinion's axis is at the origin.
+    let code = "use <mechanical/gear_pair.c2f>\ngear_pair(ratio = 2.5, mod = 2, teeth = 12, center = false);\n";
+    let (_, report) = server.report("render", json!({ "code": code }));
+    assert_eq!(report["echo"], json!(["ECHO: \"gear_pair: 12 and 30 teeth, ratio 2.5, center distance 42 mm\""]));
+    assert!(close(&report["bounding_box"]["max"][0], 42.0 + 32.0), "{report}");
+}
+
+#[test]
+fn bearing_seat_cuts_the_pocket_of_its_fit() {
+    let mut server = Server::start();
+    // A 608 slid into a 30 mm block: a 22.3 mm pocket 7 mm deep, then
+    // the shaft's hole, 15 mm across, through the 3 mm left under it.
+    let code = "use <mechanical/bearing_seat.c2f>\nbearing_seat(\"608\", \"slide\") translate([-15, -15, -10]) cube([30, 30, 10]);\n";
+    let (is_error, report) = server.report("render", json!({ "code": code }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["echo"], json!(["ECHO: \"bearing_seat: 608, slide fit, a pocket 22.3 mm across and 7 mm deep\""]));
+    let volume = report["volume"].as_f64().unwrap();
+    let pocket = std::f64::consts::PI / 4.0 * (22.3f64.powi(2) * 7.0 + 15f64.powi(2) * 3.0);
+    // The chamfer at the opening takes a little more.
+    assert!(volume < 9000.0 - pocket && volume > 9000.0 - pocket - 20.0, "{volume}: {report}");
+    let (is_error, report) = server.report("render", json!({ "code": "use <mechanical/bearing_seat.c2f>\nbearing_seat(\"609\");\n" }));
+    assert!(is_error && report.to_string().contains("unknown bearing"), "{report}");
+}
+
+#[test]
 fn check_part_finds_what_does_not_hold_together() {
     let (mut server, home) = server_at_home("check");
     // The library's parts are clean.
@@ -612,6 +692,17 @@ fn check_part_finds_what_does_not_hold_together() {
         let (is_error, report) = server.report("check_part", json!({ "path": format!("electronics/{name}") }));
         assert!(!is_error && report["errors"] == json!([]) && report["warnings"] == json!([]), "{name}: {report}");
         assert!(report["bounding_box"]["size"].is_array(), "{name}: {report}");
+    }
+    // And so are the mechanical ones, which have no pins.
+    let library = library.join("../mechanical");
+    let mut files: Vec<_> = std::fs::read_dir(&library).unwrap().map(|e| e.unwrap().path()).collect();
+    files.retain(|p| p.extension().is_some_and(|e| e == "c2f"));
+    assert!(files.len() >= 12);
+    for file in files {
+        let name = file.file_name().unwrap().to_string_lossy().into_owned();
+        let (is_error, report) = server.report("check_part", json!({ "path": format!("mechanical/{name}") }));
+        assert!(!is_error && report["errors"] == json!([]) && report["warnings"] == json!([]), "{name}: {report}");
+        assert!(report["bounding_box"]["size"].is_array() && report["pins"] == 0, "{name}: {report}");
     }
 
     let part = "\

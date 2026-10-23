@@ -13,8 +13,9 @@ use serde_json::{Value, json};
 use super::{IMAGE_SIZE, Tool, base64, picture, pretty, schema_of, text};
 use crate::circuit::{DEFAULT_MARGIN, assemble, bom, fit, placed_warnings, wires};
 
-/// The library folder parts are listed from.
-const ELECTRONICS: &str = "electronics";
+/// The library folders parts are listed from, in the order they are
+/// listed: the electronics, then the mechanical parts and their helpers.
+const FOLDERS: [&str; 2] = ["electronics", "mechanical"];
 /// A wire's radius in pictures, in millimeters, thicker in a highlighted
 /// net, and the sides of its tube.
 const WIRE_RADIUS: f64 = 0.5;
@@ -38,13 +39,17 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "library_parts",
-            "title": "List the electronics parts",
-            "description": "Lists the parts in the `electronics/` folders of the library paths: the name a circuit gives as \
-                            `part` (as `electronics/xiao_esp32s3.c2f`), the file, its description (its `// @description`, \
-                            else its first comment line), its specs and its sources (product page, datasheet). With \
+            "title": "List the library's parts",
+            "description": "Lists the parts in the `electronics/` then the `mechanical/` folders of the library paths: the \
+                            name a circuit gives as `part` and a design `use`s (as `electronics/xiao_esp32s3.c2f`, \
+                            `mechanical/bearing_608.c2f`), its `folder`, the file, its description (its `// @description`, \
+                            else its first comment line), its specs (with `mass`, `torque`, `speed`, load ratings) and its \
+                            sources (product page, datasheet, standard). `mechanical/` holds bearings, a shaft, screws, \
+                            nuts, heat-set inserts, a coupling, a parametric spur gear, and the helpers `bearing_seat` \
+                            and `gear_pair` that model a bearing's pocket and a gear reduction. With \
                             `query`, only the parts that answer it, best first, with their score: plain words in English \
                             or French, matched against the name, description, specs and pins, whatever the case and \
-                            accents, with the domain's synonyms (`micro I2S`, `driver moteur`, `haut-parleur`).",
+                            accents, with the domain's synonyms (`micro I2S`, `driver moteur`, `roulement 8 mm`, `vis M3`).",
             "inputSchema": schema_of(json!({
                 "query": { "type": "string", "description": "Words to search for, as `I2S microphone` or `capteur de température`." },
             }), &[]),
@@ -137,23 +142,26 @@ pub fn tool(name: &str) -> Option<Tool> {
 }
 
 fn library_parts(args: &Value) -> Result<Vec<Value>, String> {
-    let mut parts: Vec<(String, PathBuf)> = Vec::new();
+    let mut parts: Vec<(usize, String, PathBuf)> = Vec::new();
     for library in c2f_eval::default_library_paths() {
-        let mut files = Vec::new();
-        walk(&library.join(ELECTRONICS), &mut files);
-        for file in files {
-            let Ok(name) = file.strip_prefix(&library) else { continue };
-            let name = name.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
-            // The first library that has a name is the one a circuit reads.
-            if !parts.iter().any(|(n, _)| *n == name) {
-                parts.push((name, file));
+        for (folder, dir) in FOLDERS.iter().enumerate() {
+            let mut files = Vec::new();
+            walk(&library.join(dir), &mut files);
+            for file in files {
+                let Ok(name) = file.strip_prefix(&library) else { continue };
+                let name = name.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                // The first library that has a name is the one a circuit reads.
+                if !parts.iter().any(|(_, n, _)| *n == name) {
+                    parts.push((folder, name, file));
+                }
             }
         }
     }
+    // By folder, then by name.
     parts.sort();
     let mut documents = Vec::new();
     let mut sheets = Vec::new();
-    for (name, file) in &parts {
+    for (folder, name, file) in &parts {
         let src = std::fs::read_to_string(file).unwrap_or_default();
         let (annotations, _) = annotations::read(&src);
         let description = match &annotations.description {
@@ -168,6 +176,7 @@ fn library_parts(args: &Value) -> Result<Vec<Value>, String> {
             annotations.sources.iter().map(|source| json!({ "url": source.url, "label": source.label })).collect();
         sheets.push(json!({
             "part": name,
+            "folder": FOLDERS[*folder],
             "file": file.display().to_string(),
             "description": description,
             "specs": specs,

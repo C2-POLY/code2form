@@ -20,6 +20,10 @@
 // Annotations are plain numbers: the pins are the lead ends of an 8 mm can
 // (3.5 mm pitch), and stay there for other diameters. They take 16 V, a
 // common rating for the 5 V rail: edit them for another capacitor.
+//
+// Its mass is estimated, about 0.8 g for the default 8 x 12 mm can, more
+// for a bigger one: an 8 x 11.5 mm Panasonic FR weighs about 1 g with its
+// full leads.
 
 // @description Radial aluminium electrolytic capacitor standing on its two
 // @description leads: the bulk capacitor of a supply rail. Polarized.
@@ -27,6 +31,7 @@
 // @spec can: 4 to 18 mm across, 5 to 40 mm high (8 x 12 mm by default)
 // @spec lead pitch: 2 mm for a 5 mm can to 7.5 mm for 16 to 18 mm
 // @spec polarity: the longer lead is +, the striped side -
+// @spec mass: 0.8 g for an 8 x 12 mm can (estimated)
 // @source https://en.wikipedia.org/wiki/Aluminum_electrolytic_capacitor how they are made
 
 /* [Size] */

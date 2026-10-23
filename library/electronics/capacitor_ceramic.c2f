@@ -14,6 +14,8 @@
 //
 // Annotations are plain numbers: the pins are the lead ends at the 2.54 mm
 // pitch, and stay there for 5.08 mm.
+//
+// Its mass is estimated, about 0.2 g: KEMET does not give it.
 
 // @description 100 nF through-hole ceramic capacitor: the decoupling
 // @description capacitor placed next to a chip's supply pins.
@@ -22,6 +24,7 @@
 // @spec lead pitch: 2.54 or 5.08 mm
 // @spec polarity: none
 // @spec body: about 4 x 2.5 x 3.8 mm, dipped epoxy
+// @spec mass: 0.2 g (estimated)
 // @source https://www.kemet.com KEMET (the C315 to C330 Goldmax datasheet)
 
 /* [Size] */

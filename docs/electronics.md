@@ -174,24 +174,42 @@ default parameters put it.
 
 `library/electronics` holds annotated parts ready to use: the XIAO
 ESP32-S3 and the ESP32-S3-DevKitC-1, DRV8833, MAX98357A and INMP441
-modules, capacitors, a speaker, a DC motor and a touch plate (see
-`library/README.md`). Read their pins the same way:
+modules, capacitors, a speaker, a DC motor, an N20 gear motor, a
+28BYJ-48 stepper and a touch plate (see `library/README.md`). Each sheet
+gives the part's mass, and a motor's torque and speed, from its maker
+where one gives them. Read their pins the same way:
 
 ```console
 $ c2f pins library/electronics/dc_motor.c2f
-19: @description Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies): the motor of toys and small robots, run from a few volts.
-22: @spec motor: brushed DC, size 130
-23: @spec voltage: up to 6 V as annotated; Mabuchi's FA-130RA is rated 1.5 to 3 V, check your copy
-24: @spec size: 20.1 x 15.1 x 25.1 mm without its boss
-25: @spec shaft: 2 mm across
-26: @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
-27: @source https://www.mabuchi-motor.com Mabuchi Motor (the FA-130RA product page and drawing)
-33: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
-34: @pin - [0, 5, 7.55] -x passive 6V
-35: @mount_hole [25.1, -6, 7.55] d=2 +x
-36: @mount_hole [25.1, 6, 7.55] d=2 +x
-37: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
+24: @description Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies): the motor of toys and small robots, run from a few volts.
+27: @spec motor: brushed DC, size 130
+28: @spec voltage: up to 6 V as annotated; Mabuchi's FA-130RA is rated 1.5 to 3 V, check your copy
+29: @spec size: 20.1 x 15.1 x 25.1 mm without its boss
+30: @spec shaft: 2 mm across
+31: @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
+32: @spec torque: 0.59 mN·m at 1.5 V, at its best efficiency (6990 rpm)
+33: @spec stall torque: 2.55 mN·m at 1.5 V
+34: @spec speed: 9100 rpm with no load at 1.5 V
+35: @spec mass: 17 g
+36: @source https://product.mabuchi-motor.com/detail.html?id=9 Mabuchi FA-130RA product page (ratings, mass, drawing)
+42: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
+43: @pin - [0, 5, 7.55] -x passive 6V
+44: @mount_hole [25.1, -6, 7.55] d=2 +x
+45: @mount_hole [25.1, 6, 7.55] d=2 +x
+46: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
 ```
+
+What turns and holds the motor's work is in `library/mechanical`: ball
+bearings (608, 625, 6800, 6001, with their load ratings), a shaft, ISO
+4762 screws and ISO 4032 nuts from M2 to M5, brass heat-set inserts with
+the hole to print for each, a rigid shaft coupling and a parametric
+involute spur gear, each with its mass and its sources. Two helpers model
+what a mechanical review asks for: `bearing_seat("608", fit = "press")`
+cuts a bearing's pocket with clearances chosen for FDM printing, and
+`gear_pair(ratio = 3, mod = 1)` places two meshing gears at their center
+distance and echoes the ratio they give. `library_parts` and the
+catalogue list them after the electronics, and find them in French or
+English (`roulement 8 mm`, `pignon`, `vis M3`).
 
 ## 2. Write a circuit
 

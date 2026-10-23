@@ -1,0 +1,64 @@
+// Hexagon nut, ISO 4032 (the regular nut, as DIN 934), M2 to M5: its six
+// flats, its chamfered corners, the hole. The thread is not drawn. Its
+// axis along z, its faces at z = 0 and z = m, two flats facing ±x.
+// https://www.fasteners.eu/standards/ISO/4032/
+//
+// From ISO 4032's table, as fasteners.eu gives it: the width across flats
+// (s), across corners (e min) and the height (m max). Estimated: the
+// mass, from steel's density (7.85 g/cm³) and the drawn volume, about
+// 0.36 g for M3; the file echoes it for the size set.
+//
+// To trap one in a printed part: a hexagonal pocket of its width across
+// flats plus 0.2 to 0.3 mm, as deep as the nut is high plus 0.2 mm,
+// cylinder(d = (s + 0.3) / cos(30), h = m + 0.2, $fn = 6).
+
+// @description Hexagon nut ISO 4032 (DIN 934), M2, M2.5, M3, M4 or M5: for
+// @description the socket head screws, trapped in a hexagonal pocket of a
+// @description printed part.
+// @spec standard: ISO 4032, steel 8 or A2 stainless
+// @spec sizes: M2, M2.5, M3, M4, M5
+// @spec width across flats: M2 4, M2.5 5, M3 5.5, M4 7, M5 8 mm
+// @spec height: M2 1.6, M2.5 2, M3 2.4, M4 3.2, M5 4.7 mm
+// @spec mass: 0.36 g for M3 in steel (estimated from its volume)
+// @source https://www.fasteners.eu/standards/ISO/4032/ ISO 4032 dimensions at fasteners.eu
+
+/* [Nut] */
+// The thread's size.
+size = "M3"; // [M2, M2.5, M3, M4, M5]
+
+// The sizes of ISO 4032: name, thread diameter, across flats (s), across
+// corners (e min), height (m max).
+function hex_nut_sizes() = [
+    ["M2", 2, 4, 4.32, 1.6],
+    ["M2.5", 2.5, 5, 5.45, 2],
+    ["M3", 3, 5.5, 6.01, 2.4],
+    ["M4", 4, 7, 7.66, 3.2],
+    ["M5", 5, 8, 8.79, 4.7],
+];
+
+// The row of `size`, undef for a size the file does not know.
+function hex_nut_size(size) =
+    let (found = [for (s = hex_nut_sizes()) if (s[0] == size) s]) len(found) > 0 ? found[0] : undef;
+
+// An ISO 4032 nut of `size` (M2 to M5).
+module hex_nut(size = "M3") {
+    n = hex_nut_size(size);
+    assert(n != undef, str("hex_nut: the size is M2, M2.5, M3, M4 or M5, not \"", size, "\""));
+    d = n[1];
+    s = n[2];
+    e = n[3];
+    m = n[4];
+    volume = (sqrt(3) / 2 * s * s - PI * d * d / 4) * m;
+    echo(str("hex_nut: ", size, ", about ", round(volume * 7.85 / 10) / 100, " g in steel"));
+    color([0.72, 0.73, 0.75]) difference() {
+        // The hexagon, its corners chamfered by a cone at each face.
+        intersection() {
+            rotate(30) cylinder(d = s / cos(30), h = m, $fn = 6);
+            cylinder(r1 = e / 2 - 0.1, r2 = e / 2 - 0.1 + m, h = m, $fn = 48);
+            cylinder(r1 = e / 2 - 0.1 + m, r2 = e / 2 - 0.1, h = m, $fn = 48);
+        }
+        translate([0, 0, -1]) cylinder(d = d, h = m + 2, $fn = 32);
+    }
+}
+
+hex_nut(size);

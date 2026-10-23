@@ -14,6 +14,8 @@
 // board may need a level shifter (74AHCT125) when the wire is long.
 //
 // Annotations are plain numbers.
+//
+// From the product page too: 3.3 g.
 
 // @description Ring of twelve RGB LEDs, each with its own controller (WS2812B or
 // @description SK6812), 36.8 mm across, driven from one data pin at 5 V: the
@@ -23,6 +25,7 @@
 // @spec current: about 18 mA per LED and color, 650 mA at full white
 // @spec data: one line in, one out to chain the next ring
 // @spec size: 36.8 mm outside, 23.3 mm inside, 3.6 mm thick
+// @spec mass: 3.3 g
 // @source https://www.adafruit.com/product/1643 product page
 // @source https://learn.adafruit.com/adafruit-neopixel-uberguide/best-practices "NeoPixel wiring guide"
 
