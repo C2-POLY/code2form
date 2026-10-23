@@ -155,6 +155,9 @@ pub struct Renderer {
     solid_mesh: RenderMesh,
     pending_colors: Option<Vec<[f32; 4]>>,
     pending_positions: Option<Vec<[f32; 3]>>,
+    /// A design's solid to draw instead of the scene's: its parts apart,
+    /// or back together, in the exploded view.
+    pending_solid: Option<RenderMesh>,
 }
 
 impl Renderer {
@@ -229,12 +232,14 @@ impl Renderer {
                 solid_mesh: RenderMesh::default(),
                 pending_colors: None,
                 pending_positions: None,
+            pending_solid: None,
             })
         }
     }
 
     /// Replaces the meshes on the next paint.
     pub fn set_scene(&mut self, scene: Scene) {
+        self.pending_solid = None;
         self.pending_scene = Some(scene);
     }
 
@@ -248,6 +253,12 @@ impl Renderer {
     /// a circuit moves before it renders again.
     pub fn set_solid_positions(&mut self, positions: Vec<[f32; 3]>) {
         self.pending_positions = Some(positions);
+    }
+
+    /// Draws `solid` instead of the scene's solid from the next paint, until
+    /// the next scene: a design's parts apart in the exploded view.
+    pub fn set_solid(&mut self, solid: RenderMesh) {
+        self.pending_solid = Some(solid);
     }
 
     /// Replaces a circuit's wires and pin dots on the next paint.
@@ -287,6 +298,14 @@ impl Renderer {
                 }
                 // Only a circuit recolors its solid.
                 self.solid_mesh = if scene.parts.is_empty() { RenderMesh::default() } else { scene.solid };
+            }
+        }
+        if let Some(solid) = self.pending_solid.take() {
+            unsafe {
+                if let Some(buffer) = self.solid.take() {
+                    delete(gl, buffer);
+                }
+                self.solid = upload_mesh(gl, &solid);
             }
         }
         let colors = self.pending_colors.take().filter(|c| c.len() == self.solid_mesh.positions.len());

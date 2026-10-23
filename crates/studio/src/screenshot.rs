@@ -8,7 +8,8 @@
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
 //! `mic` mid-drag at x 40, y 10; `settings:view` shows a page of the
 //! settings (`app-icon`, `editor`, `view`, `export`, `libraries`,
-//! `shortcuts`); `play` plays a design that reads `$t`.
+//! `shortcuts`); `play` plays a design that reads `$t`, and `exploded`
+//! draws its part()s apart (`play,exploded` does both).
 //! `CODE2FORM_APPEARANCE` picks the theme.
 
 use std::path::PathBuf;
