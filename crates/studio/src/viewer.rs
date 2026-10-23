@@ -134,6 +134,7 @@ pub struct Viewer {
     /// (assembled) to 1; the scene's solid, to show at 0.
     exploded: Option<Arc<c2f_geom::Exploded>>,
     explode: f32,
+    explode_how: c2f_geom::Explode,
     assembled: RenderMesh,
     /// The box around the parts all the way apart, framed while exploded.
     exploded_bounds: Option<(Vec3, Vec3)>,
@@ -196,6 +197,7 @@ impl Viewer {
             scene_source: String::new(),
             exploded: None,
             explode: 0.0,
+            explode_how: c2f_geom::Explode::default(),
             assembled: RenderMesh::default(),
             exploded_bounds: None,
             dragging: None,
@@ -230,8 +232,12 @@ impl Viewer {
         self.scene_source = scene.source.clone();
         self.exploded = scene.exploded.clone();
         self.assembled = if self.exploded.is_some() { scene.solid.clone() } else { RenderMesh::default() };
-        self.exploded_bounds =
-            self.exploded.as_ref().and_then(|e| e.at(1.0).bounds()).map(|(lo, hi)| (Vec3::from(lo), Vec3::from(hi)));
+        // Framed either way the parts come apart.
+        self.exploded_bounds = self.exploded.as_ref().and_then(|e| {
+            let apart = [c2f_geom::Explode::Radial, c2f_geom::Explode::Axis].map(|how| e.at(1.0, how).bounds());
+            let apart = apart.into_iter().flatten().map(|(lo, hi)| (Vec3::from(lo), Vec3::from(hi)));
+            apart.reduce(|(l1, h1), (l2, h2)| (l1.min(l2), h1.max(h2)))
+        });
         self.part_ranges = scene.parts.clone();
         self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
@@ -269,9 +275,17 @@ impl Viewer {
         }
     }
 
+    /// Draws the parts apart as `how` says, radially or along their axis.
+    pub fn set_explode_how(&mut self, how: c2f_geom::Explode) {
+        if how != self.explode_how {
+            self.explode_how = how;
+            self.show_exploded();
+        }
+    }
+
     fn show_exploded(&mut self) {
         let Some(exploded) = &self.exploded else { return };
-        let solid = if self.explode > 0.0 { exploded.at(self.explode) } else { self.assembled.clone() };
+        let solid = if self.explode > 0.0 { exploded.at(self.explode, self.explode_how) } else { self.assembled.clone() };
         if let Ok(renderer) = &self.renderer {
             if let Ok(mut r) = renderer.lock() {
                 r.set_solid(solid);

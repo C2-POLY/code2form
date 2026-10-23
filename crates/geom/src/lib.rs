@@ -19,7 +19,7 @@ mod primitives;
 mod text;
 
 pub use build::{DEFAULT_COLOR, Model, render, render_in};
-pub use explode::{Exploded, exploded};
+pub use explode::{Explode, Exploded, exploded};
 pub use collide::{Placement, TOUCHING, collisions};
 pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
 pub use image::VIEWS;

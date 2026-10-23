@@ -19,13 +19,22 @@ they are. Written in Rust, it renders as you type.
   over its top left: fit, the views, the grid, the axes, the layers and
   the pauses.
 - **Exploded view**: a design whose pieces are written in `part("name")`
-  gets an Exploded button among the view's tools. It slides the parts apart, so
-  one sees how they fit together, and a slider sets how far. Each part
-  moves away from the center of what it is in (the model, or its parent
-  part), by half the size of that; a part in a part moves with its
-  parent, then away from it; a part that is the whole model stays. Only
-  the view changes: the model, its exports and its sizes stay
-  assembled, and an animated model plays apart.
+  gets an Exploded button among the view's tools, to see how it goes
+  together. It slides the parts apart, a slider sets how far, and two
+  complementary ways choose how:
+  - **Radial**: each part carries on along the line from the center of
+    gravity of the model (or of its parent part) to its own, so a part
+    far from the center goes further; one at the center still moves a
+    quarter of the model's size.
+  - **Axis**: each part slides along its own Z axis, the axis it is built
+    and turns about as its `rotate()`s place it, by half the size of its
+    parent: a drum comes out of its frame, a roller slides along its
+    shaft.
+
+  Either way, a part in a part moves with its parent, then 1.5 times
+  further from it at each level down, and a part that is the whole
+  model stays. Only the view changes: the model, its exports and its
+  sizes stay assembled, and an animated model plays apart.
 - **Examples**: the Examples menu lists the designs and circuits that
   come with the app, by subject: a chest that opens, three gears that
   drive one another and a walking mannequin (Game), and the Grogu

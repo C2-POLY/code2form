@@ -60,6 +60,9 @@ fn circuit_files() -> (&'static str, &'static str) {
 /// How fast the exploded view slides its parts apart and back: the whole
 /// way in a third of a second.
 const EXPLODE_SPEED: f32 = 3.0;
+/// The height of the view's tools and the gap under them, where the
+/// exploded view's card goes.
+const VIEW_TOOLS_HEIGHT: f32 = 44.0;
 
 /// How far apart the exploded view first draws the parts: a quarter of the
 /// way, enough to see the gaps without losing the assembly.
@@ -83,8 +86,12 @@ const ICONS_PER_ROW: usize = 5;
 /// The height of the settings' pages, so that the window keeps its size.
 const SETTINGS_HEIGHT: f32 = 380.0;
 
+/// A color the settings offer: its name, in the interface's language, and
+/// its value.
+type NamedColor = (fn() -> &'static str, [u8; 3]);
+
 /// The model colors the settings offer, besides the color picker.
-const MODEL_COLORS: [(fn() -> &'static str, [u8; 3]); 8] = [
+const MODEL_COLORS: [NamedColor; 8] = [
     (|| tr("Yellow", "Jaune"), settings::MODEL_COLOR),
     (|| tr("Orange", "Orange"), [240, 140, 50]),
     (|| tr("Red", "Rouge"), [214, 72, 66]),
@@ -289,6 +296,8 @@ struct Tab {
     exploded: bool,
     explode_amount: f32,
     explode_shown: f32,
+    /// Radially, or along each part's axis.
+    explode_how: c2f_geom::Explode,
 }
 
 impl Tab {
@@ -330,6 +339,7 @@ impl Tab {
             exploded: false,
             explode_amount: EXPLODE_START,
             explode_shown: 0.0,
+            explode_how: c2f_geom::Explode::default(),
         }
     }
 
@@ -787,6 +797,7 @@ impl StudioApp {
                     self.doc.animation.play();
                 }
                 let explode = asks("exploded") && shown && !self.doc.exploded;
+                let along_axis = asks("axis");
                 match outcome.result {
                     Ok(scene) => {
                         self.doc.failed = false;
@@ -814,7 +825,12 @@ impl StudioApp {
                         }
                         if explode && self.doc.viewer.can_explode() {
                             self.doc.exploded = true;
+                            self.doc.explode_amount = 1.0;
                             self.doc.explode_shown = 1.0;
+                            if along_axis {
+                                self.doc.explode_how = c2f_geom::Explode::Axis;
+                                self.doc.viewer.set_explode_how(c2f_geom::Explode::Axis);
+                            }
                             self.doc.viewer.set_explode(1.0);
                             self.doc.viewer.view_all();
                         }
@@ -2517,8 +2533,9 @@ impl StudioApp {
         let card = !self.doc.is_circuit();
         // The floating bars cover the view's edges: its own overlays keep
         // clear of them.
+        let exploding = self.doc.exploded && self.doc.viewer.can_explode() && !self.doc.is_circuit();
         self.doc.viewer.insets = viewer::Insets {
-            top: 48.0,
+            top: if exploding { 12.0 + 2.0 * VIEW_TOOLS_HEIGHT } else { 48.0 },
             bottom: if animated { 58.0 } else { 0.0 },
             right: if card && self.doc.customizer_shown() { 300.0 } else { 0.0 },
         };
@@ -2653,12 +2670,13 @@ impl StudioApp {
 
     /// The view's tools, over its top left: fit, the views, the grid, the
     /// axes, the layers and the pauses; and for a design with part()s, the
-    /// exploded view and how far apart.
+    /// exploded view, how far apart and how: radially or along each axis.
     fn view_tools(&mut self, ctx: &egui::Context, rect: egui::Rect) {
         let explodable = self.doc.viewer.can_explode() && !self.doc.is_circuit();
         let circuit = self.doc.is_circuit();
         let on = self.doc.exploded;
         let mut amount = self.doc.explode_amount;
+        let mut how = self.doc.explode_how;
         let mut explode = false;
         egui::Area::new(Id::new(("view-tools", self.doc.id)))
             .fixed_pos(rect.left_top() + Vec2::splat(12.0))
@@ -2717,17 +2735,44 @@ impl StudioApp {
                             tool_separator(ui);
                             let hint = tr("Exploded view: draw the model's part()s apart, to see how they fit together", "Vue éclatée : écarter les part() du modèle, pour voir comment elles s'assemblent");
                             explode = icons::button(ui, Icon::Explode, on, hint).clicked();
-                            if on {
-                                ui.spacing_mut().slider_width = 110.0;
-                                let slider = egui::Slider::new(&mut amount, 0.0..=1.0)
-                                    .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
-                                    .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
-                                ui.add(slider).on_hover_text(tr("How far apart the parts are drawn", "L'écart entre les pièces"));
-                            }
                         }
                     });
                 });
             });
+        // How far apart and how, on a card of its own under the tools, so
+        // that they keep clear of the parameters.
+        if explodable && on {
+            egui::Area::new(Id::new(("explode-tools", self.doc.id)))
+                .fixed_pos(rect.left_top() + Vec2::new(12.0, 12.0 + VIEW_TOOLS_HEIGHT))
+                .order(egui::Order::Middle)
+                .show(ctx, |ui| {
+                    card_frame().inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().slider_width = 110.0;
+                            let slider = egui::Slider::new(&mut amount, 0.0..=1.0)
+                                    .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
+                                    .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
+                                ui.add(slider).on_hover_text(tr("How far apart the parts are drawn", "L'écart entre les pièces"));
+                                ui.add_space(4.0);
+                                let radial = tr(
+                                    "Each part carries on along the line from the center of gravity of what holds it",
+                                    "Chaque pièce prolonge la ligne qui part du centre de gravité de ce qui la porte",
+                                );
+                                ui.selectable_value(&mut how, c2f_geom::Explode::Radial, tr("Radial", "Radiale"))
+                                    .on_hover_text(radial);
+                                let axis = tr(
+                                    "Each part slides along its own axis, the one it is built and turns about",
+                                    "Chaque pièce glisse le long de son axe, celui autour duquel elle est construite et tourne",
+                                );
+                                ui.selectable_value(&mut how, c2f_geom::Explode::Axis, tr("Axis", "Axe")).on_hover_text(axis);
+                        });
+                    });
+                });
+        }
+        if how != self.doc.explode_how {
+            self.doc.explode_how = how;
+            self.doc.viewer.set_explode_how(how);
+        }
         if amount != self.doc.explode_amount {
             self.doc.explode_amount = amount;
             // The slider moves the parts at once, without sliding.
