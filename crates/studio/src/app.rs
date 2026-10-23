@@ -80,8 +80,12 @@ const ICONS_PER_ROW: usize = 5;
 /// The height of the settings' pages, so that the window keeps its size.
 const SETTINGS_HEIGHT: f32 = 380.0;
 
+/// A color the settings offer: its name, in the interface's language, and
+/// its value.
+type NamedColor = (fn() -> &'static str, [u8; 3]);
+
 /// The model colors the settings offer, besides the color picker.
-const MODEL_COLORS: [(fn() -> &'static str, [u8; 3]); 8] = [
+const MODEL_COLORS: [NamedColor; 8] = [
     (|| tr("Yellow", "Jaune"), settings::MODEL_COLOR),
     (|| tr("Orange", "Orange"), [240, 140, 50]),
     (|| tr("Red", "Rouge"), [214, 72, 66]),
