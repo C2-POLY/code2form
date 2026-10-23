@@ -12,10 +12,16 @@ they are. Written in Rust, it renders as you type.
   Open Recent lists the last ten files opened or saved; each file opens in
   a tab of its own, with its view, console and undo history, and the tabs
   come back at the next launch.
+- **The window**: one bar across the top holds the File menu, the tabs,
+  a switch between the code alone, the code beside the view and the view
+  alone, then Render, Export and the settings. The console folds under
+  the code (under the view when it is alone), and the view's tools float
+  over its top left: fit, the views, the grid, the axes, the layers and
+  the pauses.
 - **Exploded view**: a design whose pieces are written in `part("name")`
-  gets an Exploded button over the view, to see how it goes together. It
-  slides the parts apart, a slider sets how far, and two complementary
-  ways choose how:
+  gets an Exploded button among the view's tools, to see how it goes
+  together. It slides the parts apart, a slider sets how far, and two
+  complementary ways choose how:
   - **Radial**: each part carries on along the line from the center of
     gravity of the model (or of its parent part) to its own, so a part
     far from the center goes further; one at the center still moves a
@@ -49,16 +55,17 @@ they are. Written in Rust, it renders as you type.
   the keys of each action. The grid, the axes and the layer height are
   kept as left.
 - **Animation**: a design that reads `$t`, the animation time from 0 to
-  1 as in the reference implementation, gets a bar under the view to
-  play it: play and pause, the time's slider, frames a second and steps
+  1 as in the reference implementation, gets a bar along the bottom of the
+  view to play it: play and pause, the time's slider, frames a second and steps
   from 0 to 1. Each frame renders once and stays in memory, so the second
   time round plays at full speed; an edit renders the frames again.
   `c2f -D '$t=0.25'` and the MCP tools' `parameters` (`{"$t": 0.25}`)
   set the time.
 - **Customizer**: the parameters a design declares in comments
   (`width = 20; // [10:100]`) get sliders, dropdowns, checkboxes and text
-  fields, grouped by `/* [Group] */`; presets are saved next to the design
-  in a `.json` file.
+  fields, grouped by `/* [Group] */`, on a card over the view's top right
+  that folds to its title; presets are saved next to the design in a
+  `.json` file.
 - **Geometry**: CSG with [Manifold](https://github.com/elalish/manifold)
   (through its Rust port), `text()` with real font shaping, `import()` of
   STL, OFF, AMF, 3MF, DXF and SVG, `surface()` from `.dat` and PNG.

@@ -16,6 +16,7 @@ mod examples;
 mod find;
 mod highlight;
 mod icon_setting;
+mod icons;
 mod inspect;
 mod mount;
 mod open_events;

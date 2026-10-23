@@ -398,7 +398,7 @@ enclosure and the wires at a height.
 
 ### Catalogue
 
-The **Catalogue** button in the toolbar (for a circuit) opens a panel
+The **Catalogue** button in the top bar (for a circuit) opens a panel
 of every part under `electronics/` in the library folders: the
 library's, the app's and your own (`~/Documents/Code2Form/libraries/electronics`),
 a part found in several listed once, from the first folder searched.
@@ -479,7 +479,7 @@ Assembly mode.
 
 ### Assembly mode
 
-The **Assembly** button in the toolbar (for a circuit with wires) walks
+The **Assembly** button in the top bar (for a circuit with wires) walks
 you through the wiring, one wire at a time, in the file's order.
 
 A bar over the view gives the wire to lay, as "Red wire: xiao 5V (USB 5
