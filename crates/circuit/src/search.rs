@@ -168,6 +168,10 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("broche", "pin"),
     ("resistance", "resistor"),
     ("lumiere", "light"),
+    ("lampe", "light"),
+    ("eclairage", "light"),
+    ("anneau", "ring"),
+    ("couronne", "ring"),
     ("sortie", "output"),
     ("entree", "input"),
     ("taille", "size"),
@@ -366,6 +370,9 @@ mod tests {
         assert_eq!(first("moteur"), Some("dc_motor"));
         assert_eq!(first("tactile"), Some("touch_plate"));
         assert_eq!(first("xiao"), Some("xiao_esp32s3"));
+        assert_eq!(first("anneau LED RGB"), Some("neopixel_ring_12"));
+        assert_eq!(first("NeoPixel"), Some("neopixel_ring_12"));
+        assert_eq!(first("lumière"), Some("neopixel_ring_12"));
         let sorted = |query: &str| {
             let mut names = found(query);
             names.sort();

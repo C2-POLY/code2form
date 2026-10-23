@@ -285,3 +285,22 @@ fn check_finds_a_wire_through_a_wall() {
     };
     assert!(length(&folder.0) > length(&manifest().join("tests/fit")) + 40.0);
 }
+
+/// The night light that docs/idea-to-build.md makes: its circuit has
+/// nothing to say, every part fits, and its design keeps its three pieces.
+#[test]
+fn the_night_light_checks_and_fits_clean() {
+    let dir = manifest().join("../../examples/nightlight");
+    let check = c2f(&dir, &["check", "nightlight.c2fc"]);
+    assert!(check.status.success() && text(&check.stderr).is_empty(), "{}", text(&check.stderr));
+    assert!(text(&check.stdout).contains("no errors"), "{}", text(&check.stdout));
+    let fit = c2f(&dir, &["fit", "nightlight.c2fc"]);
+    assert!(fit.status.success() && !text(&fit.stderr).contains("WARNING"), "{}", text(&fit.stderr));
+    assert!(text(&fit.stdout).contains("everything fits"), "{}", text(&fit.stdout));
+    let json = Command::new(env!("CARGO_BIN_EXE_c2f")).args(["json", "nightlight.c2f"]).current_dir(&dir).output().unwrap();
+    assert!(json.status.success() && !text(&json.stderr).contains("WARNING"), "{}", text(&json.stderr));
+    let out = text(&json.stdout);
+    for piece in ["\"Base\"", "\"Top\"", "\"Dome\""] {
+        assert!(out.contains(piece), "{piece}: {out}");
+    }
+}

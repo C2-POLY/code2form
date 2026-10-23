@@ -131,7 +131,7 @@ they are. Written in Rust, it renders as you type.
   from a template.
 - **Electronics library**: annotated parts in `library/electronics`
   (XIAO ESP32-S3, ESP32-S3-DevKitC-1, DRV8833, MAX98357A, INMP441,
-  capacitors, a speaker, a DC motor, a touch plate); see
+  a NeoPixel ring, capacitors, a speaker, a DC motor, a touch plate); see
   `library/README.md`.
 - **Enclosures**: a `.c2f` file that names its circuit
   (`// @circuit grogu.c2fc`) gets `standoffs_for()`, `holes_for()`,
@@ -184,7 +184,8 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 The server also offers two prompts that lead an agent from an idea to a
 printed object with its electronics: `design_object` (the model first,
 until you approve it) then `add_electronics` (see the
-[guide](docs/electronics.md#from-an-idea-to-a-build)).
+[guide](docs/electronics.md#from-an-idea-to-a-build), and
+[a night light](docs/idea-to-build.md) made that way, step by step).
 
 For electronics, the agent finds parts and describes a circuit (`.c2fc`).
 The circuit tools take the circuit's text as `code` (its part files
