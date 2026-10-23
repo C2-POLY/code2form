@@ -247,13 +247,14 @@ pub fn instantiate<'p>(
         // Not in the reference: a part kept apart from the rest of the
         // model, for glTF exports.
         "part" => {
-            let p = bind!(["name"]);
+            let p = bind!(["name"], ["joint", "axis", "limits"]);
             let name = match p.get("name") {
                 Value::Str(name) => name.to_string(),
                 Value::Undef => "part".to_string(),
                 other => other.to_display(),
             };
-            with_children!(p, NodeKind::Part { name })
+            let joint = joint(interp, &name, &p);
+            with_children!(p, NodeKind::Part { name, joint })
         }
         // Not in the reference: an enclosure's standoffs, screw holes and
         // cutouts, and the parts themselves, from the circuit it names.
@@ -283,7 +284,7 @@ pub fn instantiate<'p>(
             leaf(NodeKind::Surface { file, center: p.flag("center"), invert: p.flag("invert"), timestamp })
         }
         "import" | "import_stl" | "import_off" | "import_dxf" => {
-            let p = bind!(["file", "layer", "convexity", "origin", "scale"], ["filename", "layername"]);
+            let p = bind!(["file", "layer", "convexity", "origin", "scale"], ["filename", "layername", "object"]);
             // `filename`/`layername` are deprecated spellings; anything that
             // is not a string is written as text.
             let text = |value: Value, fallback: Value| match value {
@@ -303,6 +304,7 @@ pub fn instantiate<'p>(
                 scale: p.number("scale").filter(|s| *s > 0.0).unwrap_or(1.0),
                 convexity: convexity(p.number("convexity"), 1),
                 segments: p.segments(false),
+                object: text(p.get("object"), Value::Undef),
             })
         }
 
@@ -603,6 +605,53 @@ fn linear(m: &Matrix3) -> Matrix {
 /// The reference's `getVec3`/`getVec2`: a vector of exactly `N` numbers (or
 /// one fewer, completed with `last`), read in order. The first non-number
 /// fails the conversion; the components read before it stay in `out`.
+/// The joint of `part(name, joint = …, axis = …, limits = …)`, with a
+/// warning for what does not read; `None` without `joint`.
+fn joint<'p>(interp: &mut Interp<'p>, name: &str, p: &Params<'p>) -> Option<Joint> {
+    let kind = match p.get("joint") {
+        Value::Undef => return None,
+        Value::Str(kind) => match JointKind::named(&kind) {
+            Some(kind) => kind,
+            None => {
+                interp.warn(format!(
+                    "part(\"{name}\"): unknown joint \"{kind}\"; give \"revolute\", \"continuous\", \"prismatic\" or \"fixed\""
+                ));
+                return None;
+            }
+        },
+        other => {
+            interp.warn(format!("part(\"{name}\"): joint = {} is not a name", other.repr()));
+            return None;
+        }
+    };
+    let mut axis = [0.0, 0.0, 1.0];
+    match p.get("axis") {
+        Value::Undef => {}
+        v => {
+            let mut read = [0.0; 3];
+            if get_vec(&v, &mut read, None) && read.iter().all(|c| c.is_finite()) && read.iter().any(|&c| c != 0.0) {
+                let length = read.iter().map(|c| c * c).sum::<f64>().sqrt();
+                axis = read.map(|c| c / length);
+            } else {
+                interp.warn(format!("part(\"{name}\"): axis = {} is not a direction; it turns about Z", v.repr()));
+            }
+        }
+    }
+    let limits = match p.get("limits") {
+        Value::Undef => None,
+        v => {
+            let mut read = [0.0; 2];
+            if get_vec(&v, &mut read, None) && read.iter().all(|c| c.is_finite()) && read[0] <= read[1] {
+                Some(read)
+            } else {
+                interp.warn(format!("part(\"{name}\"): limits = {} is not [lowest, highest]", v.repr()));
+                None
+            }
+        }
+    };
+    Some(Joint { kind, axis, limits })
+}
+
 fn get_vec<const N: usize>(value: &Value, out: &mut [f64; N], last: Option<f64>) -> bool {
     let Some(items) = value.as_vector() else { return false };
     let n = match (items.len(), last) {

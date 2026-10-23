@@ -27,6 +27,7 @@ use crate::examples;
 use crate::i18n::{self, Language, tr};
 use crate::icon_setting;
 use crate::icons::{self, Icon};
+use crate::insert;
 use crate::open_events;
 use crate::pause_edit;
 use crate::part_edit::{self, Grab};
@@ -1642,6 +1643,10 @@ impl StudioApp {
             self.select_tab(ctx, index);
             return;
         }
+        if insert::is_mesh(&path) {
+            self.open_mesh(ctx, &path);
+            return;
+        }
         match c2f_eval::read_source(&path) {
             Ok(text) => {
                 if !self.doc.is_blank() {
@@ -1652,6 +1657,99 @@ impl StudioApp {
             }
             Err(err) => self.doc.console.log(Level::Error, tr!("Cannot open {}: {err}", "Impossible d'ouvrir {} : {err}", path.display())),
         }
+    }
+
+    /// Opens a mesh as an untitled design that imports it, to look at it
+    /// and build on it.
+    fn open_mesh(&mut self, ctx: &egui::Context, path: &Path) {
+        if !path.is_file() {
+            self.doc.console.log(Level::Error, tr!("Cannot open {}: no such file", "Impossible d'ouvrir {} : fichier introuvable", path.display()));
+            return;
+        }
+        if !self.doc.is_blank() {
+            self.add_tab();
+        }
+        let text = insert::mesh_design(path, &c2f_geom::mesh_objects(path));
+        // Nothing to save until it is changed.
+        self.doc.text = text.clone();
+        self.doc.saved_text = text;
+        self.doc.console.log(Level::Info, tr!("Opened {}", "Ouvert : {}", path.display()));
+        self.remember(path);
+        self.doc.frame_next = true;
+        self.render_now();
+        self.doc.editor.focus(ctx);
+    }
+
+    /// Asks for a mesh and imports it in the design, on the cursor's line.
+    fn insert_mesh_dialog(&mut self, ctx: &egui::Context) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(tr("Insert a mesh", "Insérer un maillage"))
+            .add_filter(tr("Meshes", "Maillages"), insert::MESH_EXTENSIONS);
+        if let Some(dir) = self.doc.directory() {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(file) = dialog.pick_file() else { return };
+        let reference = insert::reference(&file, self.doc.path.as_deref());
+        let cursor = self.doc.editor.cursor_char().unwrap_or_else(|| self.doc.text.chars().count());
+        let (text, cursor) = insert::insert_mesh(&self.doc.text, cursor, &reference);
+        self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
+        self.doc.console.log(Level::Info, tr!("Imported {}", "Importé : {}", reference));
+        self.render_now();
+    }
+
+    /// Asks for a design and brings it in at the top of this one: its
+    /// modules and functions (`use`), or all of it (`include`, `whole`).
+    fn insert_design_dialog(&mut self, ctx: &egui::Context, whole: bool) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(tr("Insert a design", "Insérer un design"))
+            .add_filter(tr("Code2Form or SCAD", "Code2Form ou SCAD"), insert::DESIGN_EXTENSIONS);
+        if let Some(dir) = self.doc.directory() {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(file) = dialog.pick_file() else { return };
+        let reference = insert::reference(&file, self.doc.path.as_deref());
+        match insert::insert_design(&self.doc.text, &reference, whole) {
+            Some((text, cursor)) => {
+                self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
+                self.render_now();
+            }
+            None => self.doc.console.log(Level::Info, tr!("{} is already in the design", "{} est déjà dans le design", reference)),
+        }
+    }
+
+    /// The Insert menu: a mesh, or another design.
+    fn insert_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let enabled = !self.doc.is_circuit();
+        let menu = ui.add_enabled_ui(enabled, |ui| {
+            ui.menu_button(tr("Insert", "Insérer"), |ui| {
+                let mesh = ui.button(tr("Mesh…", "Maillage…")).on_hover_text(tr(
+                    "Import an STL, 3MF, OBJ, OFF or AMF file (STEP with FreeCAD) on the cursor's line",
+                    "Importer un fichier STL, 3MF, OBJ, OFF ou AMF (STEP avec FreeCAD) sur la ligne du curseur",
+                ));
+                if mesh.clicked() {
+                    ui.close();
+                    self.insert_mesh_dialog(ctx);
+                }
+                ui.separator();
+                let modules = ui.button(tr("Design's Modules (use)…", "Modules d'un design (use)…")).on_hover_text(tr(
+                    "Use another design's modules and functions, without its model",
+                    "Utiliser les modules et fonctions d'un autre design, sans son modèle",
+                ));
+                if modules.clicked() {
+                    ui.close();
+                    self.insert_design_dialog(ctx, false);
+                }
+                let whole = ui.button(tr("Whole Design (include)…", "Design entier (include)…")).on_hover_text(tr(
+                    "Include another design, its model with it",
+                    "Inclure un autre design, avec son modèle",
+                ));
+                if whole.clicked() {
+                    ui.close();
+                    self.insert_design_dialog(ctx, true);
+                }
+            })
+        });
+        menu.response.on_disabled_hover_text(tr("For designs, not circuits", "Pour les designs, pas les circuits"));
     }
 
     /// Puts the file at `path`, as read, in the active tab.
@@ -1684,6 +1782,7 @@ impl StudioApp {
         let mut dialog = rfd::FileDialog::new()
             .set_title(tr("Open a design", "Ouvrir un fichier"))
             .add_filter(tr("Code2Form, SCAD or circuit", "Code2Form, SCAD ou circuit"), &["c2f", "scad", "c2fc"])
+            .add_filter(tr("Meshes (STL, 3MF, OBJ, STEP…)", "Maillages (STL, 3MF, OBJ, STEP…)"), insert::MESH_EXTENSIONS)
             .add_filter(tr("All files", "Tous les fichiers"), &["*"]);
         if let Some(dir) = self.doc.directory() {
             dialog = dialog.set_directory(dir);
@@ -1838,8 +1937,23 @@ impl StudioApp {
     }
 
     fn export(&mut self, format: Format) {
+        self.export_as(format, None);
+    }
+
+    /// Exports the outline of a 3D model seen from the view, as DXF.
+    fn export_view(&mut self) {
+        let camera = &self.doc.viewer.camera;
+        let view = (f64::from(camera.yaw.to_degrees()), f64::from(camera.pitch.to_degrees()));
+        self.export_as(Format::Dxf, Some(view));
+    }
+
+    /// Asks where to write the model in `format`, then has the worker
+    /// write it; a DXF of a 3D model is its outline seen from `view`.
+    fn export_as(&mut self, format: Format, view: Option<(f64, f64)>) {
         let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
-        if !formats.contains(&format) {
+        if view.is_some() && formats == Format::SOLID {
+            // A 3D model drawn from the view.
+        } else if !formats.contains(&format) {
             let why = match formats.first() {
                 None => tr("the model is empty", "le modèle est vide").to_string(),
                 Some(other) if Format::FLAT.contains(other) => {
@@ -1847,7 +1961,10 @@ impl StudioApp {
                         .to_string()
                 }
                 Some(_) => {
-                    tr("the model is 3D; export it as STL, 3MF or glTF", "le modèle est en 3D ; exportez-le en STL, 3MF ou glTF")
+                    tr(
+                        "the model is 3D; export it as STL, 3MF, glTF, OBJ or STEP, or its outline as the DXF of the view",
+                        "le modèle est en 3D ; exportez-le en STL, 3MF, glTF, OBJ ou STEP, ou son contour avec le DXF de la vue",
+                    )
                         .to_string()
                 }
             };
@@ -1861,10 +1978,13 @@ impl StudioApp {
             .and_then(Path::file_stem)
             .map_or_else(|| "model".to_string(), |s| s.to_string_lossy().into_owned());
         let (name, extension) = (format.name(), format.extension());
-        let mut dialog = rfd::FileDialog::new()
-            .set_title(tr!("Export {name}", "Exporter en {name}"))
-            .add_filter(name, &[extension])
-            .set_file_name(format!("{stem}.{extension}"));
+        let title = if view.is_some() {
+            tr("Export the view as DXF", "Exporter la vue en DXF").to_string()
+        } else {
+            tr!("Export {name}", "Exporter en {name}")
+        };
+        let mut dialog =
+            rfd::FileDialog::new().set_title(title).add_filter(name, &[extension]).set_file_name(format!("{stem}.{extension}"));
         // The folder picked in the settings, while it exists.
         let folder = self.settings.export_folder.clone().filter(|folder| folder.is_dir());
         if let Some(dir) = folder.or_else(|| self.doc.directory()) {
@@ -1889,7 +2009,8 @@ impl StudioApp {
                 animation: Some(animation),
                 ..Default::default()
             };
-            self.worker.export(target, format, ExportOptions { binary_stl: self.settings.binary_stl, gltf });
+            let options = ExportOptions { binary_stl: self.settings.binary_stl, gltf, view, ..Default::default() };
+            self.worker.export(target, format, options);
         }
     }
 
@@ -2208,8 +2329,8 @@ impl StudioApp {
         }
     }
 
-    /// The File menu: new, open, the recent files and the examples, save,
-    /// and the settings.
+    /// The File menu: new, open, the recent files and the examples, what to
+    /// insert in the design, save, and the settings.
     fn file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, keys: &Shortcuts) {
         ui.menu_button(tr("File", "Fichier"), |ui| {
             ui.set_min_width(230.0);
@@ -2226,6 +2347,7 @@ impl StudioApp {
             }
             self.recent_menu(ui);
             self.examples_menu(ui);
+            self.insert_menu(ui, ctx);
             ui.separator();
             if item(ui, tr("Save", "Enregistrer"), Action::Save).clicked() {
                 self.save();
@@ -2260,6 +2382,34 @@ impl StudioApp {
                             "Un modèle glTF pour moteurs de jeu (Godot, Unity), avec ses couleurs",
                         ),
                     ),
+                    (
+                        Format::Obj,
+                        tr(
+                            "A Wavefront OBJ for 3D programs (Blender…), an object per part, its colors in a .mtl",
+                            "Un OBJ Wavefront pour les logiciels 3D (Blender…), un objet par pièce, ses couleurs dans un .mtl",
+                        ),
+                    ),
+                    (
+                        Format::Step,
+                        tr(
+                            "A STEP for CAD programs (Fusion, SolidWorks, FreeCAD): faceted solids",
+                            "Un STEP pour les logiciels de CAO (Fusion, SolidWorks, FreeCAD) : des solides à facettes",
+                        ),
+                    ),
+                    (
+                        Format::Urdf,
+                        tr(
+                            "A robot for ROS, Gazebo or MuJoCo: a link per part(), joined by part(joint = …)",
+                            "Un robot pour ROS, Gazebo ou MuJoCo : un lien par part(), reliés par part(joint = …)",
+                        ),
+                    ),
+                    (
+                        Format::Json,
+                        tr(
+                            "The parts as JSON: each one's place, joint, size, volume and colors, and the parameters",
+                            "Les pièces en JSON : la place, l'articulation, la taille, le volume et les couleurs de chacune, et les paramètres",
+                        ),
+                    ),
                     (Format::Svg, tr("An SVG drawing, in millimeters", "Un dessin SVG, en millimètres")),
                     (Format::Dxf, tr("A DXF drawing of line segments", "Un dessin DXF en segments")),
                 ];
@@ -2278,6 +2428,16 @@ impl StudioApp {
                         self.export(format);
                         ui.close();
                     }
+                }
+                let view = Button::new(tr("DXF of the View…", "DXF de la vue…"));
+                let response = ui.add_enabled(formats == Format::SOLID, view);
+                let hover = tr(
+                    "The outline of the 3D model seen from the view, at its size: for a laser cutter or a drawing",
+                    "Le contour du modèle 3D vu depuis la vue, à sa taille : pour une découpe laser ou un plan",
+                );
+                if response.on_hover_text(hover).on_disabled_hover_text(tr("For 3D models", "Pour les modèles 3D")).clicked() {
+                    self.export_view();
+                    ui.close();
                 }
             })
         });

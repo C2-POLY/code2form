@@ -2,13 +2,16 @@
 //! `file =` argument read, parsed the way the reference implementation
 //! (2021.01) reads them.
 //!
-//! 3D formats (STL, OFF, AMF, 3MF) give a triangle mesh with coincident
+//! 3D formats (STL, OFF, OBJ, AMF, 3MF, and STEP through FreeCAD) give a triangle mesh with coincident
 //! corners merged; 2D formats (DXF, SVG) give a cross-section.
 
 mod amf;
 mod dxf;
+mod obj;
 mod off;
 mod png;
+pub(crate) mod repair;
+mod step;
 mod stl;
 mod surface;
 mod svg;
@@ -48,8 +51,9 @@ pub(crate) struct DxfParams<'a> {
 }
 
 /// `import(file)`: the format follows the file's extension, as in the
-/// reference. `name` is the file as the CSG names it, for messages.
-pub(crate) fn import(path: &Path, name: &str, params: &DxfParams, warnings: &mut Vec<String>) -> Option<Imported> {
+/// reference. `name` is the file as the CSG names it, for messages;
+/// `object`, when not empty, the one object of a 3MF or OBJ file to keep.
+pub(crate) fn import(path: &Path, name: &str, params: &DxfParams, object: &str, warnings: &mut Vec<String>) -> Option<Imported> {
     let extension = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
     let read = |warnings: &mut Vec<String>| match std::fs::read(path) {
         Ok(data) => Some(data),
@@ -61,8 +65,10 @@ pub(crate) fn import(path: &Path, name: &str, params: &DxfParams, warnings: &mut
     match extension.as_str() {
         "stl" => stl::read(&read(warnings)?, name, warnings).map(|m| Imported::Solid(vec![m])),
         "off" => off::read(&read(warnings)?, name, warnings).map(|m| Imported::Solid(vec![m])),
+        "obj" => obj::read(&read(warnings)?, name, object, warnings).map(|m| Imported::Solid(vec![m])),
         "amf" => amf::read(&read(warnings)?, name, warnings).map(Imported::Solid),
-        "3mf" => threemf::read(&read(warnings)?, name, warnings).map(Imported::Solid),
+        "3mf" => threemf::read(&read(warnings)?, name, object, warnings).map(Imported::Solid),
+        "step" | "stp" => step::read(path, name, &params.segments, warnings).map(|m| Imported::Solid(vec![m])),
         "dxf" => dxf(path, name, params, warnings).map(Imported::Flat),
         "svg" => svg::read(&read(warnings)?, name, warnings).map(Imported::Flat),
         "nef3" => {
@@ -73,6 +79,27 @@ pub(crate) fn import(path: &Path, name: &str, params: &DxfParams, warnings: &mut
             warnings.push(format!("Unsupported file format while trying to import file '{name}'"));
             None
         }
+    }
+}
+
+/// The names of the objects a 3MF or OBJ file holds, in order; none for
+/// another file or one that does not read.
+pub fn objects(path: &Path) -> Vec<String> {
+    let extension = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let Ok(data) = std::fs::read(path) else { return Vec::new() };
+    match extension.as_str() {
+        "3mf" => threemf::objects(&data),
+        "obj" => obj::objects(&data),
+        _ => Vec::new(),
+    }
+}
+
+/// The warning for an `object` the file does not hold.
+fn no_such_object(name: &str, object: &str, names: &[String]) -> String {
+    if names.is_empty() {
+        format!("import(\"{name}\"): no object named \"{object}\": its objects have no names")
+    } else {
+        format!("import(\"{name}\"): no object named \"{object}\"; it holds {}", names.join(", "))
     }
 }
 
@@ -222,6 +249,27 @@ fn triangulate_face(positions: &[[f64; 3]], corners: &[u32]) -> Vec<[u32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_open_import_is_repaired_or_shown() {
+        let dir = std::env::temp_dir().join(format!("c2f-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A tetrahedron missing a face: mended.
+        std::fs::write(dir.join("open.off"), "OFF\n4 3 0\n0 0 0\n1 0 0\n0 1 0\n0 0 1\n3 0 2 1\n3 0 1 3\n3 0 3 2\n").unwrap();
+        let program = c2f_eval::Program::load("translate([10, 0, 0]) import(\"open.off\");", Path::new("t.scad"), &[]).unwrap();
+        let rendered = crate::render_in(&c2f_eval::evaluate(&program).nodes, &dir);
+        assert!((rendered.stats.volume - 1.0 / 6.0).abs() < 1e-12, "{:?}", rendered.warnings);
+        assert!(rendered.warnings[0].contains("repaired: 1 hole filled"), "{:?}", rendered.warnings);
+        // A lone face holds nothing: shown where the model puts it.
+        std::fs::write(dir.join("face.off"), "OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n").unwrap();
+        let program = c2f_eval::Program::load("translate([10, 0, 0]) import(\"face.off\");", Path::new("t.scad"), &[]).unwrap();
+        let rendered = crate::render_in(&c2f_eval::evaluate(&program).nodes, &dir);
+        assert!(rendered.model.is_empty());
+        assert_eq!(rendered.solid.triangle_count(), 1);
+        assert_eq!(rendered.solid.bounds().map(|(lo, _)| lo[0]), Some(10.0));
+        assert!(rendered.warnings[0].contains("it is shown"), "{:?}", rendered.warnings);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn merged_corners() {

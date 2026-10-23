@@ -103,7 +103,7 @@ pub fn run(args: &[String]) -> ExitCode {
             for warning in &rendered.warnings {
                 eprintln!("WARNING: {warning}");
             }
-            crate::print_export(&rendered, export)
+            crate::print_export(&rendered, export, "circuit", None, None)
         }
     }
 }

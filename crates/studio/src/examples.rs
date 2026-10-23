@@ -134,7 +134,7 @@ mod tests {
     fn the_repositorys_examples_are_listed_by_subject() {
         let examples = list(&source_dir().expect("the repository's examples"));
         let names: Vec<(&str, &str)> = examples.iter().map(|e| (e.subject.as_str(), e.file_name.as_str())).collect();
-        for expected in [("Game", "chest.c2f"), ("Game", "gears.c2f"), ("Game", "walker.c2f"), ("Grogu", "grogu.c2fc")] {
+        for expected in [("Game", "chest.c2f"), ("Game", "gears.c2f"), ("Game", "walker.c2f"), ("Grogu", "grogu.c2fc"), ("Robot", "arm.c2f")] {
             assert!(names.contains(&expected), "{expected:?} in {names:?}");
         }
         assert!(examples.iter().all(|e| !e.summary.is_empty()), "{examples:?}");

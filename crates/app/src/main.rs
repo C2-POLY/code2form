@@ -18,8 +18,20 @@ commands:
   3mf     the same, as a 3MF package (binary: redirect it to a file)
   glb     the same, as glTF 2.0 for game engines (Godot, Unity): in
           meters with Y up, a material per color (binary too)
+  obj     the same, as Wavefront OBJ, an object per part(); with -o,
+          the materials of its colors go in a .mtl beside it
+  step    the same, as STEP for CAD programs: faceted solids, each
+          face a planar polygon, in their colors
+  urdf    the model as a robot (ROS, Gazebo, MuJoCo): a link for the
+          root and each part(), joined by part(joint = ...); needs -o,
+          the links' meshes go in a folder beside it
+  json    the parts of the model as JSON: each part()'s place, joint,
+          size, volume and colors, and the design's parameters
+  section the outline where a plane cuts the solid, as JSON (--axis,
+          --at, --tolerance): to measure a mesh before drawing it again;
+          through the axis of a turned part, its profile
   svg     evaluate, build the 2D geometry and print it as an SVG
-  dxf     the same, as a DXF drawing
+  dxf     the same, as a DXF drawing; a 3D model seen from --view
   check   parse only and report syntax errors and badly written
           electronics annotations
   pins    print the pins, mount holes and ports a part declares
@@ -50,6 +62,16 @@ options:
                   (also written -Dname=value)
   -p file.json    reads customizer parameter sets from this file
   -P name         applies this parameter set (with -p)
+  -o <file>       writes the export to this file rather than printing it
+  --view <view>   dxf of a 3D model: its outline seen from top, bottom,
+                  front, back, left or right, or from <yaw>,<pitch> in
+                  degrees (default top)
+  --density <kg/m3>  urdf: what the links weigh by volume (default 1240,
+                  PLA's)
+  --axis <x|y|z>  section: the axis the plane is across (default z)
+  --at <mm>       section: where along it (default 0)
+  --tolerance <mm>  section: points this close to a straight line are
+                  left out (default 0.01)
   --scale <m>     glb: meters per model unit (default 0.001: a model in
                   millimeters keeps its size; 1 makes each unit a meter)
   --duration <s>  glb of a model that reads $t: the seconds its parts take
@@ -83,6 +105,14 @@ struct Options {
     parameter_set: Option<String>,
     /// `--scale`, for `glb`.
     gltf: c2f_geom::GltfOptions,
+    /// `-o`.
+    output: Option<String>,
+    /// `--view`, as yaw and pitch in degrees.
+    view: Option<(f64, f64)>,
+    /// `--density`.
+    density: Option<f64>,
+    /// `--axis`, `--at` and `--tolerance`, for `section`.
+    section: (c2f_geom::Axis, f64, f64),
 }
 
 impl Options {
@@ -91,18 +121,27 @@ impl Options {
         let (mut defines, mut parameter_file, mut parameter_set, mut path) = (Vec::new(), None, None, None);
         let mut gltf = c2f_geom::GltfOptions::default();
         let (mut still, mut animation_name) = (false, None);
+        let (mut output, mut view, mut density) = (None, None, None);
+        let mut section = (c2f_geom::Axis::Z, 0.0, 0.01);
         while let Some((arg, tail)) = rest.split_first() {
             rest = tail;
             let animation = gltf.animation.get_or_insert_with(Default::default);
             let positive = |value: &String| value.parse().ok().filter(|v: &f64| v.is_finite() && *v > 0.0);
             match arg.as_str() {
-                "--scale" | "--duration" | "--fps" | "--animation" => {
+                "--scale" | "--duration" | "--fps" | "--animation" | "-o" | "--view" | "--density" | "--axis" | "--at"
+                | "--tolerance" => {
                     let (value, tail) = rest.split_first()?;
                     rest = tail;
                     match arg.as_str() {
                         "--scale" => gltf.scale = positive(value)?,
                         "--duration" => animation.duration = positive(value)?,
                         "--fps" => animation.fps = positive(value)?,
+                        "-o" => output = Some(value.clone()),
+                        "--view" => view = Some(parse_view(value)?),
+                        "--density" => density = Some(positive(value)?),
+                        "--axis" => section.0 = c2f_geom::Axis::named(value)?,
+                        "--at" => section.1 = value.parse().ok().filter(|v: &f64| v.is_finite())?,
+                        "--tolerance" => section.2 = value.parse().ok().filter(|v: &f64| v.is_finite() && *v >= 0.0)?,
                         _ => animation_name = Some(value.clone()),
                     }
                     continue;
@@ -145,8 +184,24 @@ impl Options {
         if still {
             gltf.animation = None;
         }
-        Some(Options { command: command.clone(), path, defines, parameter_file, parameter_set, gltf })
+        Some(Options { command: command.clone(), path, defines, parameter_file, parameter_set, gltf, output, view, density, section })
     }
+
+    /// The name of what is written: the output's stem, or the model's.
+    fn stem(&self) -> String {
+        let file = self.output.as_deref().unwrap_or(&self.path);
+        Path::new(file).file_stem().map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned())
+    }
+}
+
+/// `top`, `front`… or `yaw,pitch` in degrees.
+fn parse_view(text: &str) -> Option<(f64, f64)> {
+    if let Some(&(_, yaw, pitch)) = c2f_geom::VIEWS.iter().find(|(name, _, _)| *name == text) {
+        return Some((f64::from(yaw), f64::from(pitch)));
+    }
+    let (yaw, pitch) = text.split_once(',')?;
+    let (yaw, pitch): (f64, f64) = (yaw.trim().parse().ok()?, pitch.trim().parse().ok()?);
+    (yaw.is_finite() && pitch.is_finite()).then_some((yaw, pitch))
 }
 
 fn run() -> ExitCode {
@@ -161,12 +216,18 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "svg", "dxf"].contains(&options.command.as_str()) {
+    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "obj", "step", "urdf", "json", "section", "svg", "dxf"]
+        .contains(&options.command.as_str())
+    {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
         return ExitCode::from(2);
     }
+    if options.command == "urdf" && options.output.is_none() {
+        eprintln!("error: a URDF comes with its links' meshes; give the file to write: c2f urdf -o robot.urdf {}", options.path);
+        return ExitCode::from(2);
+    }
     if let Some(export @ (Export::ThreeMf | Export::Glb)) = Export::named(&options.command) {
-        if std::io::stdout().is_terminal() {
+        if options.output.is_none() && std::io::stdout().is_terminal() {
             let (name, ext) = (export.name(), export.extension());
             eprintln!("error: a {name} file is binary; redirect it to a file: c2f {ext} {} > model.{ext}", options.path);
             return ExitCode::from(2);
@@ -214,8 +275,9 @@ fn run() -> ExitCode {
             0 => ExitCode::SUCCESS,
             _ => ExitCode::FAILURE,
         },
+        "section" => section(&program, &options),
         // `csg`, or an export format.
-        command => csg(&mut program, Export::named(command), &options.gltf),
+        command => csg(&mut program, &src, Export::named(command), &options),
     }
 }
 
@@ -264,6 +326,12 @@ enum Export {
     /// Written from the evaluated nodes rather than the rendering: see
     /// [`gltf`].
     Glb,
+    Obj,
+    Step,
+    /// Written from the parts, with their meshes beside it.
+    Urdf,
+    /// The parts, from the evaluated nodes.
+    Json,
     Svg,
     Dxf,
 }
@@ -275,6 +343,10 @@ impl Export {
             "stl" => Some(Export::Stl),
             "3mf" => Some(Export::ThreeMf),
             "glb" => Some(Export::Glb),
+            "obj" => Some(Export::Obj),
+            "step" | "stp" => Some(Export::Step),
+            "urdf" => Some(Export::Urdf),
+            "json" => Some(Export::Json),
             "svg" => Some(Export::Svg),
             "dxf" => Some(Export::Dxf),
             _ => None,
@@ -286,6 +358,10 @@ impl Export {
             Export::Stl => "STL",
             Export::ThreeMf => "3MF",
             Export::Glb => "glTF",
+            Export::Obj => "OBJ",
+            Export::Step => "STEP",
+            Export::Urdf => "URDF",
+            Export::Json => "JSON",
             Export::Svg => "SVG",
             Export::Dxf => "DXF",
         }
@@ -296,19 +372,35 @@ impl Export {
             Export::Stl => "stl",
             Export::ThreeMf => "3mf",
             Export::Glb => "glb",
+            Export::Obj => "obj",
+            Export::Step => "step",
+            Export::Urdf => "urdf",
+            Export::Json => "json",
             Export::Svg => "svg",
             Export::Dxf => "dxf",
         }
     }
 
-    /// The file in this format, or why there is none.
-    fn write(self, rendered: &c2f_geom::Rendered) -> Result<Vec<u8>, String> {
+    /// The file in this format, or why there is none. `name` names a
+    /// STEP's product; `view` draws a 3D model's outline in a DXF.
+    fn write(self, rendered: &c2f_geom::Rendered, name: &str, view: Option<(f64, f64)>) -> Result<Vec<u8>, String> {
         let (bytes, other) = match self {
             Export::Stl => (rendered.stl().map(String::into_bytes), "2D"),
             Export::ThreeMf => (rendered.three_mf(), "2D"),
-            Export::Glb => return Err("a glTF is written from the evaluated nodes, not a rendering".into()),
+            Export::Step => {
+                let options = c2f_geom::StepOptions { name: name.into(), ..Default::default() };
+                (rendered.step(&options).map(String::into_bytes), "2D")
+            }
+            Export::Glb | Export::Obj | Export::Urdf | Export::Json => {
+                return Err(format!("a {} is written from the evaluated nodes, not a rendering", self.name()));
+            }
             Export::Svg => (rendered.svg().map(String::into_bytes), "3D"),
-            Export::Dxf => (rendered.dxf().map(String::into_bytes), "3D"),
+            Export::Dxf => match view {
+                Some((yaw, pitch)) => (rendered.view_dxf(yaw, pitch).map(String::into_bytes), "3D"),
+                // A 3D model is seen from the top.
+                None if !rendered.is_2d => (rendered.view_dxf(-90.0, 90.0).map(String::into_bytes), "2D"),
+                None => (rendered.dxf().map(String::into_bytes), "3D"),
+            },
         };
         bytes.ok_or_else(|| format!("the model is empty or {other}; no {} written", self.name()))
     }
@@ -322,7 +414,7 @@ fn render(program: &c2f_eval::Program, output: &c2f_eval::Output) -> c2f_geom::R
 }
 
 /// Prints the CSG tree, or with `export` the geometry in that format.
-fn csg(program: &mut c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom::GltfOptions) -> ExitCode {
+fn csg(program: &mut c2f_eval::Program, src: &str, export: Option<Export>, options: &Options) -> ExitCode {
     let output = c2f_eval::evaluate(program);
     for line in &output.echo {
         eprintln!("{line}");
@@ -332,7 +424,11 @@ fn csg(program: &mut c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom:
     }
     if let Some(Export::Glb) = export {
         // A program stopped by an error has no glTF: the error says why.
-        if output.error.is_none() && print_gltf(program, gltf) != ExitCode::SUCCESS {
+        if output.error.is_none() && print_gltf(program, &options.gltf, options.output.as_deref()) != ExitCode::SUCCESS {
+            return ExitCode::FAILURE;
+        }
+    } else if let Some(export @ (Export::Obj | Export::Urdf | Export::Json)) = export {
+        if output.error.is_none() && print_parts(program, src, &output, export, options) != ExitCode::SUCCESS {
             return ExitCode::FAILURE;
         }
     } else if let Some(export) = export {
@@ -340,7 +436,7 @@ fn csg(program: &mut c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom:
         for warning in &rendered.warnings {
             eprintln!("WARNING: {warning}");
         }
-        if print_export(&rendered, export) != ExitCode::SUCCESS {
+        if print_export(&rendered, export, &options.stem(), options.view, options.output.as_deref()) != ExitCode::SUCCESS {
             return ExitCode::FAILURE;
         }
     } else {
@@ -356,10 +452,17 @@ fn csg(program: &mut c2f_eval::Program, export: Option<Export>, gltf: &c2f_geom:
 }
 
 /// Prints the geometry in the format `export`, then its size on stderr.
-fn print_export(rendered: &c2f_geom::Rendered, export: Export) -> ExitCode {
-    match export.write(rendered) {
+/// `name` names a STEP's product, `view` draws a DXF, `output` is `-o`.
+fn print_export(
+    rendered: &c2f_geom::Rendered,
+    export: Export,
+    name: &str,
+    view: Option<(f64, f64)>,
+    output: Option<&str>,
+) -> ExitCode {
+    match export.write(rendered, name, view) {
         Ok(bytes) => {
-            if let Err(err) = print_bytes(&bytes) {
+            if let Err(err) = emit(output, &bytes) {
                 eprintln!("error: cannot write the {}: {err}", export.name());
                 return ExitCode::FAILURE;
             }
@@ -377,13 +480,13 @@ fn print_export(rendered: &c2f_geom::Rendered, export: Export) -> ExitCode {
 
 /// Prints the program as a `.glb`, animated when it reads `$t`, then its
 /// size on stderr.
-fn print_gltf(program: &mut c2f_eval::Program, options: &c2f_geom::GltfOptions) -> ExitCode {
+fn print_gltf(program: &mut c2f_eval::Program, options: &c2f_geom::GltfOptions, output: Option<&str>) -> ExitCode {
     match c2f_geom::program_glb(program, options) {
         Ok(glb) => {
             for warning in &glb.warnings {
                 eprintln!("WARNING: {warning}");
             }
-            if let Err(err) = print_bytes(&glb.bytes) {
+            if let Err(err) = emit(output, &glb.bytes) {
                 eprintln!("error: cannot write the glTF: {err}");
                 return ExitCode::FAILURE;
             }
@@ -395,6 +498,125 @@ fn print_gltf(program: &mut c2f_eval::Program, options: &c2f_geom::GltfOptions) 
         Err(why) => eprintln!("WARNING: {why}"),
     }
     ExitCode::SUCCESS
+}
+
+/// Prints where a plane cuts the solid, as JSON.
+fn section(program: &c2f_eval::Program, options: &Options) -> ExitCode {
+    let output = c2f_eval::evaluate(program);
+    for warning in &output.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    if let Some(error) = &output.error {
+        eprintln!("ERROR: {error}");
+        return ExitCode::FAILURE;
+    }
+    let rendered = render(program, &output);
+    for warning in &rendered.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    let (axis, at, tolerance) = options.section;
+    match rendered.section(axis, at) {
+        Some(cut) => {
+            let json = serde_json::to_string_pretty(&cut.json(axis, at, tolerance)).unwrap_or_default();
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("error: the model is empty or 2D: nothing to cut");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Why the parts were not written: the model has none (a warning, as for
+/// the other exports), or a file could not be written (a failure).
+enum Unwritten {
+    Model(String),
+    Io(String),
+}
+
+/// Writes the parts as OBJ (and its `.mtl` with `-o`), as a robot (its
+/// meshes beside it) or as JSON, then their size on stderr.
+fn print_parts(program: &c2f_eval::Program, src: &str, output: &c2f_eval::Output, export: Export, options: &Options) -> ExitCode {
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
+    let name = options.stem();
+    let target = options.output.as_deref().map(Path::new);
+    let write = |path: &Path, bytes: &[u8]| write_file(path, bytes).map_err(Unwritten::Io);
+    let print = |bytes: &[u8]| emit(options.output.as_deref(), bytes).map_err(|err| Unwritten::Io(format!("cannot write the {}: {err}", export.name())));
+    let written = match export {
+        Export::Obj => c2f_geom::obj(&output.nodes, base_dir, &c2f_geom::ObjOptions { name: name.clone(), ..Default::default() })
+            .map_err(Unwritten::Model)
+            .and_then(|obj| {
+                match target {
+                    Some(target) => write(&target.with_file_name(&obj.mtl_file), obj.mtl.as_bytes())?,
+                    None => eprintln!("WARNING: the colors' {} is only written with -o", obj.mtl_file),
+                }
+                print(obj.obj.as_bytes())?;
+                Ok((obj.warnings, format!("{} triangles", obj.triangles)))
+            }),
+        Export::Urdf => {
+            let target = target.expect("checked before evaluating");
+            let folder = format!("{name}_meshes");
+            let urdf_options =
+                c2f_geom::UrdfOptions { name: name.clone(), mesh_folder: folder, density: options.density.unwrap_or(1240.0), ..Default::default() };
+            c2f_geom::urdf(&output.nodes, base_dir, &urdf_options).map_err(Unwritten::Model).and_then(|urdf| {
+                let dir = target.parent().unwrap_or(Path::new(""));
+                for (file, bytes) in &urdf.meshes {
+                    let path = dir.join(file);
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|err| Unwritten::Io(format!("cannot create {}: {err}", parent.display())))?;
+                    }
+                    write(&path, bytes)?;
+                }
+                write(target, urdf.urdf.as_bytes())?;
+                Ok((urdf.warnings, format!("{} links, {} moving joints", urdf.links, urdf.moving)))
+            })
+        }
+        _ => {
+            let parameters = program
+                .parameters(src)
+                .into_iter()
+                .filter(|p| p.group != c2f_eval::customizer::HIDDEN_GROUP)
+                .map(|p| (p.name, p.default))
+                .collect();
+            let parts_options = c2f_geom::PartsOptions { name: name.clone(), parameters, ..Default::default() };
+            c2f_geom::parts_json(&output.nodes, base_dir, &parts_options).map_err(Unwritten::Model).and_then(|(json, warnings)| {
+                print(json.as_bytes())?;
+                let parts = json.matches("\"parent\":").count();
+                Ok((warnings, format!("{parts} parts")))
+            })
+        }
+    };
+    match written {
+        Ok((warnings, size)) => {
+            for warning in &warnings {
+                eprintln!("WARNING: {warning}");
+            }
+            eprintln!("{size}");
+            ExitCode::SUCCESS
+        }
+        Err(Unwritten::Model(why)) => {
+            eprintln!("WARNING: {why}");
+            ExitCode::SUCCESS
+        }
+        Err(Unwritten::Io(why)) => {
+            eprintln!("error: {why}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::write(path, bytes).map_err(|err| format!("cannot write {}: {err}", path.display()))
+}
+
+/// Writes `bytes` to the `-o` file, or to stdout.
+fn emit(output: Option<&str>, bytes: &[u8]) -> std::io::Result<()> {
+    match output {
+        Some(path) => std::fs::write(path, bytes),
+        None => print_bytes(bytes),
+    }
 }
 
 /// Writes `bytes` to stdout, flushed here: the flush at exit would drop a

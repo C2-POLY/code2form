@@ -106,11 +106,22 @@ enum Request {
 }
 
 /// How the formats that have settings are written.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExportOptions {
     /// An STL in binary rather than ASCII.
     pub binary_stl: bool,
+    /// Its color also colors what has no `color()` in OBJ, STEP and URDF.
     pub gltf: c2f_geom::GltfOptions,
+    /// A DXF of a 3D model: the yaw and pitch (degrees) it is seen from.
+    pub view: Option<(f64, f64)>,
+    /// URDF: kilograms per cubic meter.
+    pub density: f64,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        ExportOptions { binary_stl: false, gltf: Default::default(), view: None, density: 1240.0 }
+    }
 }
 
 /// The model on screen, for exports: its geometry, and its program for
@@ -118,21 +129,30 @@ pub struct ExportOptions {
 struct Shown {
     rendered: Rendered,
     program: c2f_eval::Program,
+    /// The text it was read from, as the editor holds it, where the
+    /// parts' JSON reads the parameters' annotations.
+    source: String,
 }
 
-/// The file formats a model exports to: STL, 3MF and glTF for a solid,
-/// SVG and DXF for a 2D model.
+/// The file formats a model exports to: STL, 3MF, glTF, OBJ, STEP, URDF
+/// and its parts' JSON for a solid, SVG and DXF for a 2D model (and a
+/// DXF of a solid's outline, seen from the view).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Stl,
     ThreeMf,
     Glb,
+    Obj,
+    Step,
+    Urdf,
+    Json,
     Svg,
     Dxf,
 }
 
 impl Format {
-    pub const SOLID: &'static [Format] = &[Format::Stl, Format::ThreeMf, Format::Glb];
+    pub const SOLID: &'static [Format] =
+        &[Format::Stl, Format::ThreeMf, Format::Glb, Format::Obj, Format::Step, Format::Urdf, Format::Json];
     pub const FLAT: &'static [Format] = &[Format::Svg, Format::Dxf];
 
     pub fn name(self) -> &'static str {
@@ -140,6 +160,10 @@ impl Format {
             Format::Stl => "STL",
             Format::ThreeMf => "3MF",
             Format::Glb => "glTF",
+            Format::Obj => "OBJ",
+            Format::Step => "STEP",
+            Format::Urdf => "URDF",
+            Format::Json => "JSON",
             Format::Svg => "SVG",
             Format::Dxf => "DXF",
         }
@@ -150,6 +174,10 @@ impl Format {
             Format::Stl => "stl",
             Format::ThreeMf => "3mf",
             Format::Glb => "glb",
+            Format::Obj => "obj",
+            Format::Step => "step",
+            Format::Urdf => "urdf",
+            Format::Json => "json",
             Format::Svg => "svg",
             Format::Dxf => "dxf",
         }
@@ -325,7 +353,7 @@ fn render_source(
                 enclosure: 0..0,
                 exploded: exploded.map(Arc::new),
             };
-            (Ok(scene), Some(Shown { rendered, program }))
+            (Ok(scene), Some(Shown { rendered, program, source: source.to_string() }))
         }
         Err(line) => (Err(line), None),
     };
@@ -557,17 +585,27 @@ fn pipeline(
 }
 
 fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
-    let Shown { rendered, program } = shown.ok_or_else(|| tr("there is no model to export yet", "il n’y a pas encore de modèle à exporter").to_string())?;
-    if format == Format::Glb {
-        return export_gltf(program, target, &options.gltf);
+    let Shown { rendered, program, source } = shown.ok_or_else(|| tr("there is no model to export yet", "il n’y a pas encore de modèle à exporter").to_string())?;
+    match format {
+        Format::Glb => return export_gltf(program, target, &options.gltf),
+        Format::Obj | Format::Urdf | Format::Json => return export_parts(program, source, target, format, options),
+        _ => {}
     }
+    let name = target.file_stem().map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned());
     let bytes = catch_unwind(AssertUnwindSafe(|| match format {
         Format::Stl if options.binary_stl => rendered.stl_binary(),
         Format::Stl => rendered.stl().map(String::into_bytes),
         Format::ThreeMf => rendered.three_mf(),
-        Format::Glb => None,
+        Format::Step => {
+            let step = c2f_geom::StepOptions { name: name.clone(), color: options.gltf.color };
+            rendered.step(&step).map(String::into_bytes)
+        }
+        Format::Glb | Format::Obj | Format::Urdf | Format::Json => None,
         Format::Svg => rendered.svg().map(String::into_bytes),
-        Format::Dxf => rendered.dxf().map(String::into_bytes),
+        Format::Dxf => match options.view {
+            Some((yaw, pitch)) => rendered.view_dxf(yaw, pitch).map(String::into_bytes),
+            None => rendered.dxf().map(String::into_bytes),
+        },
     }))
     .map_err(|panic| tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic)))?
     .ok_or_else(|| {
@@ -580,12 +618,86 @@ fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &Ex
         )
     })?;
     std::fs::write(target, bytes).map_err(|err| tr!("cannot write {}: {}", "impossible d’écrire {} : {}", target.display(), err))?;
+    if format == Format::Dxf && options.view.is_some() && !rendered.is_2d {
+        return Ok(tr!("Exported the outline seen from the view to {}", "Contour vu depuis la vue exporté dans {}", target.display()));
+    }
     let (count, what) = if rendered.is_2d {
         (rendered.stats.vertices, tr("vertices", "sommets"))
     } else {
         (rendered.stats.triangles, tr("triangles", "triangles"))
     };
     Ok(tr!("Exported {} {} to {}", "{} {} exportés dans {}", group_digits(count), what, target.display()))
+}
+
+/// Writes the program's parts: as OBJ and its `.mtl`, as a URDF and its
+/// meshes in a folder beside it, or as JSON.
+fn export_parts(program: &c2f_eval::Program, src: &str, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
+    let name = target.file_stem().map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned());
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let color = options.gltf.color;
+    let write = |path: &Path, bytes: &[u8]| {
+        std::fs::write(path, bytes).map_err(|err| tr!("cannot write {}: {}", "impossible d’écrire {} : {}", path.display(), err))
+    };
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(String, Vec<String>), String> {
+        let output = c2f_eval::evaluate(program);
+        if let Some(error) = output.error {
+            return Err(error);
+        }
+        match format {
+            Format::Obj => {
+                let obj = c2f_geom::obj(&output.nodes, &base_dir, &c2f_geom::ObjOptions { name: name.clone(), color })?;
+                write(&target.with_file_name(&obj.mtl_file), obj.mtl.as_bytes())?;
+                write(target, obj.obj.as_bytes())?;
+                let message = tr!("Exported {} triangles to {}", "{} triangles exportés dans {}", group_digits(obj.triangles), target.display());
+                Ok((message, obj.warnings))
+            }
+            Format::Urdf => {
+                let urdf_options = c2f_geom::UrdfOptions {
+                    name: name.clone(),
+                    mesh_folder: format!("{name}_meshes"),
+                    density: options.density,
+                    color,
+                };
+                let urdf = c2f_geom::urdf(&output.nodes, &base_dir, &urdf_options)?;
+                let dir = target.parent().unwrap_or(Path::new(""));
+                for (file, bytes) in &urdf.meshes {
+                    let path = dir.join(file);
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|err| tr!("cannot create {}: {}", "impossible de créer {} : {}", parent.display(), err))?;
+                    }
+                    write(&path, bytes)?;
+                }
+                write(target, urdf.urdf.as_bytes())?;
+                let message = tr!(
+                    "Exported a robot of {} links, {} of them moving, to {}",
+                    "Robot de {} liens, dont {} mobiles, exporté dans {}",
+                    urdf.links,
+                    urdf.moving,
+                    target.display()
+                );
+                Ok((message, urdf.warnings))
+            }
+            _ => {
+                let parameters = program
+                    .parameters(src)
+                    .into_iter()
+                    .filter(|p| p.group != c2f_eval::customizer::HIDDEN_GROUP)
+                    .map(|p| (p.name, p.default))
+                    .collect();
+                let parts_options = c2f_geom::PartsOptions { name: name.clone(), color, parameters };
+                let (json, warnings) = c2f_geom::parts_json(&output.nodes, &base_dir, &parts_options)?;
+                write(target, json.as_bytes())?;
+                Ok((tr!("Exported the parts to {}", "Pièces exportées dans {}", target.display()), warnings))
+            }
+        }
+    }))
+    .map_err(|panic| tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic)))?;
+    let (mut message, warnings) = result?;
+    for warning in &warnings {
+        message.push_str(&tr!("\nWarning: {}", "\nAvertissement : {}", warning));
+    }
+    Ok(message)
 }
 
 /// Writes the program's model as a `.glb`, animated when it reads `$t`,

@@ -92,7 +92,7 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom"]
+        ["render", "parameters", "image", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
@@ -277,8 +277,41 @@ fn export_writes_files() {
     let (is_error, _) = server.call("export", json!({ "code": "square(10);", "output": dir.join("plate.stl") }));
     assert!(is_error);
     assert!(!dir.join("plate.stl").exists());
-    let (is_error, _) = server.call("export", json!({ "code": "cube(10);", "output": dir.join("part.obj") }));
+    let (is_error, _) = server.call("export", json!({ "code": "cube(10);", "output": dir.join("part.xyz") }));
     assert!(is_error);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn export_writes_files_for_other_programs() {
+    let mut server = Server::start();
+    let dir = temp_dir("exchange");
+    let arm = "cube(10); translate([0, 0, 10]) part(\"elbow\", joint = \"revolute\", limits = [-90, 90]) color(\"red\") cube([2, 2, 20]);";
+
+    let (is_error, report) = server.report("export", json!({ "code": arm, "output": dir.join("arm.obj") }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["written"]["format"], "OBJ");
+    assert!(std::fs::read_to_string(dir.join("arm.obj")).unwrap().contains("\no elbow\n"));
+    assert!(std::fs::read_to_string(dir.join("arm.mtl")).unwrap().contains("Kd 1.0 0.0 0.0"));
+
+    let (is_error, report) = server.report("export", json!({ "code": arm, "output": dir.join("arm.step") }));
+    assert!(!is_error, "{report}");
+    assert!(std::fs::read_to_string(dir.join("arm.step")).unwrap().starts_with("ISO-10303-21;"));
+
+    let (is_error, report) = server.report("export", json!({ "code": arm, "output": dir.join("arm.urdf"), "density": 1000 }));
+    assert!(!is_error, "{report}");
+    assert_eq!((report["links"].clone(), report["moving_joints"].clone()), (json!(2), json!(1)));
+    assert!(std::fs::read_to_string(dir.join("arm.urdf")).unwrap().contains("type=\"revolute\""));
+    assert!(dir.join("arm_meshes/elbow.stl").exists());
+
+    let (is_error, report) = server.report("export", json!({ "code": arm, "output": dir.join("arm.json") }));
+    assert!(!is_error, "{report}");
+    let parts: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("arm.json")).unwrap()).unwrap();
+    assert_eq!(parts["parts"][1]["joint"]["type"], "revolute");
+
+    let (is_error, report) = server.report("export", json!({ "code": "cube([10, 20, 30]);", "output": dir.join("side.dxf"), "view": "front" }));
+    assert!(!is_error, "{report}");
+    assert!(std::fs::read_to_string(dir.join("side.dxf")).unwrap().contains("LINE"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

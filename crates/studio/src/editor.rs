@@ -454,6 +454,11 @@ impl Editor {
         changed
     }
 
+    /// The cursor as last shown, as a char index.
+    pub fn cursor_char(&self) -> Option<usize> {
+        self.selection.map(|r| r.primary.index)
+    }
+
     /// Replaces the text from outside the editor, as one step of its undo
     /// history, with the cursor at char `cursor`.
     pub fn replace_text(&self, ctx: &egui::Context, text: &mut String, new_text: String, cursor: usize) {

@@ -1,5 +1,6 @@
 //! Reading members of a ZIP archive (3MF packages, compressed AMF): the
-//! central directory, stored and deflated entries.
+//! central directory, stored and deflated entries, and the ZIP64 records
+//! that some CAD programs write even for small archives.
 
 /// The archive's entries: name and uncompressed content.
 pub(crate) fn entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
@@ -11,21 +12,50 @@ pub(crate) fn entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         .rev()
         .find(|&i| data[i..].starts_with(b"PK\x05\x06"))
         .ok_or("not a ZIP archive")?;
-    let count = u16_at(eocd + 10).ok_or("truncated ZIP")?;
+    let u64_at = |i: usize| data.get(i..i + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])) as usize);
+    let mut count = u16_at(eocd + 10).ok_or("truncated ZIP")?;
     let mut at = u32_at(eocd + 16).ok_or("truncated ZIP")?;
+    // ZIP64: a locator just before the record points to the 64-bit one,
+    // which holds the real count and offset.
+    let locator = eocd.checked_sub(20).filter(|&i| data[i..].starts_with(b"PK\x06\x07"));
+    if let Some(locator) = locator {
+        let record = u64_at(locator + 8).ok_or("truncated ZIP")?;
+        if !data.get(record..).is_some_and(|d| d.starts_with(b"PK\x06\x06")) {
+            return Err("bad ZIP64 record".into());
+        }
+        count = u64_at(record + 32).ok_or("truncated ZIP")?;
+        at = u64_at(record + 48).ok_or("truncated ZIP")?;
+    }
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         if !data.get(at..).is_some_and(|d| d.starts_with(b"PK\x01\x02")) {
             return Err("bad ZIP central directory".into());
         }
         let field = |offset: usize, width: usize| if width == 2 { u16_at(at + offset) } else { u32_at(at + offset) };
-        let (Some(method), Some(compressed), Some(size), Some(name_len), Some(extra_len), Some(comment_len), Some(local)) =
+        let (Some(method), Some(mut compressed), Some(mut size), Some(name_len), Some(extra_len), Some(comment_len), Some(mut local)) =
             (field(10, 2), field(20, 4), field(24, 4), field(28, 2), field(30, 2), field(32, 2), field(42, 4))
         else {
             return Err("truncated ZIP".into());
         };
         let name = data.get(at + 46..at + 46 + name_len).ok_or("truncated ZIP")?;
         let name = String::from_utf8_lossy(name).into_owned();
+        // The values too large for 32 bits are in the ZIP64 extra field, in
+        // this order, those that are.
+        let mut extra = at + 46 + name_len;
+        let extra_end = extra + extra_len;
+        while extra + 4 <= extra_end {
+            let (Some(id), Some(len)) = (u16_at(extra), u16_at(extra + 2)) else { break };
+            if id == 1 {
+                let mut value = extra + 4;
+                for slot in [&mut size, &mut compressed, &mut local] {
+                    if *slot == 0xFFFF_FFFF {
+                        *slot = u64_at(value).ok_or("truncated ZIP")?;
+                        value += 8;
+                    }
+                }
+            }
+            extra += 4 + len;
+        }
         at += 46 + name_len + extra_len + comment_len;
         // The data follows the local header, whose name and extra field
         // lengths may differ from the central ones.
@@ -51,6 +81,62 @@ pub(crate) fn entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 
 #[cfg(test)]
 pub(super) mod tests {
+    #[test]
+    fn a_zip64_archive_reads() {
+        // `zip -fz`'s layout: the 64-bit record and its locator before the
+        // end record, sizes in the extra field.
+        let content = b"hello";
+        let mut out = Vec::new();
+        let mut local = b"PK\x03\x04".to_vec();
+        local.extend([45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        local.extend(0xFFFF_FFFFu32.to_le_bytes());
+        local.extend(0xFFFF_FFFFu32.to_le_bytes());
+        local.extend(1u16.to_le_bytes());
+        local.extend(20u16.to_le_bytes());
+        local.push(b'a');
+        local.extend(1u16.to_le_bytes());
+        local.extend(16u16.to_le_bytes());
+        local.extend((content.len() as u64).to_le_bytes());
+        local.extend((content.len() as u64).to_le_bytes());
+        out.extend(&local);
+        out.extend(content);
+        let directory = out.len();
+        out.extend(b"PK\x01\x02");
+        out.extend([45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        out.extend(0xFFFF_FFFFu32.to_le_bytes());
+        out.extend(0xFFFF_FFFFu32.to_le_bytes());
+        out.extend(1u16.to_le_bytes());
+        out.extend(28u16.to_le_bytes());
+        // Comment length, disk, internal and external attributes.
+        out.extend([0u8; 10]);
+        out.extend(0xFFFF_FFFFu32.to_le_bytes());
+        out.push(b'a');
+        out.extend(1u16.to_le_bytes());
+        out.extend(24u16.to_le_bytes());
+        out.extend((content.len() as u64).to_le_bytes());
+        out.extend((content.len() as u64).to_le_bytes());
+        out.extend(0u64.to_le_bytes());
+        let directory_size = out.len() - directory;
+        let record = out.len();
+        out.extend(b"PK\x06\x06");
+        out.extend(44u64.to_le_bytes());
+        out.extend([45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        out.extend(1u64.to_le_bytes());
+        out.extend(1u64.to_le_bytes());
+        out.extend((directory_size as u64).to_le_bytes());
+        out.extend((directory as u64).to_le_bytes());
+        out.extend(b"PK\x06\x07");
+        out.extend(0u32.to_le_bytes());
+        out.extend((record as u64).to_le_bytes());
+        out.extend(1u32.to_le_bytes());
+        out.extend(b"PK\x05\x06");
+        out.extend([0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]);
+        out.extend(0xFFFF_FFFFu32.to_le_bytes());
+        out.extend(0xFFFF_FFFFu32.to_le_bytes());
+        out.extend(0u16.to_le_bytes());
+        assert_eq!(super::entries(&out).unwrap(), vec![("a".to_string(), content.to_vec())]);
+    }
+
     /// A ZIP archive of stored entries.
     pub fn stored(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut out = Vec::new();

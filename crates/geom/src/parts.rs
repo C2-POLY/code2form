@@ -2,7 +2,7 @@
 //! where it sits in its parent part's frame, for exports that keep parts
 //! apart (glTF). Everything outside any part is the root.
 
-use c2f_eval::node::{IDENTITY, Matrix, Node, NodeKind};
+use c2f_eval::node::{IDENTITY, Joint, Matrix, Node, NodeKind};
 
 /// A `part("name") { … }` of the model.
 #[derive(Clone, Debug, PartialEq)]
@@ -13,6 +13,8 @@ pub(crate) struct Part {
     /// From its own frame to its parent's: the transformations written
     /// between the two.
     pub matrix: Matrix,
+    /// How it moves against its parent, as `part()` says.
+    pub joint: Option<Joint>,
     /// Its geometry in its own frame, without the parts inside it, in the
     /// color it is drawn in.
     pub nodes: Vec<Node>,
@@ -60,9 +62,15 @@ impl Parts {
             return Some(node.clone());
         }
         let inner = match &node.kind {
-            NodeKind::Part { name } => {
+            NodeKind::Part { name, joint } => {
                 let index = self.parts.len();
-                self.parts.push(Part { name: name.clone(), parent: at.parent, matrix: at.matrix, nodes: Vec::new() });
+                self.parts.push(Part {
+                    name: name.clone(),
+                    parent: at.parent,
+                    matrix: at.matrix,
+                    joint: joint.clone(),
+                    nodes: Vec::new(),
+                });
                 let inside = Place { matrix: IDENTITY, color: at.color, parent: Some(index) };
                 let mut nodes: Vec<Node> = node.children.iter().filter_map(|child| self.strip(child, &inside)).collect();
                 if let Some(color) = at.color {
@@ -103,7 +111,7 @@ impl Parts {
 fn first_part(node: &Node) -> Option<&str> {
     let mut pending = vec![node];
     while let Some(node) = pending.pop() {
-        if let NodeKind::Part { name } = &node.kind {
+        if let NodeKind::Part { name, .. } = &node.kind {
             return Some(name);
         }
         pending.extend(node.children.iter().rev());

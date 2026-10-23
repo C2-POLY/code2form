@@ -37,6 +37,52 @@ pub struct FileSource {
     pub timestamp: i64,
 }
 
+/// How a `part()` moves against the part it is written in, for a robot
+/// (URDF): `part("elbow", joint = "revolute", axis = [0, 1, 0],
+/// limits = [-90, 90])`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Joint {
+    pub kind: JointKind,
+    /// In the part's own frame, of length 1.
+    pub axis: [f64; 3],
+    /// Lowest and highest position: degrees for a revolute joint,
+    /// millimeters for a prismatic one.
+    pub limits: Option<[f64; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JointKind {
+    /// Turns about its axis, between its limits.
+    Revolute,
+    /// Turns about its axis without limits, as a wheel does.
+    Continuous,
+    /// Slides along its axis.
+    Prismatic,
+    Fixed,
+}
+
+impl JointKind {
+    /// The kind a `joint = "…"` names, as URDF names it.
+    pub fn named(name: &str) -> Option<JointKind> {
+        match name {
+            "revolute" => Some(JointKind::Revolute),
+            "continuous" => Some(JointKind::Continuous),
+            "prismatic" => Some(JointKind::Prismatic),
+            "fixed" => Some(JointKind::Fixed),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JointKind::Revolute => "revolute",
+            JointKind::Continuous => "continuous",
+            JointKind::Prismatic => "prismatic",
+            JointKind::Fixed => "fixed",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeKind {
     Group,
@@ -57,14 +103,26 @@ pub enum NodeKind {
     Polygon { points: Points, paths: Points, convexity: u32 },
     Text(TextParams),
     Surface { file: String, center: bool, invert: bool, timestamp: i64 },
-    Import { file: String, layer: String, origin: [f64; 2], scale: f64, convexity: u32, segments: Segments, timestamp: i64 },
+    /// `object` (not in the reference) keeps one object, by its name, of
+    /// a 3MF or OBJ file; empty for all.
+    Import {
+        file: String,
+        layer: String,
+        origin: [f64; 2],
+        scale: f64,
+        convexity: u32,
+        segments: Segments,
+        timestamp: i64,
+        object: String,
+    },
 
     Transform(Matrix),
     Color([f64; 4]),
     /// Not in the reference: a part of the model kept apart from the rest,
     /// which a glTF export writes as a node of its own to move and animate.
-    /// Other exports unite it with the rest, as a group.
-    Part { name: String },
+    /// Other exports unite it with the rest, as a group. A URDF export
+    /// makes it a link, which its joint moves.
+    Part { name: String, joint: Option<Joint> },
     Offset { op: OffsetOp, segments: Segments },
     Resize { size: [f64; 3], auto: [bool; 3], convexity: u32 },
     LinearExtrude {
@@ -233,13 +291,14 @@ impl NodeKind {
                 "surface(file = {}, center = {center}, invert = {invert}, timestamp = {timestamp})",
                 string(file)
             ),
-            NodeKind::Import { file, layer, origin, scale, convexity, segments, timestamp } => format!(
-                "import(file = {}, layer = {}, origin = {}, scale = {}, convexity = {convexity}, {}, timestamp = {timestamp})",
+            NodeKind::Import { file, layer, origin, scale, convexity, segments, timestamp, object } => format!(
+                "import(file = {}, layer = {}, origin = {}, scale = {}, convexity = {convexity}, {}, {}timestamp = {timestamp})",
                 string(file),
                 string(layer),
                 vector(origin),
                 c_g(*scale),
-                segments.csg()
+                segments.csg(),
+                if object.is_empty() { String::new() } else { format!("object = {}, ", string(object)) }
             ),
             NodeKind::Transform(m) => {
                 let rows: Vec<String> = m.iter().map(|row| value_vector(row)).collect();

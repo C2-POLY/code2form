@@ -84,6 +84,30 @@
 				<string>scad</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>3D mesh</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.standard-tesselated-geometry-format</string>
+				<string>public.geometry-definition-format</string>
+				<string>public.3mf</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>stl</string>
+				<string>3mf</string>
+				<string>obj</string>
+				<string>off</string>
+				<string>amf</string>
+				<string>step</string>
+				<string>stp</string>
+			</array>
+		</dict>
 	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>

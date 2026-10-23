@@ -17,6 +17,7 @@ mod find;
 mod highlight;
 mod icon_setting;
 mod icons;
+mod insert;
 mod inspect;
 mod mount;
 mod open_events;

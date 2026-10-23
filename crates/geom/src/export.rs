@@ -6,6 +6,8 @@
 
 use std::fmt::Write;
 
+use manifold_rust::cross_section::CrossSection;
+use manifold_rust::linalg::{Mat3x4, Vec3};
 use manifold_rust::manifold::Manifold;
 
 use crate::build::Model;
@@ -89,18 +91,68 @@ impl Rendered {
     /// BLOCKS and OBJECTS sections that some readers (Inkscape) need.
     /// `None` for an empty or 3D model.
     pub fn dxf(&self) -> Option<String> {
-        let (outlines, _) = flat_outlines(&self.model)?;
-        let mut out = String::with_capacity(96 * outlines.iter().map(Vec::len).sum::<usize>() + 256);
-        out.push_str("  0\nSECTION\n  2\nBLOCKS\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n");
-        for outline in &outlines {
-            for (i, [x1, y1]) in outline.iter().enumerate() {
-                let [x2, y2] = outline[(i + 1) % outline.len()];
-                let _ = write!(out, "  0\nLINE\n  8\n0\n 10\n{x1:?}\n 20\n{y1:?}\n 11\n{x2:?}\n 21\n{y2:?}\n");
-            }
-        }
-        out.push_str("  0\nENDSEC\n  0\nSECTION\n  2\nOBJECTS\n  0\nDICTIONARY\n  0\nENDSEC\n  0\nEOF\n");
-        Some(out)
+        let Model::Flat(section) = &self.model else { return None };
+        let (outlines, _) = section_outlines(section)?;
+        Some(dxf_lines(&outlines))
     }
+
+    /// The model seen from `yaw` and `pitch` (degrees, as in
+    /// [`crate::VIEWS`]) as a DXF drawing: its silhouette projected
+    /// straight along the view, at its real size, x to the view's right
+    /// and y up it. Angles within half a degree of a quarter turn are taken
+    /// as that turn, so that a view from the top is exactly that. A 2D
+    /// model is drawn as it is. `None` for an empty model.
+    pub fn view_dxf(&self, yaw: f64, pitch: f64) -> Option<String> {
+        let section = match &self.model {
+            Model::Solid(manifold) => {
+                let [right, up, back] = view_basis(yaw, pitch);
+                let col = |j: usize| Vec3::new(right[j], up[j], back[j]);
+                manifold.transform(&Mat3x4::from_cols(col(0), col(1), col(2), Vec3::new(0.0, 0.0, 0.0))).project()
+            }
+            Model::Flat(section) => section.clone(),
+            Model::Empty => return None,
+        };
+        let (outlines, _) = section_outlines(&section)?;
+        Some(dxf_lines(&outlines))
+    }
+}
+
+/// The view's right, up and back (towards the viewer) directions, in the
+/// app's convention: yaw about Z from +X, pitch above the XY plane.
+fn view_basis(yaw: f64, pitch: f64) -> [[f64; 3]; 3] {
+    let snap = |degrees: f64| {
+        let turn = (degrees / 90.0).round() * 90.0;
+        if (degrees - turn).abs() <= 0.5 { turn } else { degrees }
+    };
+    let (yaw, pitch) = (snap(yaw).to_radians(), snap(pitch).clamp(-90.0, 90.0).to_radians());
+    let (sy, cy) = yaw.sin_cos();
+    let (sp, cp) = pitch.sin_cos();
+    let back = [cp * cy, cp * sy, sp];
+    let forward = back.map(|c| -c);
+    // forward × Z, made of length 1: still the yaw's when looking straight
+    // down, as the app keeps it.
+    let right = [-sy, cy, 0.0];
+    // right × forward
+    let up = [
+        right[1] * forward[2] - right[2] * forward[1],
+        right[2] * forward[0] - right[0] * forward[2],
+        right[0] * forward[1] - right[1] * forward[0],
+    ];
+    [right, up, back]
+}
+
+/// A LINE on layer 0 for each edge of each outline.
+fn dxf_lines(outlines: &[Vec<[f64; 2]>]) -> String {
+    let mut out = String::with_capacity(96 * outlines.iter().map(Vec::len).sum::<usize>() + 256);
+    out.push_str("  0\nSECTION\n  2\nBLOCKS\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n");
+    for outline in outlines {
+        for (i, [x1, y1]) in outline.iter().enumerate() {
+            let [x2, y2] = outline[(i + 1) % outline.len()];
+            let _ = write!(out, "  0\nLINE\n  8\n0\n 10\n{x1:?}\n 20\n{y1:?}\n 11\n{x2:?}\n 21\n{y2:?}\n");
+        }
+    }
+    out.push_str("  0\nENDSEC\n  0\nSECTION\n  2\nOBJECTS\n  0\nDICTIONARY\n  0\nENDSEC\n  0\nEOF\n");
+    out
 }
 
 /// The outlines of a non-empty 2D model, none of them empty, and their
@@ -109,6 +161,10 @@ type Outlines = (Vec<Vec<[f64; 2]>>, [f64; 4]);
 
 fn flat_outlines(model: &Model) -> Option<Outlines> {
     let Model::Flat(section) = model else { return None };
+    section_outlines(section)
+}
+
+fn section_outlines(section: &CrossSection) -> Option<Outlines> {
     let outlines: Vec<Vec<[f64; 2]>> = section
         .to_polygons()
         .into_iter()
@@ -132,6 +188,21 @@ fn unsigned_zero(v: f64) -> f64 {
 /// lists say which copies are one vertex, and without them the mesh would
 /// have open edges along every color boundary.
 fn indexed_mesh(manifold: &Manifold) -> (Vec<[f64; 3]>, Vec<[usize; 3]>) {
+    let mesh = colored_mesh(manifold);
+    (mesh.vertices, mesh.triangles)
+}
+
+/// A solid's vertices, each once, and its triangles with their colors.
+pub(crate) struct ColoredMesh {
+    pub vertices: Vec<[f64; 3]>,
+    pub triangles: Vec<[usize; 3]>,
+    /// Each triangle's color, [`crate::DEFAULT_COLOR`] where none is set.
+    pub colors: Vec<[f32; 4]>,
+}
+
+/// The solid's vertices, merged where colors split them (see
+/// [`indexed_mesh`]), numbered in order of first use, and its triangles.
+pub(crate) fn colored_mesh(manifold: &Manifold) -> ColoredMesh {
     let mesh = manifold.get_mesh_gl64(-1);
     let stride = mesh.num_prop as usize;
     let count = mesh.vert_properties.len() / stride.max(1);
@@ -152,7 +223,15 @@ fn indexed_mesh(manifold: &Manifold) -> (Vec<[f64; 3]>, Vec<[usize; 3]>) {
         number[v]
     };
     let triangles = mesh.tri_verts.chunks(3).map(|t| [corner(t[0]), corner(t[1]), corner(t[2])]).collect();
-    (vertices, triangles)
+    let colors = mesh
+        .tri_verts
+        .chunks(3)
+        .map(|t| match &mesh.vert_properties[t[0] as usize * stride..] {
+            p if stride >= 7 => [p[3] as f32, p[4] as f32, p[5] as f32, p[6] as f32],
+            _ => crate::DEFAULT_COLOR,
+        })
+        .collect();
+    ColoredMesh { vertices, triangles, colors }
 }
 
 /// The model part. Numbers use Rust's debug notation, the shortest that
@@ -391,6 +470,45 @@ mod tests {
     #[test]
     fn no_pauses_no_pauses_part() {
         assert_eq!(pauses_part("cube(5);"), (None, Vec::new()));
+    }
+
+    fn view(src: &str, yaw: f64, pitch: f64) -> Vec<[f64; 4]> {
+        let program = c2f_eval::Program::load(src, std::path::Path::new("t.scad"), &[]).expect("parses");
+        let dxf = crate::render(&c2f_eval::evaluate(&program).nodes).view_dxf(yaw, pitch).expect("a drawing");
+        let values: Vec<&str> = dxf.lines().collect();
+        values
+            .windows(11)
+            .filter(|w| w[0] == "LINE")
+            .map(|w| [w[4], w[6], w[8], w[10]].map(|v| v.parse().unwrap()))
+            .collect()
+    }
+
+    fn extent(lines: &[[f64; 4]]) -> [f64; 4] {
+        lines.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |[a, b, c, d], l| {
+            [a.min(l[0]).min(l[2]), b.min(l[1]).min(l[3]), c.max(l[0]).max(l[2]), d.max(l[1]).max(l[3])]
+        })
+    }
+
+    #[test]
+    fn a_view_from_the_top_is_the_outline_at_its_size() {
+        let lines = view("cube([10, 20, 30]);", -90.0, 90.0);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(extent(&lines), [0.0, 0.0, 10.0, 20.0]);
+        // The app's top view stops half a degree short: the same drawing.
+        assert_eq!(extent(&view("cube([10, 20, 30]);", -90.0, 89.5)), [0.0, 0.0, 10.0, 20.0]);
+    }
+
+    #[test]
+    fn a_view_from_the_front_is_in_x_and_z() {
+        let lines = view("cube([10, 20, 30]);", -90.0, 0.0);
+        let [x0, y0, x1, y1] = extent(&lines);
+        assert!((x1 - x0 - 10.0).abs() < 1e-9 && (y1 - y0 - 30.0).abs() < 1e-9, "{:?}", extent(&lines));
+    }
+
+    #[test]
+    fn a_hole_through_the_view_stays_a_hole() {
+        let lines = view("difference() { cube(10); translate([5, 5, -1]) cylinder(r = 2, h = 12, $fn = 6); }", -90.0, 90.0);
+        assert_eq!(lines.len(), 4 + 6);
     }
 
     #[test]

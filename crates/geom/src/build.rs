@@ -63,7 +63,8 @@ pub fn render_in(nodes: &[Node], base_dir: &Path) -> Rendered {
     let parts: Vec<Model> = nodes.iter().map(|n| builder.node(n, ctx)).collect();
     let model = builder.union(parts);
     let is_2d = matches!(model, Model::Flat(_));
-    let solid = display(&model, None);
+    let mut solid = display(&model, None);
+    solid.append(std::mem::take(&mut builder.loose));
     let stats = match &model {
         Model::Solid(m) => Stats { triangles: m.num_tri(), vertices: m.num_vert(), volume: m.volume() },
         Model::Flat(c) => Stats { triangles: 0, vertices: c.num_vert(), volume: c.area() },
@@ -116,6 +117,10 @@ struct Builder {
     /// The `multmatrix()`es around the node being built, innermost last:
     /// a `#` or `%` part is shown where they put it.
     placement: Vec<Matrix>,
+    /// Imported meshes that are not closed solids: shown where the model
+    /// puts them, as a downloaded part should be, but left out of the
+    /// model and its exports.
+    loose: RenderMesh,
 }
 
 impl Builder {
@@ -322,14 +327,21 @@ impl Builder {
                 }
                 section.map_or(Model::Empty, Model::Flat)
             }
-            NodeKind::Import { file, layer, origin, scale, segments, .. } => {
+            NodeKind::Import { file, layer, origin, scale, segments, object, .. } => {
                 let params = DxfParams { layer, origin: *origin, scale: *scale, segments: *segments };
                 let mut warnings = Vec::new();
-                let imported = import::import(&self.base_dir.join(file), file, &params, &mut warnings);
+                let imported = import::import(&self.base_dir.join(file), file, &params, object, &mut warnings);
                 warnings.into_iter().for_each(|w| self.warn(w));
                 match imported {
                     Some(Imported::Flat(section)) => Model::Flat(section),
-                    Some(Imported::Solid(meshes)) => self.meshes(meshes, ctx, &format!("import(\"{file}\")")),
+                    Some(Imported::Solid(meshes)) => {
+                        let what = if object.is_empty() {
+                            format!("import(\"{file}\")")
+                        } else {
+                            format!("import(\"{file}\", object = \"{object}\")")
+                        };
+                        self.meshes(meshes, ctx, &what)
+                    }
                     None => Model::Empty,
                 }
             }
@@ -517,20 +529,62 @@ impl Builder {
     }
 
     /// Imported meshes as one solid painted `ctx`'s color; imperfect ones
-    /// go through Manifold's robust import.
+    /// are mended (see [`import::repair`]), then go through Manifold's
+    /// robust import.
     fn meshes(&mut self, meshes: Vec<TriMesh>, ctx: Ctx, what: &str) -> Model {
         let mut solids = Vec::new();
-        for mesh in &meshes {
-            let mesh = mesh_gl(mesh, ctx.paint());
-            let strict = Manifold::from_mesh_gl64(&mesh);
-            let solid = if strict.is_empty() { Manifold::from_mesh_gl64_robust(&mesh) } else { strict };
+        for triangles in &meshes {
+            let mesh = mesh_gl(triangles, ctx.paint());
+            let mut solid = Manifold::from_mesh_gl64(&mesh);
             if solid.is_empty() {
-                self.warn(format!("{what} is not a closed solid"));
+                let (shells, repairs) = import::repair::repair(triangles);
+                let mut mended = Vec::new();
+                let mut lost = false;
+                for shell in &shells {
+                    let mesh = mesh_gl(shell, ctx.paint());
+                    let mut part = Manifold::from_mesh_gl64(&mesh);
+                    if part.is_empty() {
+                        part = Manifold::from_mesh_gl64_robust(&mesh);
+                    }
+                    // Shells of a few faces, flat once filled, are specks
+                    // the repair drops; a larger one lost loses the mesh.
+                    lost |= part.is_empty() && shell.triangles.len() * 100 > triangles.triangles.len();
+                    if !part.is_empty() {
+                        mended.push(Model::Solid(part));
+                    }
+                }
+                if let Some(united) = solid_of(combine(mended, OpType::Add)).filter(|_| !lost) {
+                    solid = united;
+                    let done = repairs.describe();
+                    let done = if done.is_empty() { "its shells taken apart".to_string() } else { done };
+                    self.warn(format!("{what} was not a closed solid; repaired: {done}"));
+                }
+            }
+            if solid.is_empty() {
+                self.warn(format!("{what} is not a closed solid: it is shown, but left out of the model and its exports"));
+                self.show_loose(triangles, ctx.paint());
             } else {
                 solids.push(Model::Solid(solid));
             }
         }
         combine(solids, OpType::Add)
+    }
+
+    /// Draws `mesh` where the model puts it, outside the model.
+    fn show_loose(&mut self, mesh: &TriMesh, color: [f32; 4]) {
+        let m = self.placement.iter().fold(c2f_eval::node::IDENTITY, |m, inner| crate::parts::multiply(&m, inner));
+        let place = |[x, y, z]: [f64; 3]| {
+            let at = |i: usize| (m[i][0] * x + m[i][1] * y + m[i][2] * z + m[i][3]) as f32;
+            [at(0), at(1), at(2)]
+        };
+        // A mirror turns the faces inside out.
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        for &[a, b, c] in &mesh.triangles {
+            let [a, b, c] = [a, b, c].map(|i| place(mesh.positions[i as usize]));
+            let corners = if det < 0.0 { [a, c, b] } else { [a, b, c] };
+            self.loose.push_triangle(corners, [color; 3]);
+        }
     }
 }
 
@@ -601,7 +655,7 @@ fn colored(m: Manifold, ctx: Ctx) -> Model {
     Model::Solid(m.set_properties(COLOR_PROPS, move |props, _, _| props.copy_from_slice(&color)))
 }
 
-fn transform(model: Model, m: &Matrix) -> Model {
+pub(crate) fn transform(model: Model, m: &Matrix) -> Model {
     match model {
         Model::Solid(solid) => {
             let col = |j: usize| Vec3::new(m[0][j], m[1][j], m[2][j]);

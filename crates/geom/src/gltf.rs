@@ -284,7 +284,7 @@ fn build(split: Parts, base_dir: &Path, options: &GltfOptions, motion: Option<Mo
 
 /// `names`, a number added to those met before (`lid`, `lid 2`), so that
 /// engines that key nodes by name keep them as written.
-fn unique<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+pub(crate) fn unique<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for name in names {
         let mut candidate = name.to_string();
