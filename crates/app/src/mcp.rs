@@ -172,11 +172,14 @@ fn tools() -> Value {
                             name with .c2fc), whose enclosure is the design; names the circuit in the design \
                             (// @circuit); moves the design's drawing, unchanged, into a module design(); and adds \
                             empty modules electronics_cuts() (subtracted: cutout_for, holes_for, channel_for) and \
-                            electronics_mounts() (added: standoffs_for). Then place the parts and wires in the \
+                            electronics_mounts() (added: standoffs_for). A design made of pieces (part()) keeps \
+                            them: only the piece that holds the electronics (`piece`, needed when there are \
+                            several) takes the cuts and mounts, where the design draws it. Then place the parts and wires in the \
                             circuit, and fill the two modules. Reports the volume before and after, which match.",
             "inputSchema": schema_of(json!({
                 "path": { "type": "string", "description": "The design's .c2f file; it is rewritten." },
                 "circuit": { "type": "string", "description": "The circuit file's name, beside the design (default: <design>.c2fc)." },
+                "piece": { "type": "string", "description": "In a design made of pieces, the part() that holds the electronics." },
             }), &["path"]),
         },
         {
@@ -422,7 +425,8 @@ fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
         return Err(format!("{} exists already: name another with `circuit`", circuit_path.display()));
     }
     let before = render(&json!({ "path": path }))?.1;
-    let done = c2f_circuit::electrify::electrify(&src, &design_file, &circuit_file)?;
+    let piece = args.get("piece").and_then(Value::as_str);
+    let done = c2f_circuit::electrify::electrify(&src, &design_file, &circuit_file, piece)?;
     std::fs::write(&circuit_path, &done.circuit).map_err(|err| format!("cannot write {}: {err}", circuit_path.display()))?;
     std::fs::write(&path, &done.design).map_err(|err| format!("cannot write {}: {err}", path.display()))?;
     let after = render(&json!({ "path": path }))?.1;

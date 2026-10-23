@@ -891,6 +891,22 @@ difference() {
 }
 ```
 
+A design made of pieces (`part("Base")`, `part("Dome")`) keeps them
+apart: a piece inside that `difference()` would be merged into the
+geometry around it. So `electrify` leaves the drawing where it is and
+gives the cuts and mounts to the piece that holds the electronics, named
+with `piece` when there are several, wherever the design draws it:
+
+```scad
+part("Base") difference() { union() { base(); electronics_mounts(); } electronics_cuts(); }
+```
+
+They are written in the design's coordinates, which are the piece's
+where the design draws it assembled.
+
 In the app, a design that names its circuit has an Electronics button
 on the top bar, and a circuit with an enclosure a Part button, to go
 from one to the other.
+
+[From an idea to a night light](idea-to-build.md) follows the two
+prompts on a real example, step by step, with the pictures of each.

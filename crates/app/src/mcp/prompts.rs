@@ -77,8 +77,8 @@ const PROMPTS: &[Prompt] = &[
                strapping or serial pins without a reason). Tell the user the plan and the parts list \
                before going on.\n\
                3. Call `electrify` on the design: it creates the circuit file beside it and keeps the \
-               design as it is, in a `design()` module, with empty `electronics_cuts()` and \
-               `electronics_mounts()`.\n\
+               design as it is, with empty `electronics_cuts()` and `electronics_mounts()` applied to it \
+               (for a design made of pieces, to the `piece` that holds the electronics).\n\
                4. Place the parts in the circuit (`at`, `rotate`, in the design's coordinates) where \
                they fit and can be reached (ports at a wall, the board on standoffs), and write the \
                wires, power first. Check with `check_circuit` and `fit`; fix every error, and every \
