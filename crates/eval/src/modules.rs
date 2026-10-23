@@ -256,8 +256,9 @@ pub fn instantiate<'p>(
             let joint = joint(interp, &name, &p);
             with_children!(p, NodeKind::Part { name, joint })
         }
-        // Not in the reference: an enclosure's standoffs, screw holes and
-        // cutouts, and the parts themselves, from the circuit it names.
+        // Not in the reference: an enclosure's standoffs, screw holes,
+        // cutouts and wire channels, and the parts themselves, from the
+        // circuit it names.
         "standoffs_for" => {
             let p = bind!(["part", "height"], ["d", "hole", "screw"]);
             Ok(Some(enclosure::standoffs(interp, &p)))
@@ -269,6 +270,10 @@ pub fn instantiate<'p>(
         "cutout_for" => {
             let p = bind!(["part", "port"], ["clearance", "depth"]);
             Ok(Some(enclosure::cutout(interp, &p)))
+        }
+        "channel_for" => {
+            let p = bind!(["wire", "d"]);
+            Ok(Some(enclosure::channel(interp, &p)))
         }
         "circuit_part" => {
             let p = bind!(["part"]);

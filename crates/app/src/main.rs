@@ -7,7 +7,7 @@ mod mcp;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
-       c2f circuit <command> [--csv] [--margin <mm>] <file.c2fc>
+       c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>
        c2f mcp
 
 commands:
@@ -49,7 +49,12 @@ circuit commands, on a `.c2fc` circuit:
           together or to ground, a supply or ground left open, a
           wired nc pin) fail it; warnings (no common ground, a wired
           reserved pin, two outputs on a net, parts that run into
-          each other or into the enclosure) do not
+          each other or into the enclosure, wires that run into it)
+          do not
+  fit     how each part fits in the enclosure: its least room to the
+          enclosure and to the other parts, and warnings for a part
+          under the clearance, a port no cutout_for opens, a mount
+          hole with no standoff, a wire that runs into the enclosure
   wires   print the wiring list in the order to lay the wires: step,
           from pin to pin (with their labels), color, length and label;
           the length is the routed curve's plus a margin
@@ -61,6 +66,7 @@ circuit commands, on a `.c2fc` circuit:
   --csv   wires and bom as comma-separated values
   --margin <mm>  added to each wire's length (default 10: two stripped
           ends of 5 mm)
+  --clearance <mm>  the room fit wants around each part (default 0.5)
 
 options:
   -D name=value   sets a variable, as if assigned at the end of the file

@@ -17,16 +17,7 @@ pub const TOUCHING: f64 = 0.01;
 /// than [`TOUCHING`] of volume: their indices, in order, and that volume.
 /// What is not a solid collides with nothing.
 pub fn collisions(solids: &[(&Model, Placement)]) -> Vec<(usize, usize, f64)> {
-    let placed: Vec<Option<Manifold>> = solids
-        .iter()
-        .map(|(model, m)| match model {
-            Model::Solid(solid) if !solid.is_empty() => {
-                let col = |j: usize| Vec3::new(m[0][j], m[1][j], m[2][j]);
-                Some(solid.transform(&Mat3x4::from_cols(col(0), col(1), col(2), col(3))))
-            }
-            _ => None,
-        })
-        .collect();
+    let placed: Vec<Option<Manifold>> = solids.iter().map(|(model, m)| place(model, m)).collect();
     let boxes: Vec<_> = placed.iter().map(|m| m.as_ref().map(Manifold::bounding_box)).collect();
     let mut found = Vec::new();
     for i in 0..placed.len() {
@@ -51,6 +42,17 @@ pub fn collisions(solids: &[(&Model, Placement)]) -> Vec<(usize, usize, f64)> {
         }
     }
     found
+}
+
+/// The solid of `model` placed by `m`; `None` when it is not a solid.
+pub(crate) fn place(model: &Model, m: &Placement) -> Option<Manifold> {
+    match model {
+        Model::Solid(solid) if !solid.is_empty() => {
+            let col = |j: usize| Vec3::new(m[0][j], m[1][j], m[2][j]);
+            Some(solid.transform(&Mat3x4::from_cols(col(0), col(1), col(2), col(3))))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

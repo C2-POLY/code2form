@@ -92,6 +92,10 @@ pub struct Wire {
     pub to: End,
     pub color: Option<String>,
     pub label: Option<String>,
+    /// Points the wire passes through on its way, in the circuit's
+    /// coordinates: to route it around what is in the way, or along a
+    /// channel of the enclosure.
+    pub via: Vec<[f64; 3]>,
     /// The checks whose warnings about its two pins are accepted, from
     /// [`check::ALLOWABLE`].
     pub allow: Vec<String>,
@@ -279,6 +283,7 @@ struct WireEntry {
     to: Spanned<String>,
     color: Option<String>,
     label: Option<String>,
+    via: Option<Spanned<Vec<Vec<f64>>>>,
     #[serde(default)]
     allow: Vec<Spanned<String>>,
 }
@@ -404,6 +409,17 @@ impl Reader<'_> {
         }
     }
 
+    /// Points of three finite numbers each, none when left out.
+    fn points(&mut self, value: Option<&Spanned<Vec<Vec<f64>>>>, field: &str) -> Vec<[f64; 3]> {
+        let Some(points) = value else { return Vec::new() };
+        let valid = points.get_ref().iter().all(|p| p.len() == 3 && p.iter().all(|n| n.is_finite()));
+        if !valid {
+            self.error(format!("`{field}` is a list of points of three finite numbers, [[x, y, z], ...]"), span(points));
+            return Vec::new();
+        }
+        points.get_ref().iter().map(|p| [p[0], p[1], p[2]]).collect()
+    }
+
     /// The part file a circuit names, read once.
     fn part_file(&mut self, name: &Spanned<String>) -> Option<&PartFile> {
         if !self.files.contains_key(name.get_ref()) {
@@ -457,9 +473,10 @@ impl Reader<'_> {
             let expected = check::ALLOWABLE.join(", ");
             self.error(format!("`{}` is not a warning that can be allowed: expected one of {expected}", rule.get_ref()), span(rule));
         }
+        let via = self.points(entry.via.as_ref(), "via");
         let allow = entry.allow.into_iter().map(Spanned::into_inner).collect();
         let (span, to_span) = (span(&entry.from), span(&entry.to));
-        Some(Wire { from, to, color: entry.color, label: entry.label, allow, span, to_span })
+        Some(Wire { from, to, color: entry.color, label: entry.label, via, allow, span, to_span })
     }
 
     fn end(&mut self, circuit: &Circuit, end: &Spanned<String>) -> Option<End> {

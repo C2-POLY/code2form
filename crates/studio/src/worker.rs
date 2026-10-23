@@ -426,7 +426,14 @@ fn render_circuit(
                 render_enclosure(text, enclosure_path, path, &found, library_paths)
             });
             let collisions = parts.collisions(&found, &rendered, enclosure.as_ref());
-            Ok(circuit::scene(&found, &rendered, enclosure.as_deref(), &collisions, source, &mut console))
+            let fits = parts.fits(&found, &rendered, enclosure.as_ref());
+            let scene = circuit::scene(&found, &rendered, enclosure.as_deref(), &collisions, &fits, source, &mut console);
+            // Not kept: a wire's edit moves it, and rays cost little.
+            if let Some(enclosure) = &enclosure {
+                let crossings = c2f_geom::crossings(&found, &enclosure.model);
+                console.extend(crossings.iter().map(|crossing| Line::new(Level::Warning, crossing.message(&found))));
+            }
+            Ok(scene)
         }
         Err(errors) => {
             console.extend(errors.iter().map(|err| Line::new(Level::Error, err.render())));

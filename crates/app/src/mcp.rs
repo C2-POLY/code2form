@@ -40,7 +40,8 @@ annotations and sheet, `check_part` it, then `save_part` it into the \
 user's library; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
-`circuit_bom` list its wires in order and its parts. To go from an \
+`circuit_bom` list its wires in order and its parts, `fit` says how its \
+parts fit in their enclosure. To go from an \
 idea to a printed object with its electronics, follow the prompts \
 `design_object` (the model first, approved by the user) then \
 `add_electronics` (`electrify` makes the approved design ready for its \

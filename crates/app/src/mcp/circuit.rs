@@ -1,5 +1,6 @@
 //! The MCP tools for electronics: the library's parts and their pins, then
-//! a circuit (`.c2fc`) checked, listed and pictured with its wires.
+//! a circuit (`.c2fc`) checked, listed and pictured with its wires, and
+//! how its parts fit in their enclosure.
 
 use std::path::{Path, PathBuf};
 
@@ -10,7 +11,7 @@ use c2f_lang::annotations::{self, PortSize};
 use serde_json::{Value, json};
 
 use super::{IMAGE_SIZE, Tool, base64, picture, pretty, schema_of, text};
-use crate::circuit::{DEFAULT_MARGIN, assemble, bom, wires};
+use crate::circuit::{DEFAULT_MARGIN, assemble, bom, fit, placed_warnings, wires};
 
 /// The library folder parts are listed from.
 const ELECTRONICS: &str = "electronics";
@@ -67,7 +68,8 @@ pub fn tools() -> Vec<Value> {
                             `part.pin` to `part.pin` with a `color` and a `label`), evaluates its parts and checks its \
                             wiring. Errors (`ok` false) and warnings come with their file, line and column: a supply above \
                             what a pin takes, supplies tied together or to ground, a supply or ground left open, a wired nc \
-                            pin; no common ground, a wired reserved pin, two outputs on one net.",
+                            pin; no common ground, a wired reserved pin, two outputs on one net, parts that run into \
+                            each other or into the enclosure, wires that run into the enclosure.",
             "inputSchema": schema_of(circuit(), &[]),
         }),
         json!({
@@ -97,6 +99,23 @@ pub fn tools() -> Vec<Value> {
             "description": "The parts by file and params: name, quantity, file, params and the instances' names.",
             "inputSchema": schema_of(circuit(), &[]),
         }),
+        json!({
+            "name": "fit",
+            "title": "How the parts fit",
+            "description": "How each part of a circuit fits in its enclosure, in millimeters: its least clearance, its gap \
+                            to the enclosure around it (with where), to what it rests on and to the nearest part, the \
+                            ports a wall covers (no cutout_for in front of them) and the mount holes with no standoff, \
+                            then the wires that run into the enclosure. `tight` and the warnings flag what comes closer \
+                            than `clearance`. Gaps over 10 mm are null.",
+            "inputSchema": schema_of(super::merge(circuit(), json!({
+                "clearance": {
+                    "type": "number",
+                    "minimum": 0,
+                    "default": c2f_geom::CLEARANCE,
+                    "description": "The room each part needs around it, in millimeters.",
+                },
+            })), &[]),
+        }),
     ]
 }
 
@@ -109,6 +128,7 @@ pub fn tool(name: &str) -> Option<Tool> {
         "circuit_image" => circuit_image,
         "circuit_wires" => circuit_wires,
         "circuit_bom" => circuit_bom,
+        "fit" => fit_tool,
         _ => return None,
     })
 }
@@ -298,6 +318,10 @@ fn check_circuit(args: &Value) -> Result<Vec<Value>, String> {
             Severity::Warning => warnings.push(value),
         }
     }
+    // As `c2f circuit check`: they need every part.
+    if assembly.errors.is_empty() {
+        warnings.extend(placed_warnings(&circuit, &assembly).into_iter().map(|w| json!({ "message": w })));
+    }
     let report = json!({
         "ok": errors.is_empty(),
         "parts": circuit.parts.len(),
@@ -306,6 +330,80 @@ fn check_circuit(args: &Value) -> Result<Vec<Value>, String> {
         "warnings": warnings,
     });
     if errors.is_empty() { Ok(vec![text(pretty(&report))]) } else { Err(pretty(&report)) }
+}
+
+fn fit_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let clearance = match args.get("clearance") {
+        None => c2f_geom::CLEARANCE,
+        Some(value) => value.as_f64().filter(|mm| mm.is_finite() && *mm >= 0.0).ok_or("`clearance` is a length in millimeters, 0 or more")?,
+    };
+    let (circuit, src, path) = load(args)?;
+    let assembly = assemble(&circuit, &src, &path);
+    if !assembly.errors.is_empty() {
+        let errors: Vec<Value> = assembly.errors.iter().map(|e| problem(&e.path, &e.src, &e.diagnostic)).collect();
+        return Err(pretty(&json!({ "ok": false, "errors": errors })));
+    }
+    let fitted = fit(&circuit, &assembly)?;
+    let gap = |gap: &c2f_geom::Gap| {
+        json!({ "distance_mm": gap.distance, "overlap_mm3": gap.overlap, "at": gap.at })
+    };
+    let parts: Vec<Value> = circuit
+        .parts
+        .iter()
+        .zip(&fitted.parts)
+        .enumerate()
+        .map(|(index, (instance, part))| {
+            let nearest = part.parts.first().map(|(other, g)| {
+                let mut value = gap(g);
+                value["part"] = json!(circuit.parts[*other].name);
+                value
+            });
+            let ports: Vec<Value> = part
+                .covered_ports
+                .iter()
+                .map(|(port, at)| json!({ "port": instance.annotations.ports[*port].name, "at": at }))
+                .collect();
+            let holes: Vec<Value> = part
+                .loose_holes
+                .iter()
+                .map(|&hole| json!({ "hole": hole + 1, "at": instance.place(instance.annotations.mount_holes[hole].position) }))
+                .collect();
+            json!({
+                "name": instance.name,
+                "clearance_mm": part.clearance(),
+                "tight": part.tight(clearance),
+                "enclosure": part.enclosure.as_ref().map(gap),
+                "rests_on": part.rests.as_ref().map(gap),
+                "nearest": nearest,
+                "covered_ports": ports,
+                "loose_holes": holes,
+                "warnings": part.warnings(&circuit, index, clearance, true),
+            })
+        })
+        .collect();
+    let wires: Vec<Value> = fitted
+        .crossings
+        .iter()
+        .map(|crossing| {
+            let wire = &circuit.wires[crossing.wire];
+            json!({
+                "wire": crossing.wire + 1,
+                "from": circuit.end_name(wire.from),
+                "to": circuit.end_name(wire.to),
+                "at": crossing.at,
+                "facing": crossing.facing,
+                "message": crossing.message(&circuit),
+            })
+        })
+        .collect();
+    let report = json!({
+        "clearance": clearance,
+        "enclosure": fitted.enclosure,
+        "parts": parts,
+        "wires": wires,
+        "warnings": fitted.warnings(&circuit, clearance),
+    });
+    Ok(vec![text(pretty(&report))])
 }
 
 fn circuit_wires(args: &Value) -> Result<Vec<Value>, String> {

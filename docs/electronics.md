@@ -249,6 +249,7 @@ label = "I2C"
 | `from`, `to` | two pins, as `part.pin`, required |
 | `color` | the wire's color: a CSS name (`red`, `orange`, `purple`...) or `#rrggbb` |
 | `label` | what the wire carries, shown in the legend and the wiring list |
+| `via` | points the wire passes through on its way, `[[x, y, z], ...]` in the circuit's coordinates (see [Wires through the enclosure](#wires-through-the-enclosure)) |
 | `allow` | warnings accepted for the pins at its two ends: `["reserved"]`, `["two_outputs"]`, `["common_ground"]` (see [Check the wiring](#3-check-the-wiring)) |
 
 A part's file is found next to the circuit first, then in the library
@@ -384,8 +385,73 @@ allow = ["reserved"]
 
 ```console
 $ c2f circuit check examples/grogu/grogu.c2fc
-examples/grogu/grogu.c2fc: 8 parts, 23 wires: no errors
+WARNING: wire 3 (cap.+ -> amp.VIN) runs into the enclosure at [-21.6, 25.5, -1.8], through a face facing -z: route it around with `via`, or carve it a channel_for(3)
+WARNING: wire 4 (cap.- -> amp.GND) runs into the enclosure at [-18.2, 25.5, -1.7], through a face facing -z: route it around with `via`, or carve it a channel_for(4)
+examples/grogu/grogu.c2fc: 8 parts, 23 wires: no errors, 2 warnings
 ```
+
+The two warnings come from the parts and the enclosure, not from the
+wiring: the capacitor's leads leave it downwards, through the plate.
+With an `enclosure`, the check also warns of a part that runs into
+another or into the enclosure (by its volume, in mm³), and of a wire
+whose curve runs into the enclosure: where its curve first is in the
+material, and the way the face it meets faces (`-z`, or a vector for a
+slanted wall). The wire's center line is checked, not its thickness.
+
+### Does it fit?
+
+`c2f circuit fit` measures the room each part has in the enclosure, in
+millimeters, and warns of what will not go together. On
+`crates/app/tests/fit/winder.c2fc`, a watch winder's XIAO, ULN2003
+board and stepper motor in a box whose back wall has no opening for the
+USB-C:
+
+```console
+$ c2f circuit fit winder.c2fc
+part    clearance  enclosure  rests on  nearest part
+xiao    3.50 mm    3.50 mm    0.00 mm   motor 9.39 mm
+driver  6.00 mm    6.00 mm    0.00 mm   over 10 mm
+motor   1.00 mm    1.00 mm    0.00 mm   xiao 9.39 mm
+WARNING: no cutout_for in front of port `xiao.usb_c`: the enclosure covers it at [26.5, 36.0, 5.6]
+winder.c2fc: 3 parts, 1 warning
+```
+
+| Column | Is |
+|---|---|
+| `clearance` | the least room around the part: the smaller of `enclosure` and `nearest part` |
+| `enclosure` | the shortest distance from the part to the enclosure around it, `overlaps by` a volume when it runs into it |
+| `rests on` | the distance to what the part rests on: the enclosure beyond the face of its mount holes (its bottom when it has none) |
+| `nearest part` | the closest other part, and how far |
+
+What the part rests on does not count against its clearance: a board
+touches its standoffs, a motor its flange's wall. What it puts through
+that support, as a motor's shaft through its hole, does: its room is
+measured from 1 mm past the face it rests on. Further than 10 mm,
+there is room enough and the distance is not measured (`over 10 mm`).
+
+Warnings, which do not fail the command:
+
+| Warning | When |
+|---|---|
+| "`motor` is 0.38 mm from the enclosure at [...], under the 0.5 mm clearance" | a part comes closer than the clearance to the enclosure or to another part; "touches" at 0, "runs into" or "overlap" when they share some volume |
+| "no cutout_for in front of port `xiao.usb_c`: the enclosure covers it at [...]" | a wall is in front of most of a port's opening, within 5 mm of it |
+| "no standoff under mount hole 2 of `driver` (at [...])" | the enclosure is nowhere within 1 mm along the hole's axis, around the hole |
+| "wire 7 (driver.A -> motor.blue) runs into the enclosure at [...]" | as for `c2f circuit check` |
+
+`--clearance 1` asks for 1 mm of room instead of 0.5 mm. "At [...]" is
+where, in the circuit's coordinates, to the nearest tenth of a
+millimeter.
+
+The distances are exact for the meshes as rendered: the shortest
+distance between the triangles of the two surfaces. A round face counts
+as its facets, so set `$fn` on both sides for a tight fit: a 9 mm boss in
+a 10 mm hole, both at `$fn = 48`, has 0.998 mm of room, not 1 mm. Where
+two surfaces come closest is located to within the size of the smaller
+of the two triangles there: on a large flat face, about where. Ports and
+mount holes are probed with rays, a grid of 25 across a port's opening
+(out to 80% of the way to its edge: a grille counts as open when most of
+its rays pass) and a ring of 8 around a hole at 0.75 times its diameter,
+between a standoff's bore and its outside.
 
 The app runs the same checks each time the circuit changes, and prints
 them in the console. The line of the first error is marked in the
@@ -427,7 +493,10 @@ shows it. It follows the circuit as you type, before you save.
 
 A part that runs into the enclosure or into another part turns red, and
 the console says by how much, as "Collision: `touch` runs into the
-enclosure by 120.00 mm³". Parts that only touch are fine.
+enclosure by 120.00 mm³". Parts that only touch are fine. A part closer
+than 0.5 mm to the enclosure or to another part turns amber, and the
+console gives the warnings of [`c2f circuit fit`](#does-it-fit), with
+the wires that run into the enclosure.
 
 To look inside, turn on **Layers**: the slider cuts the parts, the
 enclosure and the wires at a height.
@@ -580,6 +649,7 @@ standoffs and cutouts follow at the next render.
 | `standoffs_for(part, height, d, hole, screw)` | a standoff under each mount hole of the part, `height` long, along the hole's direction |
 | `holes_for(part, depth, hole, screw)` | a clearance hole at each mount hole, from 1 mm behind it, `depth` long (10 by default), to subtract |
 | `cutout_for(part, port, clearance = 0.5, depth = 10)` | the port's opening grown by `clearance`, from 1 mm behind it along the way it faces, to subtract from a wall |
+| `channel_for(wire, d = 3)` | a tube `d` across along the wire's curve, its `via` points included, to subtract so that the wire passes |
 | `circuit_part(part)` | the part itself, with its params, where the circuit places it |
 
 `screw = "M2"`, `"M2.5"` or `"M3"` sizes a standoff and its pilot hole
@@ -624,6 +694,49 @@ Without `@circuit`, or with a part or port the circuit does not have,
 the modules warn and draw nothing. The reference implementation ignores
 them as unknown modules.
 
+### Wires through the enclosure
+
+A wire is drawn as a curve from pin to pin, and `c2f circuit check`
+warns when that curve runs into the enclosure. Two ways out: route it
+around, or carve it a passage.
+
+`via` lists points the wire passes through, in order, in the circuit's
+coordinates. The curve still leaves each pin the way the pin points,
+then runs through each point, turning smoothly there. The views draw it
+so, and the wiring list's lengths count the detour. Over the left wall
+of a box:
+
+```toml
+[[wires]]
+from = "xiao.5V"
+to = "driver.VCC"
+color = "red"
+label = "5 V"
+via = [[-53.5, 0, 55]]
+```
+
+`channel_for(wire, d = 3)` makes a tube `d` across along the same curve,
+to subtract from the enclosure: a passage the wire, 1 mm thick as
+drawn, runs through without touching. `wire` is the wire's number, from
+1 in the file's order (as the check's warnings and the app's `wire:7`
+name it), or a label: every wire with that label, carved as a bundle.
+The watch winder's motor cable runs through its back plate; its frame
+file carves the five wires a passage:
+
+```scad
+// @circuit winder.c2fc
+include <watch_winder.c2f>
+difference() {
+    frame();
+    channel_for("motor cable", d = 4, $fn = 12);
+}
+```
+
+A channel is a chain of spheres, hulled two by two, 24 to a stretch of
+wire: under a file's `$fn = 64` it renders in seconds, with `$fn = 12`
+in a fraction of one. A channel follows its wire: move a part or a
+`via` point, and the channel moves at the next render.
+
 ## 6. From the command line
 
 ```sh
@@ -634,6 +747,8 @@ c2f circuit wires grogu.c2fc            # the wiring list, in the order to lay t
 c2f circuit wires --csv grogu.c2fc      # the same, as CSV
 c2f circuit bom grogu.c2fc              # the bill of materials
 c2f circuit bom --csv grogu.c2fc
+c2f circuit fit grogu.c2fc              # each part's room in the enclosure, and what does not fit
+c2f circuit fit --clearance 1 grogu.c2fc
 c2f circuit stl grogu.c2fc > grogu.stl  # the parts assembled (not the wires)
 c2f circuit 3mf grogu.c2fc > grogu.3mf
 ```
@@ -687,11 +802,23 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 | `circuit_image` | a PNG of the circuit with its wires; `net` (as `xiao.GND`) highlights one net |
 | `circuit_wires` | the wiring list |
 | `circuit_bom` | the bill of materials |
+| `fit` | how each part fits in the enclosure, as [`c2f circuit fit`](#does-it-fit) says it; `clearance` sets the room wanted |
 | `check_part` | a part's annotations checked against its rendered shape (see below) |
 | `save_part` | writes a part into your parts folder, then checks it (see below) |
 
 The circuit tools take the circuit as `code` (its parts found from
-`working_dir`, then the library) or as a file `path`. A typical request:
+`working_dir`, then the library) or as a file `path`. `check_circuit`
+also gives, as warnings, the parts that run into each other or into the
+enclosure and the wires that run into it.
+
+`fit` answers in JSON, a part at a time: its `name`, its least
+`clearance_mm` (null over 10 mm), `tight` when it is under `clearance`
+or collides, `enclosure`, `rests_on` and `nearest` (each with
+`distance_mm`, `overlap_mm3` and `at`, the nearest with its `part`; null
+over 10 mm), its `covered_ports` and `loose_holes` with where, and its
+`warnings`. Then `wires`, those that run into the enclosure (`wire`
+from 1, `from`, `to`, `at`, `facing`), and all the `warnings`, word for
+word those of `c2f circuit fit`. A typical request:
 "With the Code2Form tools, build a `robot.c2fc` circuit for a XIAO
 ESP32-S3 that drives a DC motor through a DRV8833: look up the parts'
 pins, check the circuit until it has no errors, and show me the

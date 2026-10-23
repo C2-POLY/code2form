@@ -1,0 +1,43 @@
+# A circuit like the watch winder's, in a box of its own (frame.c2f), for
+# the fit tests: a XIAO on the floor, its USB-C facing the back wall, a
+# ULN2003 board on standoffs, and the 28BYJ-48 hanging under a shelf, its
+# shaft through it.
+
+version = 1
+
+enclosure = "frame.c2f"
+
+[parts.xiao]
+part = "electronics/xiao_esp32s3.c2f"
+at = [14, 10, 4]
+
+[parts.driver]
+part = "parts/uln2003.c2f"
+at = [-45, -5, 9]
+
+[parts.motor]
+part = "parts/stepper_28byj48.c2f"
+at = [20, -20, 30]
+
+[[wires]]
+from = "xiao.5V"
+to = "driver.VCC"
+color = "red"
+label = "5 V"
+
+[[wires]]
+from = "xiao.GND"
+to = "driver.GND"
+color = "black"
+
+[[wires]]
+from = "driver.A"
+to = "motor.blue"
+color = "blue"
+label = "motor cable"
+
+[[wires]]
+from = "driver.M+"
+to = "motor.red"
+color = "red"
+label = "motor cable"

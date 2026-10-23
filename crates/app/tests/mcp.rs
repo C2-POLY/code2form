@@ -92,7 +92,7 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "check_part", "save_part"]
+        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
@@ -404,11 +404,15 @@ fn an_agent_builds_the_grogu_circuit() {
         assert!(pins[part].iter().any(|p| p == pin), "{end}");
     }
 
-    // The circuit's text validates: no errors, the strapping pin's warning.
+    // The circuit's text validates: no errors, the strapping pin's warning
+    // allowed; only the capacitor's two leads, which leave it downwards,
+    // run through the plate.
     let (is_error, report) = server.report("check_circuit", json!({ "code": src, "working_dir": dir }));
     assert!(!is_error, "{report}");
     assert_eq!((&report["ok"], &report["errors"], &report["parts"], &report["wires"]), (&json!(true), &json!([]), &json!(8), &json!(23)));
-    assert!(report["warnings"].as_array().unwrap().iter().all(|w| w["message"].as_str().unwrap().contains("reserved")), "{report}");
+    let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().map(|w| w["message"].as_str().unwrap()).collect();
+    assert_eq!(warnings.len(), 2, "{report}");
+    assert!(warnings.iter().all(|w| w.contains("(cap.") && w.contains("runs into the enclosure")), "{report}");
 
     // A mistake is an error on its line.
     let wrong = src.replace("from = \"xiao.3V3\"", "from = \"xiao.5V\"");
@@ -686,4 +690,41 @@ light_sensor();
     assert!(!is_error, "{report}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), changed);
     let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn fit_reports_each_part_as_the_command_line_does() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fit");
+    let mut server = Server::start();
+    let (is_error, report) = server.report("fit", json!({ "path": dir.join("winder.c2fc") }));
+    assert!(!is_error, "{report}");
+    assert_eq!((&report["clearance"], &report["enclosure"]), (&json!(0.5), &json!(true)));
+    let parts = report["parts"].as_array().unwrap();
+    let names: Vec<&str> = parts.iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["xiao", "driver", "motor"]);
+    // Each part has its clearance; none is too tight, but the XIAO's USB-C
+    // faces a wall.
+    assert!(parts.iter().all(|p| p["clearance_mm"].as_f64().unwrap() > 0.9 && p["tight"] == false), "{report}");
+    assert_eq!(parts[0]["covered_ports"][0]["port"], "usb_c", "{report}");
+    assert_eq!(parts[2]["nearest"]["part"], "xiao", "{report}");
+    assert!(parts[1]["rests_on"]["distance_mm"].as_f64().unwrap() < 1e-9, "{report}");
+    assert_eq!(report["wires"], json!([]));
+
+    // The command line finds the same, from the same circuit.
+    let output = Command::new(env!("CARGO_BIN_EXE_c2f")).args(["circuit", "fit", "winder.c2fc"]).current_dir(&dir).output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for part in parts {
+        let row = stdout.lines().find(|line| line.starts_with(part["name"].as_str().unwrap())).unwrap();
+        let clearance = format!("{:.2} mm", part["clearance_mm"].as_f64().unwrap());
+        assert!(row.contains(&clearance), "{row}: {part}");
+    }
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let warnings: Vec<&str> = stderr.lines().map(|line| line.trim_start_matches("WARNING: ")).collect();
+    assert_eq!(json!(warnings), report["warnings"]);
+
+    // A larger clearance makes the motor too tight.
+    let (_, report) = server.report("fit", json!({ "path": dir.join("winder.c2fc"), "clearance": 2 }));
+    assert_eq!(report["parts"][2]["tight"], true, "{report}");
+    let (is_error, _) = server.report("fit", json!({ "path": dir.join("winder.c2fc"), "clearance": -1 }));
+    assert!(is_error);
 }
