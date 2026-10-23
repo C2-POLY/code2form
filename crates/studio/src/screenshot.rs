@@ -9,7 +9,8 @@
 //! `mic` mid-drag at x 40, y 10; `settings:model` shows a page of the
 //! settings (`general`, `appearance`, `editor`, `model`, `export`,
 //! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
-//! `exploded` draws its part()s apart (`play,exploded` does both).
+//! `exploded` draws its part()s apart (`play,exploded` does both;
+//! `exploded,axis` along each part's axis).
 //! `CODE2FORM_APPEARANCE` picks the theme, `CODE2FORM_LANGUAGE` the
 //! language (`en` or `fr`).
 

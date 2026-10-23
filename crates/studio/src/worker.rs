@@ -758,7 +758,7 @@ mod tests {
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!("no render") };
         let Ok(scene) = outcome.result else { panic!("the render failed") };
         let exploded = scene.exploded.expect("an exploded view");
-        assert!(exploded.offsets()[0][2] > 0.0, "the lid lifts");
+        assert!(exploded.offsets(c2f_geom::Explode::Radial)[0][2] > 0.0, "the lid lifts");
         let generation = worker.render("cube(10);".into(), path(), Vec::new(), 0.0);
         let Some(Reply::Rendered(outcome)) = wait_for(&worker, generation).into_iter().last() else { panic!("no render") };
         assert!(outcome.result.unwrap().exploded.is_none());
