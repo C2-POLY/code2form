@@ -1,0 +1,354 @@
+// A winder for an automatic watch: a drum tilted at 30° turns slowly,
+// driven by a quiet 28BYJ-48 stepper through a 14 to 64 tooth gear pair
+// (about 3.3 turns a minute from the motor's 15).
+//
+// The watch sits on a cushion in the drum, out front, where its weight
+// would bend an axle held at the back only. So the drum's front rim rolls
+// on two 608 bearings (skateboard bearings, 22 mm), which carry the
+// weight down to the base, and a third 608 in the back plate is the
+// pivot. The motor only turns the drum; it carries nothing.
+//
+// Bought parts, drawn in the assembly only, in grey and blue: the
+// 28BYJ-48, three 608 bearings, an 8 mm rod or M8 bolt for the pivot,
+// and two M8 bolts as the rollers' axles. Press play to see it turn;
+// `show` lays one printed part out alone, to export it for printing.
+
+/* [Winder] */
+// What to show: the whole winder, or one printed part to export.
+show = "assembly"; // [assembly, print, drum, cushion, base, back_plate, pinion]
+// Tilt of the drum's axis above horizontal, in degrees.
+tilt = 30; // [0:5:45]
+// Inside radius of the drum.
+drum_r = 44; // [30:60]
+// Depth of the drum.
+drum_depth = 70; // [50:110]
+
+/* [Watch] */
+// Tissot PRX 40 mm (T931.407.41.041.00): its case, and its steel bracelet,
+// closed on the clasp.
+case_d = 40;
+case_h = 10.93;
+// The bracelet's inside length, closed: your wrist's size. The cushion's
+// outline is made this long, for the bracelet to slide on snugly.
+wrist = 170; // [140:1:210]
+// Width of the bracelet (about 26 mm where it leaves the PRX's case).
+bracelet_w = 26; // [16:36]
+// The cushion's depth, front to back.
+cushion_depth = 30; // [20:40]
+
+/* [Gears] */
+// Teeth of the motor's pinion and of the drum's ring.
+pinion_teeth = 14;
+ring_teeth = 64;
+// Tooth size: the pitch circle's diameter is module × teeth.
+module_size = 1.5; // [1:0.25:2.5]
+
+/* [Hidden] */
+wall = 3;
+bearing = [22, 8, 7]; // 608: outer diameter, bore, width
+// A 608's inner race reaches 6 mm out, its outer race starts 8.5 mm out:
+// the drum's collar presses on the first, the plate's shoulder on the second.
+inner_race_r = 6;
+shoulder_r = 8.25;
+roller_angle = 35; // each roller, from straight below the axis
+plate = 6;
+// The plate left in front of the motor, and the motor's body off its shaft.
+motor_face = 1.5;
+motor_offset = 8;
+height = 78; // the axis, where it meets the back plate, above the floor
+$fn = 64;
+
+// The cushion the bracelet goes around: height, depth and width. Its
+// outline, a rounded rectangle, is the wrist's length.
+cushion_r = 8;
+cushion = [
+    (wrist - 2 * PI * cushion_r - 2 * (cushion_depth - 2 * cushion_r)) / 2 + 2 * cushion_r,
+    cushion_depth,
+    bracelet_w + 8,
+];
+ring_r = module_size * ring_teeth / 2;
+pinion_r = module_size * pinion_teeth / 2;
+center_distance = ring_r + pinion_r;
+rim_r = drum_r + wall;
+roller_r = bearing[0] / 2;
+roller_z = drum_depth + 6;
+
+// One turn of the drum a loop.
+drum_angle = 360 * $t;
+
+// --- Gears (as examples/game/gears.c2f) ---
+
+function outline(z) =
+    let(
+        pitch = 360 / z,
+        tip = module_size * z / 2 + module_size,
+        root = module_size * z / 2 - 1.25 * module_size
+    )
+    [for (i = [0:z - 1], corner = [[-0.30, root], [-0.13, tip], [0.13, tip], [0.30, root]])
+        let(a = (i + corner[0]) * pitch) corner[1] * [cos(a), sin(a)]];
+
+// The angle of gear b, driven by gear a at `angle`, seen from a at
+// `towards` degrees.
+function driven(angle, za, zb, towards) = -(za / zb) * (angle - towards) + towards + 180 + 180 / zb;
+
+module gear(z, thickness) {
+    linear_extrude(thickness) polygon(outline(z));
+}
+
+// --- Printed parts, in the drum's frame: the axis along +Z, the back
+// plate's front face at z = 0 ---
+
+// The drum: the ring gear at the back, the hub on the pivot, the shell,
+// and the rim the rollers carry at the front.
+module drum() {
+    difference() {
+        union() {
+            // The ring gear, closed as the drum's back.
+            translate([0, 0, 2]) gear(ring_teeth, 6);
+            // The collar that bears on the pivot's inner race only: the
+            // bolt clamps the race to it, and it keeps the bearing in.
+            cylinder(r = inner_race_r, h = 2);
+            // The hub, around the M8 bolt.
+            translate([0, 0, 8]) cylinder(r = 9, h = 10);
+        }
+        translate([0, 0, -1]) cylinder(r = 4.1, h = 20);
+        // The bolt's nut, sunk in the hub's front (M8: 13 mm across flats).
+        translate([0, 0, 18 - 6.5]) cylinder(r = 13 / 2 / cos(30) + 0.2, h = 7, $fn = 6);
+    }
+    // The shell, open at the front.
+    translate([0, 0, 8]) difference() {
+        cylinder(r = rim_r, h = drum_depth);
+        translate([0, 0, 2]) cylinder(r = drum_r, h = drum_depth);
+    }
+    // The rim the rollers run on: wider, with lips that keep it on them.
+    translate([0, 0, roller_z - 5]) difference() {
+        union() {
+            cylinder(r = rim_r + 1, h = 10);
+            for (z = [0, 9]) translate([0, 0, z]) cylinder(r = rim_r + 3, h = 1);
+        }
+        translate([0, 0, -1]) cylinder(r = drum_r, h = 12);
+    }
+    // Two ribs that hold the cushion upright.
+    for (side = [-1, 1])
+        translate([side * (cushion[2] / 2 + 1.5), 0, 10 + drum_depth / 2 - 5]) cube([3, 2 * drum_r - 4, drum_depth - 10], center = true);
+}
+
+// The cushion the strap goes around, a rounded block, slit at the back so
+// that it squeezes in.
+module cushion() {
+    difference() {
+        hull() for (y = [-1, 1], z = [-1, 1])
+            translate([0, y * (cushion[0] / 2 - cushion_r), z * (cushion[1] / 2 - cushion_r)]) rotate([0, 90, 0])
+                cylinder(r = cushion_r, h = cushion[2], center = true);
+        translate([0, 0, -cushion[1] / 2 - 1]) cube([cushion[2] + 2, 3, cushion[1]], center = true);
+    }
+}
+
+module pinion() {
+    difference() {
+        gear(pinion_teeth, 6);
+        // The 28BYJ-48's shaft: 5 mm with two flats 3 mm apart.
+        translate([0, 0, -1]) intersection() {
+            cylinder(r = 2.6, h = 8, $fn = 24);
+            cube([3.2, 6, 20], center = true);
+        }
+    }
+}
+
+// The back plate, with the pivot's bearing and the motor's mount, in the
+// drum's frame.
+module back_plate() {
+    difference() {
+        union() {
+            translate([-rim_r - 8, -center_distance - 22, -plate]) cube([2 * rim_r + 16, center_distance + rim_r + 30, plate]);
+            // The bearing's housing, behind the plate.
+            translate([0, 0, -plate - 8]) cylinder(r = bearing[0] / 2 + 3, h = 8);
+        }
+        // The pivot's 608, pressed in from the front, flush with the
+        // plate: the drum's weight down the tilt pushes it back onto the
+        // shoulder behind, which bears on its outer race only.
+        translate([0, 0, -bearing[2]]) cylinder(r = bearing[0] / 2 + 0.1, h = bearing[2] + 1);
+        // Through the shoulder, room for the bolt's head on the inner race.
+        translate([0, 0, -plate - 9]) cylinder(r = shoulder_r, h = plate + 9);
+        // The motor sits in a pocket at the back, leaving `motor_face` of
+        // plate in front of it, so that its short shaft reaches through
+        // the pinion: its body, and its flange with the two ears.
+        translate([0, -center_distance, 0]) {
+            translate([0, motor_offset, -plate - 1]) cylinder(r = 14.4, h = plate + 1 - motor_face);
+            translate([0, motor_offset, -plate - 1]) hull() {
+                cylinder(r = 7.4, h = plate + 1 - motor_face);
+                for (x = [-17.5, 17.5]) translate([x, 0, 0]) cylinder(r = 3.9, h = plate + 1 - motor_face);
+            }
+            // A notch for the blue cover the wires leave by, on the can's
+            // side away from the shaft.
+            translate([-8, motor_offset + 11, -plate - 1]) cube([16, 14, plate + 1 - motor_face]);
+            // The shaft's boss, and the two M4 screws through the ears.
+            translate([0, 0, -plate - 1]) cylinder(r = 5, h = plate + 2);
+            for (x = [-17.5, 17.5]) translate([x, motor_offset, -plate - 1]) cylinder(r = 2.1, h = plate + 2, $fn = 16);
+        }
+        // The M3 screws into the cheeks.
+        for (at = cheek_screws()) translate([at[0], at[1], -plate - 1]) cylinder(r = 1.7, h = plate + 2, $fn = 16);
+    }
+}
+
+// Where each roller is, in the drum's frame: under the rim, either side.
+function roller_at(side) = (rim_r + 1 + roller_r) * [side * sin(roller_angle), -cos(roller_angle)];
+
+// A point of the drum's frame in the world's.
+function world(p) =
+    let(a = 90 - tilt) [p[0], p[1] * cos(a) - p[2] * sin(a), height + p[1] * sin(a) + p[2] * cos(a)];
+
+// The frame: the back plate on the base, screwed to its two cheeks.
+module frame() {
+    base();
+    tilted() back_plate();
+}
+
+// Where the plate is screwed to each cheek, in the drum's frame: two M3
+// screws a side, through the plate into a block on the cheek.
+cheek_x = rim_r + 5;
+function cheek_screws() = [for (side = [-1, 1], y = [-center_distance - 12, rim_r + 2]) [side * cheek_x, y]];
+
+// The base: the floor, the cheeks the back plate is screwed to, and a post
+// under each roller with its axle's boss. It prints as it stands.
+module base() {
+    floor_front = world([0, -rim_r - 30, roller_z + 10])[1];
+    floor_back = world([0, rim_r + 8, -plate])[1];
+    translate([-rim_r - 8, floor_front, 0]) cube([2 * rim_r + 16, floor_back - floor_front + 5, 4]);
+    // The cheeks, from under the plate's sides down to the floor; a block
+    // under the plate takes its screws.
+    for (side = [-1, 1]) difference() {
+        hull() {
+            tilted() translate([side * cheek_x - 4, -center_distance - 22, -plate - 10]) cube([8, center_distance + rim_r + 30, 10]);
+            translate([side * cheek_x - 4, world([0, rim_r + 8, -plate])[1] - 30, 0]) cube([8, 35, 4]);
+        }
+        // Clear of the plate, and holes for its screws.
+        tilted() translate([side * cheek_x - 5, -center_distance - 23, -plate]) cube([10, center_distance + rim_r + 32, 20]);
+        for (at = cheek_screws()) if (sign(at[0]) == side) tilted() translate([at[0], at[1], -plate - 12]) cylinder(r = 1.3, h = 13, $fn = 16);
+    }
+    // The rollers' posts, each with a boss for its M8 axle behind the roller.
+    for (side = [-1, 1]) {
+        at = roller_at(side);
+        boss = world([at[0], at[1], roller_z - bearing[2] / 2 - 4]);
+        hull() {
+            tilted() translate([at[0], at[1], roller_z - bearing[2] / 2 - 8]) cylinder(r = 7, h = 4);
+            translate([boss[0] - 7, boss[1] - 7, 0]) cube([14, 14, 4]);
+        }
+        tilted() translate([at[0], at[1], roller_z - bearing[2] / 2 - 4]) cylinder(r = 5, h = 3.5);
+    }
+}
+
+// The drum's frame: the axis tilted up towards the front (-Y).
+module tilted() {
+    translate([0, 0, height]) rotate([90 - tilt, 0, 0]) children();
+}
+
+// --- Bought parts, see-through ---
+
+// The 28BYJ-48, its shaft at the origin: the body 8 mm off it, the flange
+// against the pocket's floor, the boss and the shaft as made (9.5 mm past
+// the flange in all).
+module motor() {
+    face = -motor_face;
+    color("SteelBlue") translate([0, motor_offset, face - 19]) cylinder(r = 14, h = 19);
+    color("SteelBlue") translate([0, motor_offset, face - 1]) difference() {
+        hull() for (x = [-17.5, 17.5]) translate([x, 0, 0]) cylinder(r = 3.5, h = 1);
+        for (x = [-17.5, 17.5]) translate([x, 0, -1]) cylinder(r = 2.1, h = 3, $fn = 16);
+    }
+    color("Gold") {
+        translate([0, 0, face]) cylinder(r = 4.5, h = 1.5);
+        translate([0, 0, face + 1.5]) intersection() {
+            cylinder(r = 2.5, h = 8, $fn = 24);
+            cube([3, 6, 20], center = true);
+        }
+    }
+}
+
+// The pivot's M8 bolt: its head behind the bearing, its shank through it
+// and the drum's hub, its nut sunk in the hub.
+module pivot_bolt() {
+    color("Silver") {
+        translate([0, 0, -bearing[2] - 5.3]) cylinder(r = 13 / 2 / cos(30), h = 5.3, $fn = 6);
+        translate([0, 0, -bearing[2]]) cylinder(r = 4, h = bearing[2] + 19);
+        translate([0, 0, 18 - 6.5]) cylinder(r = 13 / 2 / cos(30), h = 6.5, $fn = 6);
+    }
+}
+
+module bearing_608() {
+    color("Silver") difference() {
+        cylinder(r = bearing[0] / 2, h = bearing[2], center = true);
+        cylinder(r = bearing[1] / 2, h = bearing[2] + 1, center = true);
+    }
+}
+
+// The PRX on the cushion: its case and blue dial at the front, its steel
+// bracelet around the cushion.
+module watch() {
+    front = cushion[1] / 2;
+    color("Silver") translate([0, 0, front]) cylinder(d = case_d, h = case_h);
+    color("Gold") translate([0, 0, front + case_h - 1.5]) difference() {
+        cylinder(d = case_d - 1, h = 1.5);
+        translate([0, 0, -1]) cylinder(d = case_d - 7, h = 4);
+    }
+    color("RoyalBlue") translate([0, 0, front + case_h - 1.6]) cylinder(d = case_d - 7, h = 0.4);
+    color("LightGray") rotate([0, 90, 0]) linear_extrude(bracelet_w, center = true) difference() {
+        offset(r = cushion_r + 3.5) square([cushion[1] - 2 * cushion_r, cushion[0] - 2 * cushion_r], center = true);
+        offset(r = cushion_r) square([cushion[1] - 2 * cushion_r, cushion[0] - 2 * cushion_r], center = true);
+    }
+}
+
+// --- What is shown ---
+
+// Each printed part as it prints: flat on the bed, without supports.
+module drum_print() translate([0, 0, -2]) drum();
+module cushion_print() translate([0, 0, cushion[2] / 2]) rotate([0, 90, 0]) cushion();
+// The plate prints face down: its pocket and bearing housing up.
+module back_plate_print() rotate([180, 0, 0]) back_plate();
+
+if (show == "drum") drum_print();
+else if (show == "cushion") cushion_print();
+else if (show == "pinion") pinion();
+else if (show == "base") base();
+else if (show == "back_plate") back_plate_print();
+else if (show == "print") {
+    // The five printed parts side by side, as each prints; a 220 mm bed
+    // takes the drum, the plate and the pinion, then the base and the
+    // cushion (in TPU).
+    color("Tan") translate([0, 0, 0]) drum_print();
+    color("DimGray") translate([115, 0, 0]) back_plate_print();
+    color("Tomato") translate([30, 70, 0]) pinion();
+    color("DimGray") translate([0, 200, 0]) base();
+    color("Sienna") translate([115, 200, 0]) cushion_print();
+}
+else if (show == "assembly") {
+    color("DimGray") frame();
+    tilted() {
+        // The pivot's 608, fixed in the plate.
+        translate([0, 0, -bearing[2] / 2]) bearing_608();
+        rotate([0, 0, drum_angle]) part("drum") {
+            color("Tan") drum();
+            // The axle: it turns with the drum, clamping the bearing's
+            // inner race between its head and the drum's collar.
+            pivot_bolt();
+            translate([0, 0, 10 + drum_depth / 2]) {
+                color("Sienna") cushion();
+                watch();
+            }
+        }
+        translate([0, -center_distance, 0]) {
+            motor();
+            rotate([0, 0, driven(drum_angle, ring_teeth, pinion_teeth, -90)]) translate([0, 0, 2]) part("pinion") color("Tomato") pinion();
+        }
+        // The rollers turn the other way, as fast as the rim makes them.
+        for (side = [-1, 1]) {
+            at = roller_at(side);
+            translate([at[0], at[1], roller_z]) rotate([0, 0, -drum_angle * (rim_r + 1) / roller_r])
+                part(str("roller_", side < 0 ? "left" : "right")) bearing_608();
+            // Its axle, an M8 bolt into the post's boss.
+            translate([at[0], at[1], roller_z - bearing[2] / 2 - 4]) color("Silver") {
+                cylinder(r = 4, h = bearing[2] + 6);
+                translate([0, 0, bearing[2] + 6]) cylinder(r = 13 / 2 / cos(30), h = 5.3, $fn = 6);
+            }
+        }
+    }
+}

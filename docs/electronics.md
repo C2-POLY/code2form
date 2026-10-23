@@ -828,6 +828,9 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 | `save_part` | writes a part into your parts folder, then checks it (see below) |
 | `mass_properties` | what a design or a circuit weighs printed, its center of gravity, and how far it leans before it tips (see below) |
 | `loads` | the torque a motor must give a shaft, what each support takes, the shaft's deflection and the margins against the motor's and bearings' sheets (see below) |
+| `save_brief` | writes the brief the plan ends on; refused without a requirement a tool measures |
+| `read_brief` | a brief's text, requirements and `mass` and `loads` blocks |
+| `check_brief` | measures a design and its circuit against their brief: each requirement holds, fails or is unmeasured |
 
 The circuit tools take the circuit as `code` (its parts found from
 `working_dir`, then the library) or as a file `path`. `check_circuit`
@@ -941,16 +944,24 @@ at all, and the bearing alone holds the overhang's 7.4 N·mm.
 
 ### From an idea to a build
 
-The server offers two prompts, which Claude Code lists as
-`/mcp__code2form__design_object` and `/mcp__code2form__add_electronics`
-(Claude Desktop under the + button). They keep the work in order, each
-step ending on what you approve:
+The server offers three prompts, which Claude Code lists as
+`/mcp__code2form__plan_object`, `/mcp__code2form__design_object` and
+`/mcp__code2form__add_electronics` (Claude Desktop under the + button).
+They keep the work in order, each step ending on what you approve:
 
-1. **`design_object`** (a `description`, maybe `constraints` and a
-   `folder`): the agent writes a parametric design, renders it, looks
-   at it from every side, and shows it to you until you approve it. No
+1. **`plan_object`** (an `idea`, maybe a `folder`): the agent draws
+   nothing. It asks what the object must do, in short rounds that follow
+   your answers, reviews its mechanics (masses, balance, forces and
+   supports, torque, material, fastening, assembly, energy) with
+   `mass_properties` and `loads`, and writes a brief with `save_brief`:
+   its decisions, and requirements a tool measures. See
+   [the watch winder](plan-mode.md).
+2. **`design_object`** (a `brief` or a `description`, maybe
+   `constraints` and a `folder`): the agent writes a parametric design,
+   renders it, looks at it from every side, checks it against the brief
+   with `check_brief`, and shows it to you until you approve it. No
    electronics yet.
-2. **`add_electronics`** (the approved `design` and its `components`,
+3. **`add_electronics`** (the approved `design` and its `components`,
    as product page links or library names): the agent finds or creates
    each part, tells you its wiring plan, then calls `electrify` on the
    design, places the parts and wires them, checks the circuit, gives

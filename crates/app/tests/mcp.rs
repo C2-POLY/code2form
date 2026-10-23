@@ -1050,3 +1050,22 @@ fn check_brief_weighs_the_design_and_measures_the_motor_margins() {
     assert!(report["requirements"][3]["measured"].as_f64().unwrap() < 1.0, "{report}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The winder of docs/plan-mode.md: its brief holds, and the motor alone
+/// it replaced falls short.
+#[test]
+fn the_winder_holds_to_its_brief() {
+    let mut server = Server::start();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/winder");
+    let (is_error, report) = server.report(
+        "check_brief",
+        json!({ "brief": dir.join("brief.md"), "design": dir.join("watch_winder.c2f"), "circuit": dir.join("winder.c2fc") }),
+    );
+    assert!(!is_error, "{report}");
+    assert_eq!((&report["holds"], &report["fails"], &report["unmeasured"]), (&json!(9), &json!(0), &json!(2)), "{report}");
+    let scenario: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("motor_alone.json")).unwrap()).unwrap();
+    let (_, report) = server.report("loads", scenario);
+    assert!(report["margins"]["torque"].as_f64().unwrap() < 1.0, "{report}");
+    let (is_error, _) = server.report("check_circuit", json!({ "path": dir.join("winder.c2fc") }));
+    assert!(!is_error);
+}
