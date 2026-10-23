@@ -16,7 +16,7 @@ pub mod program;
 mod value;
 
 pub use node::{Node, NodeKind};
-pub use program::{LoadError, Program, USER_LIBRARIES, app_resources, default_library_paths, read_source};
+pub use program::{LoadError, Program, USER_LIBRARIES, app_resources, default_library_paths, read_source, user_parts_folder};
 
 /// The result of running a program.
 pub struct Output {

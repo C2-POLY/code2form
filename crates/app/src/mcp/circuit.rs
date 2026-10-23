@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use c2f_circuit::check::{self, Severity};
+use c2f_circuit::search::{self, Document};
 use c2f_circuit::{Circuit, End, route};
 use c2f_lang::annotations::{self, PortSize};
 use serde_json::{Value, json};
@@ -38,8 +39,14 @@ pub fn tools() -> Vec<Value> {
             "name": "library_parts",
             "title": "List the electronics parts",
             "description": "Lists the parts in the `electronics/` folders of the library paths: the name a circuit gives as \
-                            `part` (as `electronics/xiao_esp32s3.c2f`), the file, and its first comment line.",
-            "inputSchema": { "type": "object", "properties": {} },
+                            `part` (as `electronics/xiao_esp32s3.c2f`), the file, its description (its `// @description`, \
+                            else its first comment line), its specs and its sources (product page, datasheet). With \
+                            `query`, only the parts that answer it, best first, with their score: plain words in English \
+                            or French, matched against the name, description, specs and pins, whatever the case and \
+                            accents, with the domain's synonyms (`micro I2S`, `driver moteur`, `haut-parleur`).",
+            "inputSchema": schema_of(json!({
+                "query": { "type": "string", "description": "Words to search for, as `I2S microphone` or `capteur de température`." },
+            }), &[]),
         }),
         json!({
             "name": "part_pins",
@@ -106,7 +113,7 @@ pub fn tool(name: &str) -> Option<Tool> {
     })
 }
 
-fn library_parts(_: &Value) -> Result<Vec<Value>, String> {
+fn library_parts(args: &Value) -> Result<Vec<Value>, String> {
     let mut parts: Vec<(String, PathBuf)> = Vec::new();
     for library in c2f_eval::default_library_paths() {
         let mut files = Vec::new();
@@ -121,13 +128,42 @@ fn library_parts(_: &Value) -> Result<Vec<Value>, String> {
         }
     }
     parts.sort();
-    let parts: Vec<Value> = parts
-        .iter()
-        .map(|(name, file)| {
-            let description = std::fs::read_to_string(file).ok().and_then(|src| first_comment(&src));
-            json!({ "part": name, "file": file.display().to_string(), "description": description })
-        })
-        .collect();
+    let mut documents = Vec::new();
+    let mut sheets = Vec::new();
+    for (name, file) in &parts {
+        let src = std::fs::read_to_string(file).unwrap_or_default();
+        let (annotations, _) = annotations::read(&src);
+        let description = match &annotations.description {
+            Some(description) => Some(description.text.clone()),
+            None => first_comment(&src),
+        };
+        let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        documents.push(Document::new(&stem, name, description.as_deref().unwrap_or(""), &annotations));
+        let specs: serde_json::Map<String, Value> =
+            annotations.specs.iter().map(|spec| (spec.key.clone(), json!(spec.value))).collect();
+        let sources: Vec<Value> =
+            annotations.sources.iter().map(|source| json!({ "url": source.url, "label": source.label })).collect();
+        sheets.push(json!({
+            "part": name,
+            "file": file.display().to_string(),
+            "description": description,
+            "specs": specs,
+            "sources": sources,
+            "pins": annotations.pins.len(),
+        }));
+    }
+    let parts: Vec<Value> = match args.get("query").and_then(Value::as_str) {
+        None => sheets,
+        Some(query) => search::rank(&documents, query)
+            .into_iter()
+            .map(|(index, score)| {
+                let mut sheet = sheets[index].clone();
+                // Two decimals tell the ranks apart.
+                sheet["score"] = json!((score * 100.0).round() / 100.0);
+                sheet
+            })
+            .collect(),
+    };
     Ok(vec![text(pretty(&json!({ "parts": parts })))])
 }
 

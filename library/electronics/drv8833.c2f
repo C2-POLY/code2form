@@ -18,6 +18,19 @@
 // Annotations are plain numbers. The board sits 0.04 mm up, on its pads
 // and the print underneath.
 
+// @description Dual H-bridge motor driver on a small breakout board: runs
+// @description two brushed DC motors, or one bipolar stepper motor, from 2.7
+// @description to 10.8 V, with 3.3 V or 5 V logic inputs.
+// @spec driver: TI DRV8833, two H-bridges
+// @spec motor supply: 2.7 to 10.8 V (VCC)
+// @spec output current: 1.5 A RMS per bridge, 2 A peak
+// @spec logic inputs: up to 5.75 V, for 3.3 V or 5 V logic
+// @spec control: PWM on IN1 to IN4; EEP (nSLEEP) high to run, ULT (nFAULT) low on a fault
+// @spec protection: overcurrent, undervoltage lockout, thermal shutdown
+// @spec size: 18.5 x 16 mm
+// @source https://www.ti.com/product/DRV8833 product page
+// @source https://www.ti.com/lit/ds/symlink/drv8833.pdf datasheet
+
 use <lib/pin_header.c2f>
 
 /* [Build] */

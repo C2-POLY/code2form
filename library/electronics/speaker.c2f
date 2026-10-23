@@ -10,6 +10,14 @@
 // estimated: the cone's shape and the wires' exact place. It has no
 // mount holes: glue it, or hold its rim in a ring.
 
+// @description Small round speaker in a metal frame, 28 mm across and 5 mm
+// @description deep, on two wires: the sound of a small amplifier board.
+// @spec impedance: 8 ohm
+// @spec rating: 2 W, as sold
+// @spec size: 28 mm across, 5 mm deep
+// @spec wires: 60 mm leads with a JST PH 2-pin plug
+// @source https://www.adafruit.com/product/1890 a similar 28 mm, 8 ohm speaker (Adafruit)
+
 // @pin + [-1.4, 11, 0.4] down passive "red wire"
 // @pin - [1.4, 11, 0.4]  down passive "black wire"
 // @port cone [0, 0, 5] up d=24 "the cone: leave it open"

@@ -29,7 +29,9 @@
 
 pub mod check;
 pub mod electrify;
+pub mod part;
 pub mod route;
+pub mod search;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};

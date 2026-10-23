@@ -39,7 +39,8 @@ commands:
   check   parse only and report syntax errors and badly written
           electronics annotations
   pins    print the pins, mount holes and ports a part declares
-          (`// @pin`, `// @mount_hole`, `// @port`), one per line
+          (`// @pin`, `// @mount_hole`, `// @port`) and its sheet
+          (`// @description`, `// @spec`, `// @source`), one per line
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout
 
 circuit commands, on a `.c2fc` circuit:
@@ -325,6 +326,9 @@ fn pins(src: &str, file_name: &str) -> ExitCode {
     printed.extend(annotations.pins.iter().map(|a| (a.span, a.to_string())));
     printed.extend(annotations.mount_holes.iter().map(|a| (a.span, a.to_string())));
     printed.extend(annotations.ports.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.description.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.specs.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.sources.iter().map(|a| (a.span, a.to_string())));
     printed.sort_by_key(|(span, _)| span.start);
     let lines = c2f_lang::span::LineIndex::new(src);
     for (span, text) in printed {
