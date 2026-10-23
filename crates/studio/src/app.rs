@@ -1,12 +1,14 @@
-//! The studio window: toolbar, editor, 3D view, console and status bar,
-//! and the document they work on.
+//! The studio window: the header with the File menu, the tabs and the
+//! layout switch; the code with its console; the 3D view with its tools,
+//! the parameters and the animation bar over it; the status bar; and the
+//! document they work on.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, Frame, Id, Key, KeyboardShortcut, Layout, Margin, Modifiers, Rect,
+    self, Align, Align2, Button, Color32, CornerRadius, Frame, Id, Key, KeyboardShortcut, Layout, Margin, Modifiers, Rect,
     RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use eframe::glow;
@@ -24,6 +26,7 @@ use crate::editor::{Editor, FindRequest};
 use crate::examples;
 use crate::i18n::{self, Language, tr};
 use crate::icon_setting;
+use crate::icons::{self, Icon};
 use crate::open_events;
 use crate::pause_edit;
 use crate::part_edit::{self, Grab};
@@ -434,11 +437,12 @@ pub struct StudioApp {
     allow_close: bool,
     title: String,
     screenshot: Option<Screenshot>,
-    /// The widths of the toolbar's buttons on the right and on the left,
-    /// and of the app's name, as last drawn.
-    toolbar_right: f32,
-    toolbar_left: f32,
-    toolbar_name: f32,
+    /// The code beside the view, or one of them alone.
+    arrangement: Arrangement,
+    /// The widths of the header's buttons on the right and of its layout
+    /// switch, as last drawn.
+    header_right: f32,
+    header_switch: f32,
 }
 
 impl StudioApp {
@@ -505,11 +509,16 @@ impl StudioApp {
             allow_close: false,
             title: String::new(),
             screenshot: Screenshot::from_env(),
-            toolbar_right: 0.0,
-            toolbar_left: 0.0,
-            toolbar_name: 0.0,
+            arrangement: Arrangement::Split,
+            header_right: 0.0,
+            header_switch: 0.0,
         };
         app.apply_settings(ctx);
+        // A screenshot of a layout, as `layout:view`.
+        let layout = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("layout:"));
+        if let Some(arrangement) = layout.and_then(Arrangement::from_id) {
+            app.arrangement = arrangement;
+        }
         // A screenshot of a settings page, as `settings:shortcuts`.
         let page = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("settings:"));
         if let Some(section) = page.and_then(|page| Section::ALL.into_iter().find(|s| s.id() == page)) {
@@ -1069,8 +1078,8 @@ impl StudioApp {
         let done_count = self.doc.mount.done_count(&names);
         let (mut previous, mut next, mut restart, mut toggled) = (false, false, false, false);
         egui::Area::new(Id::new("assembly-bar"))
-            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.top() + 12.0))
-            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.top() + 60.0))
+            .order(egui::Order::Middle)
             .show(ctx, |ui| {
                 Frame::new()
                     .fill(theme::palette().veil(200))
@@ -1156,50 +1165,6 @@ impl StudioApp {
             ctx.request_repaint();
         }
         doc.viewer.set_explode(doc.explode_shown);
-    }
-
-    /// The exploded view's toggle over the top left of the view of a design
-    /// with part()s, and while it is on, how far apart.
-    fn explode_bar(&mut self, ctx: &egui::Context, rect: egui::Rect) {
-        let mut amount = self.doc.explode_amount;
-        let mut toggle = false;
-        let on = self.doc.exploded;
-        egui::Area::new(Id::new(("explode-bar", self.doc.id)))
-            .fixed_pos(egui::pos2(rect.left() + 12.0, rect.top() + 12.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(theme::palette().veil(200))
-                    .stroke(Stroke::new(1.0, theme::palette().line(30)))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::symmetric(10, 6))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let hint = tr("Draw the model's part()s apart, to see how they fit together", "Écarter les part() du modèle, pour voir comment elles s'assemblent");
-                            toggle = ui.add(egui::Button::selectable(on, tr("Exploded", "Vue éclatée"))).on_hover_text(hint).clicked();
-                            if !on {
-                                return;
-                            }
-                            let slider = egui::Slider::new(&mut amount, 0.0..=1.0)
-                                .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
-                                .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
-                            ui.add(slider).on_hover_text(tr("How far apart the parts are drawn", "L'écart entre les pièces"));
-                        });
-                    });
-            });
-        if amount != self.doc.explode_amount {
-            self.doc.explode_amount = amount;
-            // The slider moves the parts at once, without sliding.
-            self.doc.explode_shown = amount;
-        }
-        if toggle {
-            self.doc.exploded = !on;
-            if self.doc.exploded {
-                // The parts all the way apart are framed as they slide.
-                self.doc.viewer.set_explode(self.doc.explode_shown.max(0.01));
-                self.doc.viewer.view_all();
-            }
-        }
     }
 
     // ---- Animation ----
@@ -2115,179 +2080,192 @@ impl StudioApp {
 
     // ---- Panels ----
 
-    fn toolbar(&mut self, ctx: &egui::Context) {
+    /// The bar across the top: the app's icon and the File menu, the open
+    /// files' tabs, the layout switch in the middle, and on the right,
+    /// Render, Export and the settings.
+    fn header(&mut self, ctx: &egui::Context) {
         let keys = self.settings.shortcuts.clone();
-        let frame = Frame::new().fill(theme::palette().bg).inner_margin(Margin::symmetric(12, 8));
-        egui::TopBottomPanel::top("toolbar").frame(frame).show_separator_line(true).show(ctx, |ui| {
+        let palette = theme::palette();
+        let names = tabs::names(&self.shelf.iter(&self.doc).map(|tab| tab.path.as_deref()).collect::<Vec<_>>());
+        let tabs: Vec<(u64, String, bool, Option<String>)> = self
+            .shelf
+            .iter(&self.doc)
+            .zip(names)
+            .map(|(tab, name)| (tab.id, name, tab.is_dirty(), tab.path.as_ref().map(|p| p.display().to_string())))
+            .collect();
+        let active = self.shelf.active();
+        let (mut select, mut close, mut new) = (None, None, false);
+        let frame = Frame::new().fill(palette.bg).inner_margin(Margin { left: 10, right: 10, top: 6, bottom: 6 });
+        egui::TopBottomPanel::top("header").frame(frame).show_separator_line(true).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 // Snug buttons: room for the longer French labels.
                 ui.spacing_mut().button_padding.x = 8.0;
-                // The buttons on the right keep their place; the ones on the
-                // left scroll when the window is too narrow for both, as
-                // with longer French labels.
-                let room = (ui.available_width() - self.toolbar_right - 12.0).max(120.0);
+                let full = ui.available_rect_before_wrap();
+                ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
                 // The app's name beside its icon, while there is room for it.
-                let named = self.toolbar_left + self.toolbar_name <= room;
+                if full.width() > 1000.0 {
+                    ui.label(RichText::new("Code2Form").strong().color(palette.text).size(13.5));
+                }
+                self.file_menu(ui, ctx, &keys);
+                toolbar_separator(ui);
+
+                // The layout switch sits in the middle, unless the buttons on
+                // the right need its place; the tabs fill the room left of it
+                // and scroll when there are more.
+                let switch_left = (full.center().x - self.header_switch / 2.0)
+                    .min(full.right() - self.header_right - 12.0 - self.header_switch);
+                let room = (switch_left - 16.0 - ui.cursor().min.x).max(80.0);
                 egui::ScrollArea::horizontal()
-                    .id_salt("toolbar-left")
+                    .id_salt("header-tabs")
                     .max_width(room)
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
-                        let left = ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(18.0)));
-                            if named {
-                                let name = RichText::new("Code2Form").strong().color(theme::palette().text).size(14.5);
-                                self.toolbar_name = ui.label(name).rect.width() + 6.0;
-                            }
-                            ui.add_space(10.0);
-                            toolbar_separator(ui);
-
-                            if tool_button(ui, tr("New", "Nouveau"), tr("New file, in a new tab", "Nouveau fichier, dans un nouvel onglet"), Some(keys.get(Action::New))).clicked() {
-                                self.new_tab(ctx);
-                            }
-                            if tool_button(ui, tr("Open…", "Ouvrir…"), tr("Open files, each in its tab", "Ouvrir des fichiers, chacun dans son onglet"), Some(keys.get(Action::Open))).clicked() {
-                                self.open_dialog(ctx);
-                            }
-                            self.recent_menu(ui);
-                            self.examples_menu(ui);
-                            if tool_button(ui, tr("Save", "Enregistrer"), tr("Save the file", "Enregistrer le fichier"), Some(keys.get(Action::Save))).clicked() {
-                                self.save();
-                            }
-                            if tool_button(ui, tr("Save As…", "Enregistrer sous…"), tr("Save under a new name", "Enregistrer sous un nouveau nom"), Some(keys.get(Action::SaveAs))).clicked() {
-                                self.save_as();
-                            }
-                            toolbar_separator(ui);
-
-                            let render = Button::new(RichText::new(tr("Render", "Rendu")).color(theme::palette().on_accent).strong())
-                                .fill(theme::palette().accent)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(6));
-                            let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
-                            if ui.add(render).on_hover_text(tr!("Render now ({shortcut})", "Lancer le rendu ({shortcut})")).clicked() {
-                                self.render_now();
-                            }
-                            let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
-                            let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
-                                ui.menu_button(tr("Export", "Exporter"), |ui| {
-                                    // Solids above the separator, 2D models below.
-                                    let stl = if self.settings.binary_stl { tr("A binary STL", "Un STL binaire") } else { tr("An ASCII STL", "Un STL ASCII") };
-                                    let entries = [
-                                        (Format::Stl, stl),
-                                        (Format::ThreeMf, tr("A 3MF package, in millimeters", "Un paquet 3MF, en millimètres")),
-                                        (
-                                            Format::Glb,
-                                            tr(
-                                                "A glTF model for game engines (Godot, Unity), with its colors",
-                                                "Un modèle glTF pour moteurs de jeu (Godot, Unity), avec ses couleurs",
-                                            ),
-                                        ),
-                                        (Format::Svg, tr("An SVG drawing, in millimeters", "Un dessin SVG, en millimètres")),
-                                        (Format::Dxf, tr("A DXF drawing of line segments", "Un dessin DXF en segments")),
-                                    ];
-                                    for (format, hover) in entries {
-                                        if format == Format::Svg {
-                                            ui.separator();
-                                        }
-                                        let mut button = Button::new(format!("{}…", format.name()));
-                                        if format == self.shortcut_format() {
-                                            button = button.shortcut_text(shortcuts::describe(ctx, &keys.get(Action::Export)));
-                                        }
-                                        let disabled =
-                                            if Format::SOLID.contains(&format) { tr("For 3D models", "Pour les modèles 3D") } else { tr("For 2D models", "Pour les modèles 2D") };
-                                        let response = ui.add_enabled(formats.contains(&format), button);
-                                        if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
-                                            self.export(format);
-                                            ui.close();
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for (index, (id, name, dirty, path)) in tabs.iter().enumerate() {
+                                match tab(ui, *id, name, index == active, *dirty) {
+                                    TabClick::Select => select = Some(index),
+                                    TabClick::Close => close = Some(index),
+                                    TabClick::None(response) => {
+                                        if let Some(path) = path {
+                                            response.on_hover_text(path);
                                         }
                                     }
-                                })
-                            });
-                            export.response.on_disabled_hover_text(tr("Render a non-empty model first", "Faites d'abord le rendu d'un modèle non vide"));
+                                }
+                            }
+                            let shortcut = shortcuts::describe(ctx, &keys.get(Action::New));
+                            let plus = ui.add(Button::new(RichText::new("+").size(15.0).color(palette.text_dim)).frame(false));
+                            let hint = tr!("New file in a new tab ({shortcut})", "Nouveau fichier dans un nouvel onglet ({shortcut})");
+                            new = plus.on_hover_text(hint).clicked();
                         });
-                        let width = left.response.rect.width();
-                        self.toolbar_left = if named { width - self.toolbar_name } else { width };
                     });
+                ui.add_space((switch_left - ui.cursor().min.x).max(0.0));
+                let switch = ui.scope(|ui| {
+                    if let Some(arrangement) = layout_switch(ui, self.arrangement) {
+                        self.arrangement = arrangement;
+                    }
+                });
+                self.header_switch = switch.response.rect.width();
+
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if tool_button(ui, tr("Settings…", "Réglages…"), tr("Settings", "Réglages"), Some(keys.get(Action::Settings))).clicked() {
+                    let shortcut = shortcuts::describe(ctx, &keys.get(Action::Settings));
+                    if icons::button(ui, Icon::Settings, self.settings_open, &tr!("Settings ({shortcut})", "Réglages ({shortcut})")).clicked() {
                         self.settings_open = true;
                     }
-                    toolbar_separator(ui);
+                    self.export_menu(ui, ctx, &keys);
+                    let render = Button::new(RichText::new(tr("Render", "Rendu")).color(palette.on_accent).strong())
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(Vec2::new(0.0, 26.0));
+                    let shortcut = shortcuts::describe(ctx, &keys.get(Action::Render));
+                    if ui.add(render).on_hover_text(tr!("Render now ({shortcut})", "Lancer le rendu ({shortcut})")).clicked() {
+                        self.render_now();
+                    }
                     if self.doc.is_circuit() {
+                        toolbar_separator(ui);
                         let button = egui::Button::selectable(self.doc.mount.active, tr("Assembly", "Montage"));
                         let toggle = ui.add_enabled(self.mount_names().is_some(), button);
                         let hint = tr("Wire the circuit one wire at a time, in the file's order", "Câbler le circuit fil par fil, dans l'ordre du fichier");
                         if toggle.on_hover_text(hint).on_disabled_hover_text(tr("The circuit has no wires", "Le circuit n'a aucun fil")).clicked() {
                             self.set_mount(!self.doc.mount.active);
                         }
-                        toolbar_separator(ui);
-                    }
-                    // A circuit has no parameters: room for its own toggles.
-                    if self.doc.is_circuit() {
                         let toggle = ui.toggle_value(&mut self.catalogue_open, "Catalogue");
                         toggle.on_hover_text(tr(
                             "The parts of the library and your own, to add to the circuit",
                             "Les composants de la bibliothèque et les vôtres, à ajouter au circuit",
                         ));
-                    } else {
-                        let mut shown = self.doc.customizer_shown();
-                        let toggle = ui.toggle_value(&mut shown, tr("Customizer", "Paramètres"));
-                        if toggle.on_hover_text(tr("Show the parameters the file declares", "Afficher les paramètres que déclare le fichier")).changed() {
-                            self.doc.customizer_open = Some(shown);
-                        }
                     }
-                    toolbar_separator(ui);
-                    ui.toggle_value(&mut self.doc.viewer.show_grid, tr("Grid", "Grille"))
-                        .on_hover_text(tr("Show the XY grid", "Afficher la grille XY"));
-                    ui.toggle_value(&mut self.doc.viewer.show_axes, "Axes").on_hover_text(tr("Show the axes", "Afficher les axes"));
-                    ui.toggle_value(&mut self.doc.viewer.layer_view, tr("Layers", "Couches")).on_hover_text(tr(
-                        "Cut the model at the top of a layer, picked with the slider on the right",
-                        "Couper le modèle au sommet d'une couche, choisie avec le curseur à droite",
-                    ));
-                    if self.doc.viewer.has_pauses() {
-                        ui.toggle_value(&mut self.doc.viewer.show_pauses, "Pauses")
-                            .on_hover_text(tr("Show the heights where the print pauses", "Afficher les hauteurs où l'impression fait une pause"));
-                    }
-                    toolbar_separator(ui);
-                    ui.menu_button(tr("View", "Vue"), |ui| {
-                        for &(name, yaw, pitch) in viewer::PRESETS {
-                            if ui.button(viewer::preset_label(name)).clicked() {
-                                self.doc.viewer.look_from(yaw, pitch);
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                        ui.checkbox(&mut self.doc.viewer.turntable, tr("Turntable", "Rotation auto")).on_hover_text(tr(
-                            "Turn the view around the model (a drag in the view stops it)",
-                            "Tourner la vue autour du modèle (un glisser dans la vue l'arrête)",
-                        ));
-                        // A circuit's enclosure: a view setting, kept off the
-                        // toolbar, which a circuit fills.
-                        if self.doc.is_circuit() && self.doc.viewer.has_enclosure() {
-                            ui.separator();
-                            let mut shown = self.doc.viewer.shows_enclosure();
-                            let toggle = ui.checkbox(&mut shown, tr("Enclosure", "Boîtier"));
-                            if toggle.on_hover_text(tr("Show the enclosure around the parts, see-through", "Afficher le boîtier autour des composants, transparent")).changed() {
-                                self.doc.viewer.set_show_enclosure(shown);
-                            }
-                        }
-                    });
-                    if ui
-                        .button(tr("Reset view", "Cadrer"))
-                        .on_hover_text(tr(
-                            "Default angle, fit the model (or double-click the view)",
-                            "Angle par défaut, modèle cadré (ou double-clic dans la vue)",
-                        ))
-                        .clicked()
-                    {
-                        self.doc.viewer.reset();
-                    }
-                    self.toolbar_right = ui.min_rect().width();
+                    self.header_right = ui.min_rect().width();
                 });
             });
         });
+        if let Some(index) = close {
+            self.close_tab(ctx, index);
+        } else if let Some(index) = select {
+            self.select_tab(ctx, index);
+        }
+        if new {
+            self.new_tab(ctx);
+        }
+    }
+
+    /// The File menu: new, open, the recent files and the examples, save,
+    /// and the settings.
+    fn file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, keys: &Shortcuts) {
+        ui.menu_button(tr("File", "Fichier"), |ui| {
+            ui.set_min_width(230.0);
+            let item = |ui: &mut egui::Ui, label: &str, action: Action| {
+                ui.add(Button::new(label).shortcut_text(shortcuts::describe(ctx, &keys.get(action))))
+            };
+            if item(ui, tr("New", "Nouveau"), Action::New).clicked() {
+                self.new_tab(ctx);
+                ui.close();
+            }
+            if item(ui, tr("Open…", "Ouvrir…"), Action::Open).clicked() {
+                self.open_dialog(ctx);
+                ui.close();
+            }
+            self.recent_menu(ui);
+            self.examples_menu(ui);
+            ui.separator();
+            if item(ui, tr("Save", "Enregistrer"), Action::Save).clicked() {
+                self.save();
+                ui.close();
+            }
+            if item(ui, tr("Save As…", "Enregistrer sous…"), Action::SaveAs).clicked() {
+                self.save_as();
+                ui.close();
+            }
+            ui.separator();
+            if item(ui, tr("Settings…", "Réglages…"), Action::Settings).clicked() {
+                self.settings_open = true;
+                ui.close();
+            }
+        });
+    }
+
+    /// The formats the model can be exported in: solids, then drawings.
+    fn export_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, keys: &Shortcuts) {
+        let formats = self.doc.model.as_ref().map_or(&[][..], |m| m.formats);
+        let export = ui.add_enabled_ui(!formats.is_empty(), |ui| {
+            ui.menu_button(tr("Export", "Exporter"), |ui| {
+                // Solids above the separator, 2D models below.
+                let stl = if self.settings.binary_stl { tr("A binary STL", "Un STL binaire") } else { tr("An ASCII STL", "Un STL ASCII") };
+                let entries = [
+                    (Format::Stl, stl),
+                    (Format::ThreeMf, tr("A 3MF package, in millimeters", "Un paquet 3MF, en millimètres")),
+                    (
+                        Format::Glb,
+                        tr(
+                            "A glTF model for game engines (Godot, Unity), with its colors",
+                            "Un modèle glTF pour moteurs de jeu (Godot, Unity), avec ses couleurs",
+                        ),
+                    ),
+                    (Format::Svg, tr("An SVG drawing, in millimeters", "Un dessin SVG, en millimètres")),
+                    (Format::Dxf, tr("A DXF drawing of line segments", "Un dessin DXF en segments")),
+                ];
+                for (format, hover) in entries {
+                    if format == Format::Svg {
+                        ui.separator();
+                    }
+                    let mut button = Button::new(format!("{}…", format.name()));
+                    if format == self.shortcut_format() {
+                        button = button.shortcut_text(shortcuts::describe(ctx, &keys.get(Action::Export)));
+                    }
+                    let disabled =
+                        if Format::SOLID.contains(&format) { tr("For 3D models", "Pour les modèles 3D") } else { tr("For 2D models", "Pour les modèles 2D") };
+                    let response = ui.add_enabled(formats.contains(&format), button);
+                    if response.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
+                        self.export(format);
+                        ui.close();
+                    }
+                }
+            })
+        });
+        export.response.on_disabled_hover_text(tr("Render a non-empty model first", "Faites d'abord le rendu d'un modèle non vide"));
     }
 
     fn recent_menu(&mut self, ui: &mut egui::Ui) {
@@ -2297,8 +2275,12 @@ impl StudioApp {
             ui.menu_button(tr("Open Recent", "Récents"), |ui| {
                 for path in self.recent.paths() {
                     let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+                    // A long folder is cut short, so that the name keeps its
+                    // line; the whole path shows on hover.
                     let folder = path.parent().map(display_folder).unwrap_or_default();
-                    let button = Button::new(name).shortcut_text(folder);
+                    let button = Button::new(name)
+                        .shortcut_text(shorten_middle(&folder, 48))
+                        .wrap_mode(egui::TextWrapMode::Extend);
                     if ui.add(button).on_hover_text(path.display().to_string()).clicked() {
                         chosen = Some(path.clone());
                         ui.close();
@@ -2408,174 +2390,139 @@ impl StudioApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if self.doc.is_dirty() {
-                        ui.label(RichText::new("●").size(12.0).color(theme::palette().warning))
-                            .on_hover_text(tr("Unsaved changes", "Modifications non enregistrées"));
-                    }
-                    let name = ui.label(RichText::new(self.doc.file_name()).size(12.0).color(theme::palette().text));
-                    if let Some(path) = &self.doc.path {
-                        name.on_hover_text(path.display().to_string());
-                    }
-                    if let Some((line, column)) = self.doc.editor.cursor {
-                        ui.label(small(tr!("Ln {}, Col {}   ", "Ligne {}, col {}   ", line + 1, column + 1)));
+                    // The tab names the file; its path, on hover.
+                    if self.arrangement != Arrangement::View {
+                        if let Some((line, column)) = self.doc.editor.cursor {
+                            ui.label(small(tr!("Ln {}, Col {}", "Ligne {}, col {}", line + 1, column + 1)));
+                        }
                     }
                 });
             });
         });
     }
 
-    fn console_panel(&mut self, ctx: &egui::Context) {
-        let header = |ui: &mut egui::Ui, open: &mut bool, console: &mut Console| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let arrow = if *open { "⏷" } else { "⏵" };
-                let toggle = ui.add(
-                    Button::new(
-                        RichText::new(format!("{arrow}  Console")).strong().size(12.5).color(theme::palette().text),
-                    )
-                    .frame(false),
-                );
-                if toggle.clicked() {
-                    *open = !*open;
-                }
-                let errors = console.count(Level::Error);
-                let warnings = console.count(Level::Warning);
-                let echoes = console.count(Level::Echo);
-                if errors > 0 {
-                    pill(ui, &tr!("{errors} error{}", "{errors} erreur{}", plural(errors)), theme::palette().error);
-                }
-                if warnings > 0 {
-                    pill(ui, &tr!("{warnings} warning{}", "{warnings} avertissement{}", plural(warnings)), theme::palette().warning);
-                }
-                if echoes > 0 {
-                    pill(ui, &format!("{echoes} echo"), theme::palette().text_dim);
-                }
+    /// The console's title row, which folds it, its counts, and while it is
+    /// open, its lines.
+    fn console_contents(&mut self, ui: &mut egui::Ui) {
+        let console = &mut self.doc.console;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let icon = if self.console_open { Icon::FoldDown } else { Icon::FoldUp };
+            let title = RichText::new("Console").strong().size(12.5).color(theme::palette().text);
+            let (toggle, _) = ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+                icons::paint(ui.painter(), rect, icon, theme::palette().text_dim);
+                let label = ui.add(Button::new(title).frame(false));
+                (response.clicked() || label.clicked(), ())
+            })
+            .inner;
+            if toggle {
+                self.console_open = !self.console_open;
+            }
+            let errors = console.count(Level::Error);
+            let warnings = console.count(Level::Warning);
+            let echoes = console.count(Level::Echo);
+            if errors > 0 {
+                pill(ui, &tr!("{errors} error{}", "{errors} erreur{}", plural(errors)), theme::palette().error);
+            }
+            if warnings > 0 {
+                pill(ui, &tr!("{warnings} warning{}", "{warnings} avertissement{}", plural(warnings)), theme::palette().warning);
+            }
+            if echoes > 0 {
+                pill(ui, &format!("{echoes} echo"), theme::palette().text_dim);
+            }
+            if self.console_open {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.add_enabled(!console.is_empty(), Button::new(RichText::new(tr("Clear", "Effacer")).size(12.0))).clicked() {
                         console.clear();
                     }
                 });
-            });
-        };
+            }
+        });
+        if self.console_open {
+            ui.add_space(2.0);
+            Frame::new()
+                .fill(theme::palette().editor)
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(Margin::symmetric(10, 6))
+                .show(ui, |ui| self.doc.console.show(ui));
+        }
+    }
+
+    /// The console's panel, at the bottom of the code or of the window:
+    /// a title row while folded, resizable while open.
+    fn console_dock(&self, max_height: f32) -> egui::TopBottomPanel {
         let frame =
-            Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 6 });
+            Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 10, right: 10, top: 5, bottom: 6 });
         if self.console_open {
             egui::TopBottomPanel::bottom("console")
                 .frame(frame)
                 .resizable(true)
                 .default_height(170.0)
-                .height_range(90.0..=ctx.screen_rect().height() * 0.6)
-                .show(ctx, |ui| {
-                    header(ui, &mut self.console_open, &mut self.doc.console);
-                    ui.add_space(2.0);
-                    Frame::new()
-                        .fill(theme::palette().editor)
-                        .corner_radius(CornerRadius::same(6))
-                        .inner_margin(Margin::symmetric(10, 6))
-                        .show(ui, |ui| self.doc.console.show(ui));
-                });
+                .height_range(90.0..=max_height.max(120.0))
         } else {
-            egui::TopBottomPanel::bottom("console-collapsed")
-                .frame(frame)
-                .resizable(false)
-                .show(ctx, |ui| header(ui, &mut self.console_open, &mut self.doc.console));
+            egui::TopBottomPanel::bottom("console-folded").frame(frame).resizable(false)
         }
     }
 
-    fn editor_panel(&mut self, ctx: &egui::Context) {
-        let width = ctx.screen_rect().width();
-        egui::SidePanel::left("editor")
-            .frame(Frame::new().fill(theme::palette().editor))
-            .resizable(true)
-            .default_width((width * 0.42).max(320.0))
-            .width_range(260.0..=(width - 300.0).max(300.0))
-            .show(ctx, |ui| {
-                if self.doc.editor.show(ui, &mut self.doc.text) {
-                    if self.settings.render_while_typing {
-                        let delay = Duration::from_millis(self.settings.render_delay.into());
-                        self.doc.render_deadline = Some(Instant::now() + delay);
-                    }
-                    // Typing on puts the save off.
-                    self.doc.autosave_deadline = None;
+    /// The code, and the console under it.
+    fn code_column(&mut self, ui: &mut egui::Ui) {
+        let max = ui.available_height() * 0.6;
+        self.console_dock(max).show_inside(ui, |ui| self.console_contents(ui));
+        egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().editor)).show_inside(ui, |ui| {
+            if self.doc.editor.show(ui, &mut self.doc.text) {
+                if self.settings.render_while_typing {
+                    let delay = Duration::from_millis(self.settings.render_delay.into());
+                    self.doc.render_deadline = Some(Instant::now() + delay);
                 }
-            });
-    }
-
-    /// The open files, one tab each, across the window under the toolbar:
-    /// a click shows one, the × or a middle-click closes it.
-    fn tab_bar(&mut self, ctx: &egui::Context) {
-        let names = tabs::names(&self.shelf.iter(&self.doc).map(|tab| tab.path.as_deref()).collect::<Vec<_>>());
-        let tabs: Vec<(u64, String, bool, Option<String>)> = self
-            .shelf
-            .iter(&self.doc)
-            .zip(names)
-            .map(|(tab, name)| (tab.id, name, tab.is_dirty(), tab.path.as_ref().map(|p| p.display().to_string())))
-            .collect();
-        let active = self.shelf.active();
-        let new_keys = self.settings.shortcuts.get(Action::New);
-        let (mut select, mut close, mut new) = (None, None, false);
-        let frame =
-            Frame::new().fill(theme::palette().bg).inner_margin(Margin { left: 8, right: 8, top: 4, bottom: 0 });
-        egui::TopBottomPanel::top("tabs").frame(frame).show_separator_line(false).show(ctx, |ui| {
-            egui::ScrollArea::horizontal().auto_shrink([false, true]).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    for (index, (id, name, dirty, path)) in tabs.iter().enumerate() {
-                        match tab(ui, *id, name, index == active, *dirty) {
-                            TabClick::Select => select = Some(index),
-                            TabClick::Close => close = Some(index),
-                            TabClick::None(response) => {
-                                if let Some(path) = path {
-                                    response.on_hover_text(path);
-                                }
-                            }
-                        }
-                    }
-                    ui.add_space(4.0);
-                    let shortcut = shortcuts::describe(ctx, &new_keys);
-                    let plus = ui
-                        .add(Button::new(RichText::new("+").size(15.0).color(theme::palette().text_dim)).frame(false));
-                    new = plus.on_hover_text(tr!("New file in a new tab ({shortcut})", "Nouveau fichier dans un nouvel onglet ({shortcut})")).clicked();
-                });
-            });
+                // Typing on puts the save off.
+                self.doc.autosave_deadline = None;
+            }
         });
-        if let Some(index) = close {
-            self.close_tab(ctx, index);
-        } else if let Some(index) = select {
-            self.select_tab(ctx, index);
-        }
-        if new {
-            self.new_tab(ctx);
-        }
     }
 
-    fn customizer_panel(&mut self, ctx: &egui::Context) {
-        if !self.doc.customizer_shown() {
-            return;
-        }
+    /// The code: beside the view, or across the window when it is shown
+    /// alone. With the view alone, the console takes the bottom of the
+    /// window.
+    fn code_panel(&mut self, ctx: &egui::Context) {
         let width = ctx.screen_rect().width();
-        egui::SidePanel::right("customizer")
-            .frame(customizer::frame())
-            .resizable(true)
-            .default_width(300.0)
-            .width_range(220.0..=(width * 0.4).max(240.0))
-            .show(ctx, |ui| {
-                if self.doc.customizer.show(ui) && self.settings.render_while_typing {
-                    self.doc.render_deadline = Some(Instant::now() + PARAMETER_DEBOUNCE);
-                }
-            });
+        match self.arrangement {
+            Arrangement::View => {
+                let max = ctx.screen_rect().height() * 0.6;
+                self.console_dock(max).show(ctx, |ui| self.console_contents(ui));
+            }
+            Arrangement::Code => {
+                egui::CentralPanel::default()
+                    .frame(Frame::new().fill(theme::palette().editor))
+                    .show(ctx, |ui| self.code_column(ui));
+            }
+            Arrangement::Split => {
+                egui::SidePanel::left("editor")
+                    .frame(Frame::new().fill(theme::palette().editor))
+                    .resizable(true)
+                    .default_width((width * 0.4).max(320.0))
+                    .width_range(260.0..=(width - 300.0).max(300.0))
+                    .show(ctx, |ui| self.code_column(ui));
+            }
+        }
     }
 
     fn view_panel(&mut self, ctx: &egui::Context) {
+        if self.arrangement == Arrangement::Code {
+            return;
+        }
         let mut remove_part = None;
-        let mut bar = None;
+        let animated = self.doc.animation.animated && !self.doc.is_circuit();
+        let card = !self.doc.is_circuit();
+        // The floating bars cover the view's edges: its own overlays keep
+        // clear of them.
+        self.doc.viewer.insets = viewer::Insets {
+            top: 48.0,
+            bottom: if animated { 58.0 } else { 0.0 },
+            right: if card && self.doc.customizer_shown() { 300.0 } else { 0.0 },
+        };
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
-            if self.doc.animation.animated && !self.doc.is_circuit() {
-                let frame = Frame::new().fill(theme::palette().bg).inner_margin(Margin::symmetric(12, 6));
-                egui::TopBottomPanel::bottom(Id::new(("animation", self.doc.id)))
-                    .frame(frame)
-                    .show_inside(ui, |ui| bar = Some(animation_bar(ui, &self.doc.animation)));
-            }
             let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
             let status = viewer::Status {
                 rendering: self.doc.busy(),
@@ -2620,8 +2567,9 @@ impl StudioApp {
             if let Some(wiring) = &self.doc.wiring {
                 let painter = ui.painter_at(response.rect);
                 let right = if self.doc.viewer.layer_view { 70.0 } else { 12.0 };
-                // Below the assembly bar, when it is shown.
-                let top = if self.doc.mount.active { 110.0 } else { 12.0 };
+                // Below the view's tools, and the assembly bar when it is
+                // shown.
+                let top = if self.doc.mount.active { 158.0 } else { 12.0 };
                 let legend = wiring::paint_legend(&painter, response.rect, right, top, &wiring.legend());
                 let lengths = inspect::Lengths { routed: &wiring.lengths, margin: self.wire_margin.mm };
                 if let Some(selection) = self.doc.selection.filter(|_| !self.doc.mount.active) {
@@ -2668,11 +2616,26 @@ impl StudioApp {
                 }
             }
         });
-        if let Some(input) = bar {
-            self.animation_input(ctx, input);
+        let rect = self.view_rect;
+        self.view_tools(ctx, rect);
+        if card {
+            self.parameters_card(ctx, rect);
         }
-        if self.doc.viewer.can_explode() && !self.doc.is_circuit() {
-            self.explode_bar(ctx, self.view_rect);
+        if animated {
+            let mut bar = None;
+            egui::Area::new(Id::new(("animation", self.doc.id)))
+                .pivot(Align2::LEFT_BOTTOM)
+                .fixed_pos(egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0))
+                .order(egui::Order::Middle)
+                .show(ctx, |ui| {
+                    card_frame().inner_margin(Margin::symmetric(10, 5)).show(ui, |ui| {
+                        ui.set_width((rect.width() - 44.0).max(200.0));
+                        bar = Some(animation_bar(ui, &self.doc.animation));
+                    });
+                });
+            if let Some(input) = bar {
+                self.animation_input(ctx, input);
+            }
         }
         if self.doc.mount.active {
             self.mount_bar(ctx, self.view_rect);
@@ -2685,6 +2648,126 @@ impl StudioApp {
         }
         if let Some(edit) = self.doc.viewer.take_pause_edit() {
             self.apply_pause_edit(ctx, edit);
+        }
+    }
+
+    /// The view's tools, over its top left: fit, the views, the grid, the
+    /// axes, the layers and the pauses; and for a design with part()s, the
+    /// exploded view and how far apart.
+    fn view_tools(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let explodable = self.doc.viewer.can_explode() && !self.doc.is_circuit();
+        let circuit = self.doc.is_circuit();
+        let on = self.doc.exploded;
+        let mut amount = self.doc.explode_amount;
+        let mut explode = false;
+        egui::Area::new(Id::new(("view-tools", self.doc.id)))
+            .fixed_pos(rect.left_top() + Vec2::splat(12.0))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                card_frame().inner_margin(Margin::same(4)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let viewer = &mut self.doc.viewer;
+                        let hint = tr("Fit the model, at the default angle (or double-click the view)", "Cadrer le modèle, à l'angle par défaut (ou double-clic dans la vue)");
+                        if icons::button(ui, Icon::Fit, false, hint).clicked() {
+                            viewer.reset();
+                        }
+                        ui.menu_button(tr("Views", "Vues"), |ui| {
+                            for &(name, yaw, pitch) in viewer::PRESETS {
+                                if ui.button(viewer::preset_label(name)).clicked() {
+                                    viewer.look_from(yaw, pitch);
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
+                            ui.checkbox(&mut viewer.turntable, tr("Turntable", "Rotation auto")).on_hover_text(tr(
+                                "Turn the view around the model (a drag in the view stops it)",
+                                "Tourner la vue autour du modèle (un glisser dans la vue l'arrête)",
+                            ));
+                            if circuit && viewer.has_enclosure() {
+                                ui.separator();
+                                let mut shown = viewer.shows_enclosure();
+                                let toggle = ui.checkbox(&mut shown, tr("Enclosure", "Boîtier"));
+                                if toggle.on_hover_text(tr("Show the enclosure around the parts, see-through", "Afficher le boîtier autour des composants, transparent")).changed() {
+                                    viewer.set_show_enclosure(shown);
+                                }
+                            }
+                        });
+                        tool_separator(ui);
+                        if icons::button(ui, Icon::Grid, viewer.show_grid, tr("Show the XY grid", "Afficher la grille XY")).clicked() {
+                            viewer.show_grid = !viewer.show_grid;
+                        }
+                        if icons::button(ui, Icon::Axes, viewer.show_axes, tr("Show the axes", "Afficher les axes")).clicked() {
+                            viewer.show_axes = !viewer.show_axes;
+                        }
+                        let hint = tr(
+                            "Layers: cut the model at the top of a layer, picked with the slider on the right",
+                            "Couches : couper le modèle au sommet d'une couche, choisie avec le curseur à droite",
+                        );
+                        if icons::button(ui, Icon::Layers, viewer.layer_view, hint).clicked() {
+                            viewer.layer_view = !viewer.layer_view;
+                        }
+                        if viewer.has_pauses() {
+                            let hint = tr("Show the heights where the print pauses", "Afficher les hauteurs où l'impression fait une pause");
+                            if icons::button(ui, Icon::Pauses, viewer.show_pauses, hint).clicked() {
+                                viewer.show_pauses = !viewer.show_pauses;
+                            }
+                        }
+                        if explodable {
+                            tool_separator(ui);
+                            let hint = tr("Exploded view: draw the model's part()s apart, to see how they fit together", "Vue éclatée : écarter les part() du modèle, pour voir comment elles s'assemblent");
+                            explode = icons::button(ui, Icon::Explode, on, hint).clicked();
+                            if on {
+                                ui.spacing_mut().slider_width = 110.0;
+                                let slider = egui::Slider::new(&mut amount, 0.0..=1.0)
+                                    .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
+                                    .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
+                                ui.add(slider).on_hover_text(tr("How far apart the parts are drawn", "L'écart entre les pièces"));
+                            }
+                        }
+                    });
+                });
+            });
+        if amount != self.doc.explode_amount {
+            self.doc.explode_amount = amount;
+            // The slider moves the parts at once, without sliding.
+            self.doc.explode_shown = amount;
+        }
+        if explode {
+            self.doc.exploded = !on;
+            if self.doc.exploded {
+                // The parts all the way apart are framed as they slide.
+                self.doc.viewer.set_explode(self.doc.explode_shown.max(0.01));
+                self.doc.viewer.view_all();
+            }
+        }
+    }
+
+    /// The parameters the file declares, on a card over the view's top
+    /// right, which folds to its title. Clear of the layer slider.
+    fn parameters_card(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let right = if self.doc.viewer.layer_view { 72.0 } else { 12.0 };
+        let shown = self.doc.customizer_shown();
+        let mut folded = !shown;
+        let max_height = (rect.height() - 24.0 - self.doc.viewer.insets.bottom).max(120.0);
+        let mut changed = false;
+        egui::Area::new(Id::new(("parameters", self.doc.id)))
+            .pivot(Align2::RIGHT_TOP)
+            .fixed_pos(egui::pos2(rect.right() - right, rect.top() + 12.0))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                let bottom = if folded { 4 } else { 10 };
+                card_frame().inner_margin(Margin { left: 12, right: 4, top: 4, bottom }).show(ui, |ui| {
+                    ui.set_width(if folded { 190.0 } else { 276.0 });
+                    ui.set_max_height(max_height);
+                    changed = self.doc.customizer.show(ui, &mut folded);
+                });
+            });
+        if folded == shown {
+            self.doc.customizer_open = Some(!folded);
+        }
+        if changed && self.settings.render_while_typing {
+            self.doc.render_deadline = Some(Instant::now() + PARAMETER_DEBOUNCE);
         }
     }
 
@@ -3127,13 +3210,10 @@ impl eframe::App for StudioApp {
         self.shortcuts(ctx);
         self.poll_disk(ctx);
 
-        self.toolbar(ctx);
-        self.tab_bar(ctx);
+        self.header(ctx);
         self.status_bar(ctx);
-        self.console_panel(ctx);
-        self.editor_panel(ctx);
-        self.customizer_panel(ctx);
         self.catalogue_panel(ctx);
+        self.code_panel(ctx);
         self.view_panel(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
@@ -3195,8 +3275,12 @@ struct BarInput {
 fn animation_bar(ui: &mut egui::Ui, animation: &Animation) -> BarInput {
     let mut input = BarInput { frame: animation.frame, fps: animation.fps, steps: animation.steps, toggle: false };
     ui.horizontal(|ui| {
-        let (icon, hint) = if animation.playing { ("⏸", tr("Pause", "Pause")) } else { ("▶", tr("Play the model along $t", "Animer le modèle selon $t")) };
-        input.toggle = ui.button(icon).on_hover_text(hint).clicked();
+        let (icon, hint) = if animation.playing {
+            (Icon::Pause, tr("Pause", "Pause"))
+        } else {
+            (Icon::Play, tr("Play the model along $t", "Animer le modèle selon $t"))
+        };
+        input.toggle = icons::button(ui, icon, true, hint).clicked();
         let t = f64::from(input.frame) / f64::from(input.steps);
         ui.label(RichText::new(format!("$t = {t:.3}")).monospace().color(theme::palette().text));
         ui.spacing_mut().slider_width = (ui.available_width() - 210.0).max(60.0);
@@ -3234,7 +3318,7 @@ enum TabClick {
 fn tab(ui: &mut egui::Ui, id: u64, name: &str, active: bool, dirty: bool) -> TabClick {
     let color = if active { theme::palette().text } else { theme::palette().text_dim };
     let galley = ui.painter().layout_no_wrap(name.to_string(), egui::FontId::proportional(13.0), color);
-    let size = Vec2::new(galley.size().x + 46.0, 30.0);
+    let size = Vec2::new(galley.size().x + 44.0, 26.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), Vec2::splat(18.0));
     // Over the tab: it takes the clicks within its box.
@@ -3242,20 +3326,14 @@ fn tab(ui: &mut egui::Ui, id: u64, name: &str, active: bool, dirty: bool) -> Tab
     let painter = ui.painter_at(rect);
     let hovered = response.hovered() || close.hovered();
     let fill = if active {
-        theme::palette().editor
-    } else if hovered {
         theme::palette().raised
+    } else if hovered {
+        theme::palette().faint_bg
     } else {
         theme::palette().bg
     };
-    painter.rect_filled(rect, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, fill);
-    if active {
-        painter.line_segment(
-            [rect.left_top() + Vec2::new(6.0, 0.0), rect.right_top() - Vec2::new(6.0, 0.0)],
-            Stroke::new(2.0, theme::palette().accent),
-        );
-    }
-    painter.galley(egui::pos2(rect.left() + 14.0, rect.center().y - galley.size().y / 2.0), galley, color);
+    painter.rect_filled(rect, CornerRadius::same(6), fill);
+    painter.galley(egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0), galley, color);
     if close.hovered() {
         painter.rect_filled(close_rect, CornerRadius::same(4), theme::palette().hover);
     }
@@ -3734,15 +3812,115 @@ fn toolbar_separator(ui: &mut egui::Ui) {
     ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme::palette().border));
 }
 
-fn tool_button(ui: &mut egui::Ui, label: &str, help: &str, shortcut: Option<KeyboardShortcut>) -> egui::Response {
-    let response = ui.button(label);
-    match shortcut {
-        Some(shortcut) => {
-            let keys = shortcuts::describe(ui.ctx(), &shortcut);
-            response.on_hover_text(format!("{help} ({keys})"))
+/// A thin line between groups of the view's tools.
+fn tool_separator(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(7.0, 18.0), Sense::hover());
+    ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme::palette().border));
+}
+
+/// The cards over the 3D view: the view's tools, the parameters, the
+/// animation bar.
+fn card_frame() -> Frame {
+    let palette = theme::palette();
+    Frame::new()
+        .fill(palette.panel)
+        .stroke(Stroke::new(1.0, palette.border))
+        .corner_radius(CornerRadius::same(10))
+        .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if palette.dark { 90 } else { 30 }) })
+}
+
+/// How the window is shared between the code and the 3D view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Arrangement {
+    Code,
+    Split,
+    View,
+}
+
+impl Arrangement {
+    const ALL: [Arrangement; 3] = [Arrangement::Code, Arrangement::Split, Arrangement::View];
+
+    /// As a screenshot run names it.
+    fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "code" => Some(Arrangement::Code),
+            "split" => Some(Arrangement::Split),
+            "view" => Some(Arrangement::View),
+            _ => None,
         }
-        None => response.on_hover_text(help),
     }
+
+    fn label(self) -> &'static str {
+        match self {
+            Arrangement::Code => "Code",
+            Arrangement::Split => tr("Side by side", "Côte à côte"),
+            Arrangement::View => tr("View", "Vue"),
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Arrangement::Code => tr("The code alone, across the window", "Le code seul, sur toute la fenêtre"),
+            Arrangement::Split => tr("The code beside the 3D view", "Le code à côté de la vue 3D"),
+            Arrangement::View => tr("The 3D view alone, the console under it", "La vue 3D seule, la console dessous"),
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Arrangement::Code => Icon::CodeOnly,
+            Arrangement::Split => Icon::SideBySide,
+            Arrangement::View => Icon::ViewOnly,
+        }
+    }
+}
+
+/// The three layouts side by side, the one shown pressed; the one
+/// clicked, if another.
+fn layout_switch(ui: &mut egui::Ui, current: Arrangement) -> Option<Arrangement> {
+    let palette = theme::palette();
+    let mut picked = None;
+    Frame::new()
+        .fill(palette.panel)
+        .stroke(Stroke::new(1.0, palette.border))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::same(2))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for arrangement in Arrangement::ALL {
+                    let on = arrangement == current;
+                    let font = egui::FontId::proportional(12.5);
+                    // Colored when painted, once it is known whether it is hovered.
+                    let galley = ui.painter().layout_no_wrap(arrangement.label().to_string(), font, Color32::PLACEHOLDER);
+                    let size = Vec2::new(galley.size().x + 40.0, 24.0);
+                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                    let fill = if on {
+                        palette.accent_muted
+                    } else if response.hovered() {
+                        palette.hover
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+                    let color = if on {
+                        icons::on_muted()
+                    } else if response.hovered() {
+                        palette.text
+                    } else {
+                        palette.text_dim
+                    };
+                    let icon = egui::Rect::from_center_size(egui::pos2(rect.left() + 18.0, rect.center().y), Vec2::splat(15.0));
+                    icons::paint(ui.painter(), icon, arrangement.icon(), color);
+                    let text = egui::pos2(rect.left() + 30.0, rect.center().y - galley.size().y / 2.0);
+                    ui.painter().galley(text, galley, color);
+                    if response.on_hover_text(arrangement.hint()).clicked() && !on {
+                        picked = Some(arrangement);
+                    }
+                }
+            });
+        });
+    picked
 }
 
 fn status_dot(ui: &mut egui::Ui, color: Color32) {
@@ -3800,6 +3978,21 @@ fn display_folder(dir: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
     }
+}
+
+/// `text` cut to at most `max` characters, keeping its start and its end
+/// around an ellipsis.
+fn shorten_middle(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let head = keep / 3;
+    let tail = keep - head;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(count - tail).collect();
+    format!("{start}…{end}")
 }
 
 /// Something of a circuit named as `part.pin`, `part` or `wire:7` (from 1).
@@ -3879,6 +4072,15 @@ mod tests {
         assert_eq!(zoom_step(1.25, 1), 1.4, "back on a tenth");
         assert_eq!(zoom_step(1.5, 1), 1.5);
         assert_eq!(zoom_step(0.8, -1), 0.8);
+    }
+
+    #[test]
+    fn long_folders_keep_their_start_and_end() {
+        assert_eq!(shorten_middle("~/Documents/Code2Form", 48), "~/Documents/Code2Form");
+        let long = "~/Library/Application Support/Claude/scratch-workspaces/f07cb7c0/scratch-2026-10-23-b6b842";
+        let short = shorten_middle(long, 48);
+        assert_eq!(short.chars().count(), 48);
+        assert!(short.starts_with("~/Library/Appl") && short.ends_with("scratch-2026-10-23-b6b842"), "{short}");
     }
 
     #[test]

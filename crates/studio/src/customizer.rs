@@ -13,6 +13,7 @@ use c2f_eval::customizer::{
 };
 
 use crate::i18n::tr;
+use crate::icons::{self, Icon};
 use crate::theme;
 
 /// The preset entry that stands for the values written in the file.
@@ -128,21 +129,39 @@ impl Customizer {
         self.selected = None;
     }
 
-    /// Draws the panel; returns whether a value changed.
-    pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
+    /// Draws the card's title, and under it, unless `folded`, the presets
+    /// and the parameters; returns whether a value changed. A click on the
+    /// title folds or unfolds it.
+    pub fn show(&mut self, ui: &mut egui::Ui, folded: &mut bool) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("Customizer", "Paramètres")).strong().size(14.0).color(theme::palette().text));
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let title = RichText::new(tr("Parameters", "Paramètres")).strong().size(13.5).color(theme::palette().text);
+            let toggle = ui.add(Button::new(title).frame(false));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let reset = ui
-                    .add_enabled(!self.values.is_empty(), Button::new(RichText::new(tr("Reset all", "Tout réinitialiser")).size(12.0)))
-                    .on_hover_text(tr("Back to the values written in the file", "Revenir aux valeurs écrites dans le fichier"));
-                if reset.clicked() {
-                    self.reset();
-                    changed = true;
+                let (icon, hint) = if *folded {
+                    (Icon::FoldDown, tr("Show the parameters", "Afficher les paramètres"))
+                } else {
+                    (Icon::FoldUp, tr("Fold the parameters", "Replier les paramètres"))
+                };
+                if icons::button(ui, icon, false, hint).clicked() || toggle.clicked() {
+                    *folded = !*folded;
+                }
+                if !*folded && !self.values.is_empty() {
+                    let hint = tr(
+                        "Reset all: back to the values written in the file",
+                        "Tout réinitialiser : revenir aux valeurs écrites dans le fichier",
+                    );
+                    if icons::button(ui, Icon::Reset, false, hint).clicked() {
+                        self.reset();
+                        changed = true;
+                    }
                 }
             });
         });
+        if *folded {
+            return changed;
+        }
         ui.add_space(4.0);
         changed |= self.presets(ui);
         for problem in [&self.unreadable, &self.problem].into_iter().flatten() {
@@ -150,7 +169,7 @@ impl Customizer {
         }
         ui.add_space(6.0);
 
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             if !self.has_parameters() {
                 ui.add_space(8.0);
                 ui.label(RichText::new(tr("This file declares no parameters.", "Ce fichier ne déclare aucun paramètre.")).color(theme::palette().text_dim));
