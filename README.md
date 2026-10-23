@@ -143,7 +143,9 @@ they are. Written in Rust, it renders as you type.
   and `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
   checks a circuit, prints its wiring list and bill of materials, how
   its parts fit in their enclosure, and exports its assembled parts (see the
-  [guide](docs/electronics.md#6-from-the-command-line)).
+  [guide](docs/electronics.md#6-from-the-command-line)); `c2f mass`
+  weighs a design or a circuit as printed (`--material`, `--infill`,
+  `--wall`) and gives its center of gravity and the angle it tips at.
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window; and describes a
@@ -201,6 +203,7 @@ resolving from `working_dir`, then the library folders) or a file as
 | `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
 | `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
 | `fit` | How each part fits in the enclosure: its least clearance, its gaps to the enclosure and the nearest part with where, the ports no cutout opens and the mount holes no standoff holds, and the wires that run into the enclosure; `clearance` sets the room wanted (0.5 mm) |
+| `mass_properties` | What a design or a circuit weighs printed in `material` (PLA, PETG, ABS, ASA, TPU, nylon or a density) with `infill` and `wall`, per part (`parts`): each part's volume, mass and center, the circuit's parts by their sheet's `mass`, the `extra` masses, the total and center of gravity, and the stability: whether it stands, and the least angle it tips at, toward which side |
 
 For example, ask Claude Code: "With the Code2Form tools, build a
 `robot.c2fc` circuit for a XIAO ESP32-S3 that drives a DC motor through

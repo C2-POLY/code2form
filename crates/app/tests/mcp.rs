@@ -92,7 +92,7 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part"]
+        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part", "mass_properties"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
@@ -767,4 +767,72 @@ fn save_part_refuses_what_check_part_finds_wrong_and_fit_a_clearance_it_cannot_m
     let (is_error, _) = server.report("fit", json!({ "path": circuit, "clearance": 20 }));
     assert!(is_error);
     let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn mass_properties_weighs_designs_and_circuits() {
+    let mut server = Server::start();
+    // Two parts in their own materials, solid, and a watch of 150 g on
+    // top: a 20 mm PLA cube (9.92 g at [10, 10, 10]) and an ABS one beside
+    // it (8.32 g at [30, 10, 10]); the watch at [20, 10, 40]. The total is
+    // 168.24 g, its center at x = (9.92 × 10 + 8.32 × 30 + 150 × 20) /
+    // 168.24 = 3348.8 / 168.24 = 19.905, z = (18.24 × 10 + 150 × 40) /
+    // 168.24 = 36.748.
+    let code = "part(\"a\") cube(20); translate([20, 0, 0]) part(\"b\") cube(20);";
+    let args = json!({
+        "code": code,
+        "infill": 100,
+        "parts": { "b": { "material": "abs" } },
+        "extra": [{ "name": "watch", "mass_g": 150, "at": [20, 10, 40] }],
+    });
+    let (is_error, report) = server.report("mass_properties", args);
+    assert!(!is_error, "{report}");
+    let parts = report["parts"].as_array().unwrap();
+    assert_eq!((parts[0]["name"].as_str(), parts[0]["material"].as_str()), (Some("a"), Some("PLA")));
+    assert_eq!((parts[1]["name"].as_str(), parts[1]["material"].as_str(), parts[1]["mass_g"].as_f64()), (Some("b"), Some("ABS"), Some(8.32)));
+    assert_eq!(parts[1]["volume_mm3"].as_f64(), Some(8000.0));
+    assert_eq!(report["extra"][0], json!({ "name": "watch", "mass_g": 150.0, "at": [20.0, 10.0, 40.0] }));
+    assert_eq!(report["total"]["mass_g"].as_f64(), Some(168.24));
+    let center: Vec<f64> = report["total"]["center"].as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect();
+    assert!((center[0] - 19.905).abs() < 1e-3 && (center[2] - 36.748).abs() < 1e-3, "{center:?}");
+    // On the 40 × 20 base, 10 mm from the edges y = 0 and y = 20:
+    // atan(10 / 36.748) = 15.22°.
+    let stability = &report["stability"];
+    assert_eq!(stability["inside"], true, "{stability}");
+    assert!((stability["min_tipping_deg"].as_f64().unwrap() - 15.222).abs() < 1e-2, "{stability}");
+    assert_eq!(stability["direction"][0].as_f64(), Some(0.0), "{stability}");
+    assert_eq!(stability["base"].as_array().unwrap().len(), 4, "{stability}");
+    assert!(report.get("components").is_none());
+
+    // A circuit: the nightlight's sheets give no mass yet.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (is_error, report) = server.report("mass_properties", json!({ "path": dir.join("../../examples/nightlight/nightlight.c2fc") }));
+    assert!(!is_error, "{report}");
+    let names: Vec<&str> = report["parts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Base", "Top", "Dome"]);
+    let components = report["components"].as_array().unwrap();
+    assert_eq!(components.len(), 3);
+    assert!(components.iter().all(|c| c["mass_g"].is_null()), "{report}");
+    assert_eq!(components[0]["part"], "electronics/xiao_esp32s3.c2f");
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.iter().filter(|w| w.as_str().unwrap().contains("has no mass on its sheet")).count(), 3, "{report}");
+    let enclosure: f64 = report["parts"].as_array().unwrap().iter().map(|p| p["mass_g"].as_f64().unwrap()).sum();
+    assert!((report["total"]["mass_g"].as_f64().unwrap() - enclosure).abs() < 1e-2, "{report}");
+    // A part whose sheet gives its mass: 10 g.
+    let (_, report) = server.report("mass_properties", json!({ "path": dir.join("tests/mass/ballast.c2fc") }));
+    assert_eq!(report["components"][0], json!({ "name": "weight", "part": "ballast.c2f", "mass_g": 10.0, "center": [35.0, 35.0, 10.0] }));
+
+    // Clear errors for what cannot be weighed.
+    for (args, message) in [
+        (json!({ "code": "cube(1);", "material": "wood" }), "unknown material `wood`"),
+        (json!({ "code": "cube(1);", "infill": -5 }), "infill is a percentage"),
+        (json!({ "code": "cube(1);", "wall": 0 }), "wall is a positive thickness"),
+        (json!({ "code": "cube(1);", "parts": { "lid": {} } }), "no part named `lid`"),
+        (json!({ "code": "cube(1);", "parts": { "root": { "colour": "red" } } }), "`parts.root.colour`"),
+        (json!({ "code": "cube(1);", "extra": [{ "mass_g": 5 }] }), "`extra[0]`.at"),
+        (json!({ "code": "echo(1);" }), "nothing to weigh"),
+    ] {
+        let (is_error, report) = server.report("mass_properties", args);
+        assert!(is_error && report.as_str().unwrap_or_default().contains(message), "{message}: {report}");
+    }
 }

@@ -751,6 +751,8 @@ c2f circuit fit grogu.c2fc              # each part's room in the enclosure, and
 c2f circuit fit --clearance 1 grogu.c2fc
 c2f circuit stl grogu.c2fc > grogu.stl  # the parts assembled (not the wires)
 c2f circuit 3mf grogu.c2fc > grogu.3mf
+c2f mass grogu.c2fc                     # its masses, center of gravity and tipping angle
+c2f mass --material petg --infill 30 --wall 1.2 grogu_plate.c2f
 ```
 
 The wiring list, to print and solder from (the first rows of Grogu's):
@@ -805,6 +807,7 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 | `fit` | how each part fits in the enclosure, as [`c2f circuit fit`](#does-it-fit) says it; `clearance` sets the room wanted |
 | `check_part` | a part's annotations checked against its rendered shape (see below) |
 | `save_part` | writes a part into your parts folder, then checks it (see below) |
+| `mass_properties` | what a design or a circuit weighs printed, its center of gravity, and how far it leans before it tips (see below) |
 
 The circuit tools take the circuit as `code` (its parts found from
 `working_dir`, then the library) or as a file `path`. `check_circuit`
@@ -824,6 +827,27 @@ ESP32-S3 that drives a DC motor through a DRV8833: look up the parts'
 pins, check the circuit until it has no errors, and show me the
 wiring." Then open `robot.c2fc` in the app and wire it in Assembly
 mode.
+
+`mass_properties` measures, rather than guesses, what a mechanical
+review needs. It takes a design (`code` or `path`, with `parameters`)
+or a circuit, and prints each `part()` (`root` for what is outside any)
+in `material` (PLA by default, PETG, ABS, ASA, TPU, nylon, or a density
+in g/cm³) with `infill` percent (20) and walls `wall` millimeters thick
+(0.8); `parts` sets them per part, as `{"lid": {"material": "PETG"}}`.
+A part's mass estimates a slicer's: its surface times the wall, plus the
+infill's share of the rest; its center is the solid's centroid. A
+circuit adds the enclosure's parts and each part it places, at its
+bounding box's center, by the mass its sheet gives
+(`// @spec mass: 3.3 g`; without one, `mass_g` is null and a warning
+says so). `extra` adds what the model carries without drawing it, as
+`[{"name": "watch", "mass_g": 150, "at": [0, 0, 60]}]`. It answers with
+`parts` (`name`, `volume_mm3`, `mass_g`, `material`, `infill`, `wall`,
+`center`), `components` for a circuit, `extra`, the `total` mass and
+`center` of gravity, and `stability`: the `base` it stands on (the
+convex hull of the points within 0.2 mm of its lowest), whether the
+center of gravity is `inside` it, and `min_tipping_deg`, how far it
+leans before it tips over, toward `direction`. `c2f mass` prints the
+same as a table.
 
 ### Create a part from its product page
 
