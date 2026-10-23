@@ -3,11 +3,13 @@ use std::path::Path;
 use std::process::ExitCode;
 
 mod circuit;
+mod mass;
 mod mcp;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
        c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>
+       c2f mass [--material <name>] [--infill <%>] [--wall <mm>] [-D name=value]... <file>
        c2f mcp
 
 commands:
@@ -41,6 +43,12 @@ commands:
   pins    print the pins, mount holes and ports a part declares
           (`// @pin`, `// @mount_hole`, `// @port`) and its sheet
           (`// @description`, `// @spec`, `// @source`), one per line
+  mass    what a design (or a .c2fc circuit) weighs printed: each
+          part()'s volume and mass, the total, the center of gravity,
+          and the angle it leans before it tips; --material (PLA,
+          PETG, ABS, ASA, TPU, nylon, or a density in g/cm3, default
+          PLA), --infill (percent, default 20), --wall (mm, default
+          0.8); a circuit's parts weigh what their `// @spec mass` says
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout
 
 circuit commands, on a `.c2fc` circuit:
@@ -245,6 +253,9 @@ fn run() -> ExitCode {
     }
     if args.first().is_some_and(|arg| arg == "circuit") {
         return circuit::run(&args[1..]);
+    }
+    if args.first().is_some_and(|arg| arg == "mass") {
+        return mass::run(&args[1..]);
     }
     let Some(options) = Options::parse(&args) else {
         eprintln!("{USAGE}");
