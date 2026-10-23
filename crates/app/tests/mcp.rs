@@ -329,6 +329,17 @@ fn prompts_lead_from_an_idea_to_its_electronics() {
     );
     let text = got["result"]["messages"][0]["content"]["text"].as_str().unwrap();
     assert!(text.contains("box.c2f") && text.contains("electrify") && text.contains("check_circuit"), "{text}");
+    // Every tool the prompts name is one the server has.
+    let tools = server.request("tools/list", json!({}));
+    let tools: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let design = server.request("prompts/get", json!({ "name": "design_object", "arguments": { "description": "A box" } }));
+    let both = format!("{text}{}", design["result"]["messages"][0]["content"]["text"].as_str().unwrap());
+    for tool in [
+        "render", "image", "library_parts", "check_part", "save_part", "electrify", "check_circuit", "fit", "circuit_image",
+        "circuit_wires", "circuit_bom", "export",
+    ] {
+        assert!(both.contains(&format!("`{tool}`")) && tools.contains(&tool), "{tool}");
+    }
     // A required argument left out is an error.
     assert!(server.request("prompts/get", json!({ "name": "design_object" }))["error"].is_object());
 }
