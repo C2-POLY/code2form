@@ -12,8 +12,8 @@
 #
 # The icon comes from crates/studio/assets/AppIcon.icns; redraw it with
 # `scripts/make-icon.sh`. The
-# fonts and libraries come from the reference app, installed in
-# /Applications or wherever C2F_REFERENCE_RESOURCES points.
+# fonts come from the repository's fonts folder, and MCAD from the
+# reference release's resources when C2F_REFERENCE_RESOURCES points there.
 #
 # Both slices come from one Rust toolchain that has the targets
 # aarch64-apple-darwin and x86_64-apple-darwin: C2F_TOOLCHAIN, else the
@@ -105,25 +105,20 @@ cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$app/Contents/Resources/libraries
 # before they open.
 ditto "$root/examples" "$app/Contents/Resources/examples"
 
-# The fonts text() defaults to (Liberation, SIL Open Font License) and the
-# MCAD library (LGPL 2.1), with their licences, copied from the reference
-# app so that this one works on its own.
+# The fonts text() defaults to (Liberation 2.00.1, SIL Open Font License,
+# with their licence), from the repository.
+mkdir -p "$app/Contents/Resources/fonts"
+ditto "$root/fonts" "$app/Contents/Resources/fonts"
+
+# The MCAD library (LGPL 2.1), with its licence, from the reference
+# release's resources when C2F_REFERENCE_RESOURCES names them.
 resources="${C2F_REFERENCE_RESOURCES:-}"
-for candidate in /Applications/OpenSCAD-2021.01.app /Applications/OpenSCAD.app; do
-  if [[ -z "$resources" && -d "$candidate/Contents/Resources/fonts" ]]; then
-    resources="$candidate/Contents/Resources"
-  fi
-done
-if [[ -n "$resources" ]]; then
-  mkdir -p "$app/Contents/Resources/fonts" "$app/Contents/Resources/libraries"
-  for fonts in "$resources"/fonts/Liberation-*; do
-    ditto "$fonts" "$app/Contents/Resources/fonts/$(basename "$fonts")"
-  done
+if [[ -n "$resources" && -d "$resources/libraries/MCAD" ]]; then
   ditto "$resources/libraries/MCAD" "$app/Contents/Resources/libraries/MCAD"
-  echo "bundled the fonts and libraries of $resources"
+  echo "bundled MCAD from $resources"
 else
-  echo "warning: the reference app was not found (set C2F_REFERENCE_RESOURCES to its" \
-    "Contents/Resources): text() and MCAD will need it installed" >&2
+  echo "note: MCAD not bundled (set C2F_REFERENCE_RESOURCES to the reference" \
+    "release's Contents/Resources to include it)" >&2
 fi
 
 # An ad-hoc signature: enough for a locally built app on Apple silicon.

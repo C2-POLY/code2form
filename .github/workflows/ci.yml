@@ -53,7 +53,7 @@ jobs:
       # 2021.01) bundles; the repository keeps that exact version.
       - name: Point the font search at the repository's fonts
         shell: bash
-        run: echo "OPENSCAD_FONT_PATH=$GITHUB_WORKSPACE/fonts" >> "$GITHUB_ENV"
+        run: echo "C2F_FONT_PATH=$GITHUB_WORKSPACE/fonts" >> "$GITHUB_ENV"
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

@@ -182,10 +182,9 @@ fn animation_times() {
 }
 
 #[test]
-#[ignore = "needs the reference desktop app; set C2F_REFERENCE to override its path"]
+#[ignore = "needs the reference desktop app; set C2F_REFERENCE to its executable"]
 fn live_examples() {
-    let reference = std::env::var("C2F_REFERENCE")
-        .unwrap_or_else(|_| "/Applications/OpenSCAD-2021.01.app/Contents/MacOS/OpenSCAD".into());
+    let reference = std::env::var("C2F_REFERENCE").expect("C2F_REFERENCE names the reference's executable");
     let resources = Path::new(&reference).parent().expect("C2F_REFERENCE is a file path").join("../Resources");
     let mut scads = Vec::new();
     for dir in ["examples", "libraries"] {

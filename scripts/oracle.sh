@@ -9,12 +9,12 @@
 #   C2F_REFERENCE=/path/to/its/executable scripts/oracle.sh
 set -euo pipefail
 
-reference="${C2F_REFERENCE:-/Applications/OpenSCAD-2021.01.app/Contents/MacOS/OpenSCAD}"
+reference="${C2F_REFERENCE:?set C2F_REFERENCE to the reference executable}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-"$reference" --version 2>&1 | tail -1 > "$root/tests/oracle/REFERENCE_VERSION"
+"$reference" --version 2>&1 | tail -1 | grep -oE '[0-9]+(\.[0-9]+)+' > "$root/tests/oracle/REFERENCE_VERSION"
 
 for scad in "$root"/tests/oracle/cases/*.scad; do
   name="${scad%.scad}"
