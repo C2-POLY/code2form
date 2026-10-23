@@ -739,3 +739,18 @@ fn fit_reports_each_part_as_the_command_line_does() {
     let (is_error, _) = server.report("fit", json!({ "path": dir.join("winder.c2fc"), "clearance": -1 }));
     assert!(is_error);
 }
+
+#[test]
+fn circuit_image_draws_the_enclosure_see_through() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nightlight/nightlight.c2fc");
+    let mut server = Server::start();
+    let (is_error, content) = server.call("circuit_image", json!({ "path": path, "view": "sheet", "section": true }));
+    assert!(!is_error && content[0]["type"] == "image", "{content:?}");
+    let report: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(report["enclosure"], true, "{report}");
+    let (_, content) = server.call("circuit_image", json!({ "path": path, "enclosure": false }));
+    let report: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(report["enclosure"], false, "{report}");
+    let (is_error, _) = server.call("circuit_image", json!({ "path": path, "enclosure": "yes" }));
+    assert!(is_error);
+}

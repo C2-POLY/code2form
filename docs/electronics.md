@@ -799,7 +799,7 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 | `library_parts` | lists the library's electronics parts, by the name a circuit gives as `part`, with their description, specs and sources; `query` ranks them as the catalogue's search does |
 | `part_pins` | a part's pins, mount holes, ports and badly written annotations, from `code` or `path` |
 | `check_circuit` | the wiring checks, with `ok` false on an error |
-| `circuit_image` | a PNG of the circuit with its wires; `net` (as `xiao.GND`) highlights one net |
+| `circuit_image` | a PNG of the circuit with its wires, in its enclosure drawn see-through (`enclosure` false leaves it out), or its sheet of views (`view` `sheet`, `section` cuts it open); `net` (as `xiao.GND`) highlights one net |
 | `circuit_wires` | the wiring list |
 | `circuit_bom` | the bill of materials |
 | `fit` | how each part fits in the enclosure, as [`c2f circuit fit`](#does-it-fit) says it; `clearance` sets the room wanted |

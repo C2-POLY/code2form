@@ -76,14 +76,16 @@ pub fn tools() -> Vec<Value> {
             "name": "circuit_image",
             "title": "Picture of a circuit",
             "description": "A PNG picture of a circuit: its parts where it places them and its wires as tubes in their \
-                            colors, from a view as `image` takes, or its sheet of views (`view` = `sheet`, with \
-                            `section`). `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others.",
+                            colors, inside its enclosure drawn see-through (unless `enclosure` is false), from a view as \
+                            `image` takes, or its sheet of views (`view` = `sheet`, with `section` to cut the \
+                            enclosure open). `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others.",
             "inputSchema": schema_of(super::merge(circuit(), json!({
                 "view": { "type": "string", "enum": super::sheet_views(), "default": "diagonal", "description": "Where the camera looks from, or `sheet`." },
                 "section": { "type": "boolean", "default": false, "description": "With `view` = `sheet`: add a view cut through the middle." },
                 "width": { "type": "integer", "minimum": 1, "maximum": super::MAX_IMAGE_SIZE, "default": IMAGE_SIZE.0, "description": "In pixels." },
                 "height": { "type": "integer", "minimum": 1, "maximum": super::MAX_IMAGE_SIZE, "default": IMAGE_SIZE.1, "description": "In pixels." },
                 "net": { "type": "string", "description": "A pin, as `part.pin`, whose net to highlight." },
+                "enclosure": { "type": "boolean", "default": true, "description": "Draw the circuit's enclosure, see-through." },
             })), &[]),
         }),
         json!({
@@ -436,6 +438,9 @@ fn objects(rows: &[Vec<String>]) -> Vec<Value> {
         .collect()
 }
 
+/// How much of the enclosure shows, as the app draws it by default.
+const ENCLOSURE_ALPHA: f32 = 0.28;
+
 fn circuit_image(args: &Value) -> Result<Vec<Value>, String> {
     let (circuit, src, path) = load(args)?;
     let highlight = match args.get("net").and_then(Value::as_str) {
@@ -461,8 +466,19 @@ fn circuit_image(args: &Value) -> Result<Vec<Value>, String> {
             rendered.solid.push_triangle(std::array::from_fn(|k| tube.positions[corners[k] as usize]), [color; 3]);
         }
     }
+    // The enclosure, see-through around the parts.
+    let mut shown = false;
+    if args.get("enclosure").map_or(Ok(true), |v| v.as_bool().ok_or("`enclosure` is true or false"))? {
+        if let Some(mut enclosure) = crate::circuit::enclosure(&circuit)? {
+            for color in &mut enclosure.solid.colors {
+                color[3] = ENCLOSURE_ALPHA;
+            }
+            rendered.backgrounds.append(enclosure.solid);
+            shown = true;
+        }
+    }
     let png = picture(&rendered, args)?.ok_or("the circuit is empty: nothing to draw")?;
-    let mut report = json!({ "parts": circuit.parts.len(), "wires": circuit.wires.len() });
+    let mut report = json!({ "parts": circuit.parts.len(), "wires": circuit.wires.len(), "enclosure": shown });
     if let Some(net) = &highlight {
         report["net"] = json!(net.iter().map(|&end| circuit.end_name(end)).collect::<Vec<_>>());
     }

@@ -177,7 +177,13 @@ const IDENTITY: c2f_geom::Placement =
 /// enclosure if it names one; the error when the enclosure does not load.
 fn solids(circuit: &Circuit, assembly: &Assembly) -> Result<(Vec<Model>, Option<Model>), String> {
     let models = assembly.nodes.iter().map(|node| c2f_geom::render(std::slice::from_ref(node)).model).collect();
-    let Some(enclosure) = &circuit.enclosure else { return Ok((models, None)) };
+    Ok((models, enclosure(circuit)?.map(|rendered| rendered.model)))
+}
+
+/// The circuit's enclosure rendered, if it names one; the error when it
+/// does not load.
+pub fn enclosure(circuit: &Circuit) -> Result<Option<c2f_geom::Rendered>, String> {
+    let Some(enclosure) = &circuit.enclosure else { return Ok(None) };
     let library_paths = c2f_eval::default_library_paths();
     let program = c2f_eval::read_source(enclosure)
         .ok()
@@ -187,7 +193,7 @@ fn solids(circuit: &Circuit, assembly: &Assembly) -> Result<(Vec<Model>, Option<
     // `%` copies of the parts, there to be seen through, are not the
     // enclosure: building them would only cost time.
     let nodes: Vec<_> = output.nodes.into_iter().filter(|node| !node.background).collect();
-    Ok((models, Some(c2f_geom::render_in(&nodes, enclosure.parent().unwrap_or(Path::new(""))).model)))
+    Ok(Some(c2f_geom::render_in(&nodes, enclosure.parent().unwrap_or(Path::new("")))))
 }
 
 /// Where the parts run into each other or into the enclosure, and where

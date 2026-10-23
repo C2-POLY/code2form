@@ -127,7 +127,10 @@ parts from `circuit_bom`:
 | Adafruit NeoPixel Ring 12 | 1 |
 | Copper plate, 10 mm square | 1 |
 
-![The parts and their wires, from every side](images/nightlight/5-wiring.png)
+`circuit_image` with `view = "sheet"` and `section = true` shows the
+build from every side inside its see-through enclosure, and cut open:
+
+![The build from every side, and cut open](images/nightlight/5-wiring.png)
 
 Then `export`, with `for_print = true`, wrote the three pieces laid out
 for the slicer as one 3MF. They come as one object, of three separate
