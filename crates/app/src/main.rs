@@ -2,10 +2,11 @@ use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use c2f_agent::{Export, Registry, Server, render};
+
 mod circuit;
 mod mass;
 mod loads;
-mod mcp;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
@@ -256,7 +257,7 @@ fn parse_view(text: &str) -> Option<(f64, f64)> {
 fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == ["mcp"] {
-        return mcp::serve();
+        return mcp();
     }
     if args.first().is_some_and(|arg| arg == "circuit") {
         return circuit::run(&args[1..]);
@@ -345,6 +346,19 @@ fn run() -> ExitCode {
     }
 }
 
+/// `c2f mcp`: serves the agent's tools, the ones the studio's agent calls,
+/// on stdin and stdout; logs go to stderr.
+fn mcp() -> ExitCode {
+    eprintln!("c2f mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
+    match Server::new(Registry::builtin()).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("c2f mcp: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Prints the annotations of a part in source order, each after its line
 /// number, as `12: @pin D3 [2.54, 15.2, 1.6] up io 3.3V "GPIO4"`.
 fn pins(src: &str, file_name: &str) -> ExitCode {
@@ -382,102 +396,6 @@ fn apply_parameter_set(program: &mut c2f_eval::Program, file: Option<&str>, name
     let sets = c2f_eval::customizer::ParameterSets::parse(&json).map_err(|err| format!("{file}: {err}"))?;
     let set = sets.get(name).ok_or_else(|| format!("{file} has no such set"))?;
     program.apply_parameter_set(set)
-}
-
-/// The geometry formats the CLI prints: meshes for a solid, drawings for a
-/// 2D model.
-#[derive(Clone, Copy)]
-enum Export {
-    Stl,
-    ThreeMf,
-    /// Written from the evaluated nodes rather than the rendering: see
-    /// [`gltf`].
-    Glb,
-    Obj,
-    Step,
-    /// Written from the parts, with their meshes beside it.
-    Urdf,
-    /// The parts, from the evaluated nodes.
-    Json,
-    Svg,
-    Dxf,
-}
-
-impl Export {
-    /// The format of a command or file extension.
-    fn named(name: &str) -> Option<Export> {
-        match name.to_ascii_lowercase().as_str() {
-            "stl" => Some(Export::Stl),
-            "3mf" => Some(Export::ThreeMf),
-            "glb" => Some(Export::Glb),
-            "obj" => Some(Export::Obj),
-            "step" | "stp" => Some(Export::Step),
-            "urdf" => Some(Export::Urdf),
-            "json" => Some(Export::Json),
-            "svg" => Some(Export::Svg),
-            "dxf" => Some(Export::Dxf),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Export::Stl => "STL",
-            Export::ThreeMf => "3MF",
-            Export::Glb => "glTF",
-            Export::Obj => "OBJ",
-            Export::Step => "STEP",
-            Export::Urdf => "URDF",
-            Export::Json => "JSON",
-            Export::Svg => "SVG",
-            Export::Dxf => "DXF",
-        }
-    }
-
-    fn extension(self) -> &'static str {
-        match self {
-            Export::Stl => "stl",
-            Export::ThreeMf => "3mf",
-            Export::Glb => "glb",
-            Export::Obj => "obj",
-            Export::Step => "step",
-            Export::Urdf => "urdf",
-            Export::Json => "json",
-            Export::Svg => "svg",
-            Export::Dxf => "dxf",
-        }
-    }
-
-    /// The file in this format, or why there is none. `name` names a
-    /// STEP's product; `view` draws a 3D model's outline in a DXF.
-    fn write(self, rendered: &c2f_geom::Rendered, name: &str, view: Option<(f64, f64)>) -> Result<Vec<u8>, String> {
-        let (bytes, other) = match self {
-            Export::Stl => (rendered.stl().map(String::into_bytes), "2D"),
-            Export::ThreeMf => (rendered.three_mf(), "2D"),
-            Export::Step => {
-                let options = c2f_geom::StepOptions { name: name.into(), ..Default::default() };
-                (rendered.step(&options).map(String::into_bytes), "2D")
-            }
-            Export::Glb | Export::Obj | Export::Urdf | Export::Json => {
-                return Err(format!("a {} is written from the evaluated nodes, not a rendering", self.name()));
-            }
-            Export::Svg => (rendered.svg().map(String::into_bytes), "3D"),
-            Export::Dxf => match view {
-                Some((yaw, pitch)) => (rendered.view_dxf(yaw, pitch).map(String::into_bytes), "3D"),
-                // A 3D model is seen from the top.
-                None if !rendered.is_2d => (rendered.view_dxf(-90.0, 90.0).map(String::into_bytes), "2D"),
-                None => (rendered.dxf().map(String::into_bytes), "3D"),
-            },
-        };
-        bytes.ok_or_else(|| format!("the model is empty or {other}; no {} written", self.name()))
-    }
-}
-
-/// Builds the geometry of an evaluated program, reading data files next to
-/// its main file.
-fn render(program: &c2f_eval::Program, output: &c2f_eval::Output) -> c2f_geom::Rendered {
-    c2f_geom::render_in(&output.nodes, program.files[0].path.parent().unwrap_or(Path::new("")))
-        .with_pauses(output.pauses.clone())
 }
 
 /// Prints the CSG tree, or with `export` the geometry in that format.

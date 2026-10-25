@@ -165,3 +165,19 @@ impl log::Log for Errors {
 
     fn flush(&self) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    /// The studio's agent calls the very tools `c2f mcp` serves.
+    #[test]
+    fn the_agent_s_tools_render_code() {
+        let tools = c2f_agent::Registry::builtin();
+        let listed = tools.list();
+        assert!(listed.iter().any(|tool| tool["name"] == "render" && tool["inputSchema"]["properties"]["code"].is_object()));
+        let content = tools.call("render", &json!({ "code": "cube([10, 20, 5]);" })).expect("the render tool").expect("a report");
+        let report: Value = serde_json::from_str(content[0]["text"].as_str().expect("a text")).expect("JSON");
+        assert_eq!(report["bounding_box"]["size"], json!([10.0, 20.0, 5.0]));
+    }
+}
