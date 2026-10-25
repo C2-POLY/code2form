@@ -1581,6 +1581,13 @@ mod tests {
         std::fs::write(&file, saved).unwrap();
         let ctx = egui::Context::default();
         let mut app = studio(&ctx, &file);
+        // The parameters come with the first render, slower on CI.
+        let start = Instant::now();
+        while app.doc.customizer.shown().next().is_none() {
+            assert!(start.elapsed() < Duration::from_secs(60), "no first render");
+            app.receive();
+            std::thread::sleep(Duration::from_millis(5));
+        }
         // The user's unsaved edit stays.
         app.doc.text.push_str("// mine\n");
 

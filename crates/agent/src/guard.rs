@@ -497,6 +497,7 @@ mod tests {
         assert!(!report[0]["text"].as_str().unwrap().contains("outside"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_closed_studio_says_so_rather_than_unknown_tool() {
         let socket = std::env::temp_dir().join(format!("c2f-guard-none-{}", std::process::id())).join("s.sock");
@@ -531,13 +532,18 @@ mod tests {
 
     #[test]
     fn the_settings_file_sets_the_policy() {
-        let text = "agent-permission = ask\nagent-allow-export = false\nagent-allow-save-part = maybe\n\
-                    library = /my/libs\nlibrary = relative\nother = 1\n";
-        let policy = Policy::from_settings(text, Some(Path::new("/project")));
+        // An absolute path on every system.
+        let libs = std::env::temp_dir().join("my-libs");
+        let text = format!(
+            "agent-permission = ask\nagent-allow-export = false\nagent-allow-save-part = maybe\n\
+             library = {}\nlibrary = relative\nother = 1\n",
+            libs.display()
+        );
+        let policy = Policy::from_settings(&text, Some(Path::new("/project")));
         assert!(policy.ask_first && !policy.export && policy.save_part && policy.new_files && policy.electrify);
         let scope = policy.scope.unwrap();
         assert_eq!(scope.folder, Path::new("/project"));
-        assert_eq!(scope.read_only[0], Path::new("/my/libs"));
+        assert_eq!(scope.read_only[0], libs);
         assert!(!scope.read_only.contains(&PathBuf::from("relative")));
         assert_eq!(Policy::from_settings_file(Some(Path::new("/no/such/settings.txt")), None), Policy::default());
     }
