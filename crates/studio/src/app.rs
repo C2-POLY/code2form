@@ -51,6 +51,10 @@ use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
 /// The agent's live tools: they read and edit the open documents.
 pub mod live;
+/// The agent's edits as they land: marked, flashed, undone together.
+mod agent_edits;
+/// The review of the agent's changes before they apply.
+mod review;
 
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {
@@ -308,6 +312,11 @@ struct Tab {
     explode_how: c2f_geom::Explode,
     /// The lines (from 0, the end excluded) the agent's last edit changed.
     agent_marks: Vec<std::ops::Range<usize>>,
+    /// The agent's edits as they show in the editor and the view, and the
+    /// last answer's, to undo together.
+    agent_highlight: Option<agent_edits::Highlight>,
+    agent_group: Option<agent_edits::AgentGroup>,
+    agent_flash: Option<agent_edits::Flash>,
 }
 
 impl Tab {
@@ -351,6 +360,9 @@ impl Tab {
             explode_shown: 0.0,
             explode_how: c2f_geom::Explode::default(),
             agent_marks: Vec::new(),
+            agent_highlight: None,
+            agent_group: None,
+            agent_flash: None,
         }
     }
 
@@ -470,6 +482,8 @@ pub struct StudioApp {
     agent: AgentPanel,
     /// The requests of the agent's live tools.
     live: live::Live,
+    /// Whether the agent's turn was under way at the last frame.
+    agent_running: bool,
 }
 
 impl StudioApp {
@@ -551,6 +565,7 @@ impl StudioApp {
             header_switch: 0.0,
             agent,
             live: live::Live::new(ctx),
+            agent_running: false,
         };
         app.apply_settings(ctx);
         // A screenshot of a layout, as `layout:view`.
@@ -598,6 +613,7 @@ impl StudioApp {
             app.render_now();
         }
         app.show_tab(ctx);
+        app.screenshot_agent(ctx);
         app
     }
 
@@ -1319,6 +1335,7 @@ impl StudioApp {
     /// tab; an edit's link shows its line in the code.
     fn agent_panel(&mut self, ctx: &egui::Context) {
         self.agent.set_tab(self.doc.path.as_deref(), self.doc.directory());
+        self.agent.undo_offer = self.agent_undo_offer();
         if let Some(line) = self.agent.show(ctx) {
             if self.arrangement == Arrangement::View {
                 self.arrangement = Arrangement::Split;
@@ -1326,6 +1343,10 @@ impl StudioApp {
             let offset = agent_panel::line_offset(&self.doc.text, line);
             self.doc.editor.go_to(ctx, &self.doc.text, offset);
         }
+        if std::mem::take(&mut self.agent.undo_asked) {
+            self.undo_agent_change(ctx);
+        }
+        self.follow_agent_turn(ctx, self.agent.running());
     }
 
     // ---- Catalogue ----
@@ -2236,6 +2257,7 @@ impl StudioApp {
                 Action::ZoomOut => zoom_steps -= 1,
                 Action::ZoomReset => zoom_reset = true,
                 Action::Agent => self.agent.toggle(),
+                Action::UndoAgent => self.undo_agent_change(ctx),
                 Action::Settings => self.settings_open = true,
             }
         }
@@ -2767,6 +2789,7 @@ impl StudioApp {
     fn code_column(&mut self, ui: &mut egui::Ui) {
         let max = ui.available_height() * 0.6;
         self.console_dock(max).show_inside(ui, |ui| self.console_contents(ui));
+        self.show_agent_marks(ui.ctx());
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().editor)).show_inside(ui, |ui| {
             if self.doc.editor.show(ui, &mut self.doc.text) {
                 if self.settings.render_while_typing {
@@ -2845,6 +2868,7 @@ impl StudioApp {
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
+            self.paint_agent_flash(ctx, &ui.painter_at(response.rect), response.rect);
             if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
                 let name = &original.parts[drag.part].name;
                 let turned = if drag.turns > 0 { tr!(", turned {}°", ", tourné de {}°", 90 * drag.turns) } else { String::new() };
@@ -3651,6 +3675,7 @@ impl eframe::App for StudioApp {
         self.view_panel(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
+        self.review_window(ctx);
         self.keep_settings(ctx);
 
         if let Some(deadline) = self.doc.render_deadline {
@@ -3669,7 +3694,7 @@ impl eframe::App for StudioApp {
         self.update_title(ctx);
         self.save_session();
 
-        let ready = self.doc.finished > 0 && !self.doc.busy();
+        let ready = self.doc.finished > 0 && !self.doc.busy() && self.live.review.as_ref().is_none_or(|r| r.settled());
         if let Some(result) = self.screenshot.as_mut().and_then(|s| s.update(ctx, ready)) {
             match result {
                 Ok(message) => self.doc.console.log(Level::Info, message),

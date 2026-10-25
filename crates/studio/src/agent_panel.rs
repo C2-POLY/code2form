@@ -387,6 +387,10 @@ pub struct AgentPanel {
     /// one that could not be read.
     thumbnails: HashMap<(String, usize), Option<TextureHandle>>,
     focus_input: bool,
+    /// The label of the action that undoes the agent's last change, while
+    /// the app says it can; and whether it was clicked, for the app.
+    pub undo_offer: Option<String>,
+    pub undo_asked: bool,
 }
 
 impl AgentPanel {
@@ -411,6 +415,8 @@ impl AgentPanel {
             unfolded: HashSet::new(),
             thumbnails: HashMap::new(),
             focus_input: false,
+            undo_offer: None,
+            undo_asked: false,
         }
     }
 
@@ -418,6 +424,11 @@ impl AgentPanel {
     #[allow(dead_code, reason = "the live tools read it once they are wired")]
     pub fn transcript(&self) -> &Transcript {
         &self.transcript
+    }
+
+    /// Adds a note of the panel's own to the conversation.
+    pub fn note(&mut self, text: String, error: bool) {
+        self.transcript.entries.push(Entry::Notice { text, error });
     }
 
     /// Whether a turn is under way.
@@ -812,7 +823,7 @@ impl AgentPanel {
             return None;
         }
         let running = self.running();
-        let AgentPanel { transcript, unfolded, thumbnails, .. } = self;
+        let AgentPanel { transcript, unfolded, thumbnails, undo_offer, undo_asked, .. } = self;
         let mut go_to = None;
         egui::ScrollArea::vertical().auto_shrink(false).stick_to_bottom(true).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
@@ -833,6 +844,12 @@ impl AgentPanel {
                     ui.add(egui::Spinner::new().size(12.0).color(palette.text_dim));
                     ui.label(RichText::new(tr("Thinking…", "Réflexion…")).size(12.0).color(palette.text_dim));
                 });
+            }
+            if let Some(label) = undo_offer.as_deref().filter(|_| !running) {
+                let hint = tr("Put the code back as it was before the agent's answer, in one step", "Remettre le code comme avant la réponse de l'agent, en une étape");
+                if ui.button(RichText::new(format!("↶ {label}")).size(12.0)).on_hover_text(hint).clicked() {
+                    *undo_asked = true;
+                }
             }
         });
         go_to
