@@ -164,14 +164,12 @@ impl AgentSettings {
     /// readable besides.
     pub fn policy(&self, folder: &Path, libraries: &[PathBuf]) -> Policy {
         let read_only = libraries.iter().cloned().chain(c2f_eval::default_library_paths()).collect();
-        // ---- M4 reconcile: once `guard::Policy` has `ask_first`, set it
-        // here from `self.ask_first`. The in-process engine and the hidden
-        // `mcp --studio` server both build their policy through this. ----
         Policy {
             new_files: self.allow_new_files,
             export: self.allow_export,
             save_part: self.allow_save_part,
             electrify: self.allow_electrify,
+            ask_first: self.ask_first,
             scope: Some(Scope { folder: folder.to_path_buf(), read_only }),
         }
     }
@@ -362,6 +360,7 @@ pub fn choose(agent: &AgentSettings, probe: &Probe) -> Result<Pick, String> {
                 "Claude Code n'est pas connecté : lancez `claude` puis /login dans un terminal.",
             )
             .into()),
+            (ClaudeCodeStatus::TooOld { .. }, _) => Err(probe.status.message()),
             _ => Err(tr("Claude Code is not found: install it, or give its path in the settings.", "Claude Code est introuvable : installez-le, ou indiquez son chemin dans les réglages.").into()),
         }
     };
@@ -606,6 +605,7 @@ fn claude_state(probe: Option<&Probe>, checking: bool) -> String {
             "Claude Code {version} — non connecté (lancez `claude` puis /login dans un terminal)"
         ),
         ClaudeCodeStatus::Missing => tr("Claude Code — not found", "Claude Code — introuvable").into(),
+        ClaudeCodeStatus::TooOld { .. } => probe.status.message(),
     };
     if checking { tr!("{state} (checking…)", "{state} (vérification…)") } else { state }
 }

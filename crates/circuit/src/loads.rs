@@ -331,11 +331,35 @@ pub struct BearingMargin {
 
 /// The file `part` names: as is, then in each of `dirs`.
 pub fn find_part(part: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
-    std::iter::once(PathBuf::from(part)).chain(dirs.iter().map(|dir| dir.join(part))).find(|path| path.is_file())
+    find_part_in(part, dirs, None).ok()
 }
 
-fn sheet(part: &str, dirs: &[PathBuf]) -> Result<Vec<c2f_lang::annotations::Spec>, String> {
-    let path = find_part(part, dirs).ok_or_else(|| format!("cannot find the part `{part}`, as is, in `working_dir` or in the library folders"))?;
+/// [`find_part`] in `scope` alone when there is one: `part` is then taken
+/// as is only when it is an absolute path, never from the current
+/// directory. The error says why none is found.
+pub fn find_part_in(part: &str, dirs: &[PathBuf], scope: Option<&c2f_lang::FileScope>) -> Result<PathBuf, String> {
+    let as_is = (scope.is_none() || Path::new(part).is_absolute()).then(|| PathBuf::from(part));
+    let mut candidates = as_is.into_iter().chain(dirs.iter().map(|dir| dir.join(part))).filter(|path| path.is_file());
+    match scope {
+        None => candidates.next(),
+        Some(scope) => {
+            let mut outside = false;
+            let found = candidates.find(|path| {
+                let allowed = scope.allows(path);
+                outside |= !allowed;
+                allowed
+            });
+            if found.is_none() && outside {
+                return Err(c2f_lang::FileScope::refusal(part));
+            }
+            found
+        }
+    }
+    .ok_or_else(|| format!("cannot find the part `{part}`, as is, in `working_dir` or in the library folders"))
+}
+
+fn sheet(part: &str, dirs: &[PathBuf], scope: Option<&c2f_lang::FileScope>) -> Result<Vec<c2f_lang::annotations::Spec>, String> {
+    let path = find_part_in(part, dirs, scope)?;
     let src = std::fs::read_to_string(&path).map_err(|err| format!("cannot read {}: {err}", Path::new(&path).display()))?;
     Ok(c2f_lang::annotations::read(&src).0.specs)
 }
@@ -344,6 +368,12 @@ fn sheet(part: &str, dirs: &[PathBuf]) -> Result<Vec<c2f_lang::annotations::Spec
 /// found as is, then in `dirs`: the motor's (from `motor.part`, else the
 /// motor support's `part`) and each bearing's static load.
 pub fn with_sheets(scenario: &Scenario, dirs: &[PathBuf]) -> Result<Scenario, String> {
+    with_sheets_in(scenario, dirs, None)
+}
+
+/// [`with_sheets`], the parts' sheets read in `scope` alone when there is
+/// one (see [`find_part_in`]).
+pub fn with_sheets_in(scenario: &Scenario, dirs: &[PathBuf], scope: Option<&c2f_lang::FileScope>) -> Result<Scenario, String> {
     let mut scenario = scenario.clone();
     let motor_part = scenario
         .motor
@@ -351,7 +381,7 @@ pub fn with_sheets(scenario: &Scenario, dirs: &[PathBuf]) -> Result<Scenario, St
         .and_then(|m| m.part.clone())
         .or_else(|| scenario.supports.iter().find(|s| s.kind == SupportKind::Motor).and_then(|s| s.part.clone()));
     if let Some(part) = motor_part {
-        let specs = sheet(&part, dirs)?;
+        let specs = sheet(&part, dirs, scope)?;
         let motor = scenario.motor.get_or_insert_with(Motor::default);
         motor.part = Some(part);
         let fill = |field: &mut Option<f64>, key: &str| {
@@ -368,7 +398,7 @@ pub fn with_sheets(scenario: &Scenario, dirs: &[PathBuf]) -> Result<Scenario, St
     }
     for support in &mut scenario.supports {
         if let (Some(part), None, false) = (&support.part, support.static_load_n, support.kind == SupportKind::Motor) {
-            support.static_load_n = spec_figure(&sheet(part, dirs)?, "static load");
+            support.static_load_n = spec_figure(&sheet(part, dirs, scope)?, "static load");
         }
     }
     Ok(scenario)

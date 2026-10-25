@@ -111,7 +111,7 @@ pub fn circuit(circuit: &Circuit, src: &str, path: &Path, mut options: MassOptio
         Some(file) => {
             let program = c2f_eval::read_source(file)
                 .ok()
-                .and_then(|src| c2f_eval::Program::load(&src, file, &c2f_eval::default_library_paths()).ok())
+                .and_then(|src| c2f_eval::Program::load_in(&src, file, &c2f_eval::default_library_paths(), circuit.scope.as_ref()).ok())
                 .ok_or_else(|| format!("cannot load the enclosure {}", file.display()))?;
             let output = c2f_eval::evaluate(&program);
             if let Some(error) = output.error {

@@ -1112,7 +1112,8 @@ fn tool_names(server: &mut Server) -> Vec<String> {
 
 #[test]
 fn with_no_studio_open_the_studio_s_tools_are_not_listed_and_say_so() {
-    let socket = temp_dir("no-studio").join("studio.sock");
+    // A folder no studio made: a folder others may open is refused.
+    let socket = temp_dir("no-studio").join("private").join("studio.sock");
     let plain = tool_names(&mut Server::start_args(&["mcp"], &[("CODE2FORM_STUDIO_SOCKET", socket.as_os_str())]));
     let mut server = Server::start_args(&["mcp", "--studio"], &[("CODE2FORM_STUDIO_SOCKET", socket.as_os_str())]);
     assert_eq!(tool_names(&mut server), plain);
@@ -1157,4 +1158,43 @@ fn the_studio_s_tools_come_after_the_built_in_ones() {
     assert!(!is_error);
     assert_eq!(content, vec![json!({ "type": "text", "text": "live" })]);
     let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+}
+
+/// `c2f mcp --studio` applies what the studio's settings let the agent do,
+/// in its current folder, as `code2form mcp --studio` does; plain `c2f mcp`
+/// stays unguarded.
+#[test]
+fn the_studio_s_settings_guard_c2f_mcp_studio_only() {
+    let home = temp_dir("guarded-home");
+    let settings = "agent-allow-export = false\n";
+    for dir in [home.join("Library/Application Support/Code2Form"), home.join(".config/code2form")] {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.txt"), settings).unwrap();
+    }
+    let secret = home.join("secret.txt");
+    std::fs::write(&secret, "SECRET LINE: hunter2\n").unwrap();
+    let socket = home.join("no-studio.sock");
+    let config = home.join(".config");
+    let env = [
+        ("HOME", home.as_os_str()),
+        ("XDG_CONFIG_HOME", config.as_os_str()),
+        ("CODE2FORM_STUDIO_SOCKET", socket.as_os_str()),
+    ];
+    let include = json!({ "code": format!("include <{}>\ncube(1);", secret.display()) });
+    let output = home.join("cube.stl");
+    let export = json!({ "code": "cube(1);", "output": output });
+
+    let mut plain = Server::start_args(&["mcp"], &env);
+    let (is_error, content) = plain.call("render", include.clone());
+    assert!(is_error && content[0]["text"].as_str().unwrap().contains("SECRET"), "unguarded, as before: {content:?}");
+    let (is_error, content) = plain.call("export", export.clone());
+    assert!(!is_error, "{content:?}");
+
+    let mut guarded = Server::start_args(&["mcp", "--studio"], &env);
+    let (_, content) = guarded.call("render", include);
+    assert!(!format!("{content:?}").contains("SECRET"), "{content:?}");
+    let (is_error, content) = guarded.call("export", json!({ "code": "cube(1);", "output": "cube.stl" }));
+    let text = content[0]["text"].as_str().unwrap();
+    assert!(is_error && text.contains("`export` is not allowed"), "{text}");
+    let _ = std::fs::remove_dir_all(&home);
 }

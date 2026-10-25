@@ -350,7 +350,9 @@ fn run() -> ExitCode {
 
 /// `c2f mcp`: serves the agent's tools, the ones the studio's agent calls,
 /// on stdin and stdout; logs go to stderr. With `studio`, the live tools
-/// of the studio that is open come after them.
+/// of the studio that is open come after them, behind what the studio's
+/// settings let the agent do, in the current folder (as `code2form mcp
+/// --studio` does). Without `studio`, every tool is allowed, anywhere.
 fn mcp(studio: bool) -> ExitCode {
     eprintln!("c2f mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
     let mut tools = Registry::builtin();
@@ -362,6 +364,10 @@ fn mcp(studio: bool) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        let settings = c2f_agent::guard::settings_file();
+        let folder = std::env::current_dir().ok();
+        let policy = c2f_agent::guard::Policy::from_settings_file(settings.as_deref(), folder.as_deref());
+        tools = c2f_agent::guard::Guarded::registry(tools, policy);
     }
     match Server::new(tools).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,

@@ -176,17 +176,16 @@ impl ApiEngine {
 
 impl Engine for ApiEngine {
     fn send(&mut self, message: UserMessage, events: Sender<Event>) -> Result<(), String> {
-        // A stopped turn ends within a poll, unless a tool is still running.
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while self.busy() && self.stop.load(Ordering::SeqCst) && Instant::now() < deadline {
-            thread::sleep(POLL / 4);
-        }
-        if self.busy() {
+        // A stopped turn ends within a poll, unless a tool is still running:
+        // the next one waits for it on its own thread, never on the
+        // caller's (the studio's UI thread).
+        if self.busy() && !self.stop.load(Ordering::SeqCst) {
             return Err("the agent is still answering: stop it or wait for its reply".into());
         }
         if self.options.key.trim().is_empty() {
             return Err("no Anthropic API key: add one in the settings".into());
         }
+        let stopped = self.turn.take().filter(|turn| !turn.is_finished());
         // A flag of its own, so that stopping this turn never stops the next.
         self.stop = Arc::new(AtomicBool::new(false));
         let turn = Turn {
@@ -198,7 +197,13 @@ impl Engine for ApiEngine {
         };
         let handle = thread::Builder::new()
             .name("c2f-agent-api".into())
-            .spawn(move || turn.run(message))
+            .spawn(move || {
+                // The history is the stopped turn's until it ends.
+                if let Some(stopped) = stopped {
+                    let _ = stopped.join();
+                }
+                turn.run(message)
+            })
             .map_err(|err| format!("cannot start the agent: {err}"))?;
         self.turn = Some(handle);
         Ok(())
@@ -921,6 +926,10 @@ mod tests {
             self.0.lock().unwrap().push((name.into(), args.clone()));
             match name {
                 "measure" => Some(Ok(vec![json!({ "type": "text", "text": "42 mm" })])),
+                "slow" => {
+                    thread::sleep(Duration::from_millis(1500));
+                    Some(Ok(vec![json!({ "type": "text", "text": "done" })]))
+                }
                 "picture" => Some(Ok(vec![json!({ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" })])),
                 _ => None,
             }
@@ -1123,6 +1132,31 @@ mod tests {
         let messages = requests[1].1["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["content"][1]["text"], "still there?");
+    }
+
+    #[test]
+    fn a_message_after_a_stop_never_blocks_the_caller() {
+        // The stop comes while a tool runs: the turn ends once it returns.
+        let server = mock(vec![
+            reply(10, vec![tool_use(0, "t1", "slow", &[])], "tool_use", 2),
+            reply(10, vec![text(0, &["Back."])], "end_turn", 2),
+        ]);
+        let (mut engine, calls) = engine(&server.url);
+        let (sender, receiver) = mpsc::channel();
+        engine.send(UserMessage::text("hi"), sender).unwrap();
+        let started = Instant::now();
+        while calls.lock().unwrap().is_empty() && started.elapsed() < Duration::from_secs(10) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        engine.stop();
+        let asked = Instant::now();
+        let (next, replies) = mpsc::channel();
+        engine.send(UserMessage::text("still there?"), next).unwrap();
+        assert!(asked.elapsed() < Duration::from_millis(200), "the caller waited {:?}", asked.elapsed());
+        let ended = receiver.recv_timeout(Duration::from_secs(10)).expect("the stopped turn ends");
+        assert!(receiver.iter().chain([ended]).any(|event| matches!(event, Event::Done { .. })));
+        let event = replies.recv_timeout(Duration::from_secs(10)).expect("the next turn runs");
+        assert_eq!(event, Event::Text { delta: "Back.".into() });
     }
 
     #[test]
