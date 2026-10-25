@@ -1,0 +1,19 @@
+// The box of the fit tests' circuit: a floor 4 mm thick, four walls, and
+// a shelf the motor hangs under, its shaft through a cutout; standoffs
+// under the driver board. The back wall has no opening for the XIAO's
+// USB-C.
+//
+// @circuit winder.c2fc
+
+$fn = 48;
+
+difference() {
+    union() {
+        translate([-55, -35, 0]) cube([100, 74, 4]);
+        for (x = [-55, 42]) translate([x, -35, 0]) cube([3, 74, 45]);
+        for (y = [-35, 36]) translate([-55, y, 0]) cube([100, 3, 45]);
+        translate([0, -32, 30]) cube([42, 28, 3]);
+    }
+    cutout_for("motor", "shaft", clearance = 1);
+}
+standoffs_for("driver", height = 5, screw = "M3");

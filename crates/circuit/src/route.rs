@@ -16,35 +16,48 @@ pub fn paths(circuit: &Circuit) -> Vec<Vec<[f64; 3]>> {
 }
 
 /// The curve of wire `index`: a cubic Bézier leaving each pin along its
-/// direction. Wires that share a pin, or run between the same two pins,
-/// leave it further out and bow to either side, so that each stays apart.
+/// direction, through the wire's `via` points when it has some (each
+/// stretch between two of them a Bézier too, turning smoothly at each
+/// point as a Catmull-Rom spline does). Wires that share a pin, or run
+/// between the same two pins, leave it further out and bow to either side,
+/// so that each stays apart.
 pub fn path(circuit: &Circuit, index: usize) -> Vec<[f64; 3]> {
     let wire = &circuit.wires[index];
     let (a, b) = (circuit.place(wire.from), circuit.place(wire.to));
     let chord = sub(b.position, a.position);
-    let distance = length(chord);
     let (rank_a, count_a) = rank(circuit, index, wire.from);
     let (rank_b, count_b) = rank(circuit, index, wire.to);
-    let lead = (distance * 0.4).clamp(3.0, 30.0);
-    let handle_a = lead + rank_a as f64 * SPREAD;
-    let handle_b = lead + rank_b as f64 * SPREAD;
+    let stops: Vec<[f64; 3]> =
+        std::iter::once(a.position).chain(wire.via.iter().copied()).chain(std::iter::once(b.position)).collect();
+    let last = stops.len() - 2;
+    // How far the curve holds a pin's direction, from the length of the
+    // stretch it leaves the pin by: the whole chord without `via`.
+    let lead = |from: [f64; 3], to: [f64; 3]| (length(sub(to, from)) * 0.4).clamp(3.0, 30.0);
+    let handle_a = lead(stops[0], stops[1]) + rank_a as f64 * SPREAD;
+    let handle_b = lead(stops[last], stops[last + 1]) + rank_b as f64 * SPREAD;
     // Sideways, across the chord and the way the wire leaves.
     let side = normalize(cross(a.direction, chord))
         .or_else(|| normalize(cross([0.0, 0.0, 1.0], chord)))
         .or_else(|| normalize(cross([1.0, 0.0, 0.0], a.direction)))
         .unwrap_or([1.0, 0.0, 0.0]);
     let fan = |rank: usize, count: usize| (rank as f64 - (count as f64 - 1.0) / 2.0) * SPREAD;
-    let c1 = add(add(a.position, scale(a.direction, handle_a)), scale(side, fan(rank_a, count_a)));
-    let c2 = add(add(b.position, scale(b.direction, handle_b)), scale(side, fan(rank_b, count_b)));
-    (0..=SEGMENTS)
-        .map(|i| {
+    let leave = add(add(a.position, scale(a.direction, handle_a)), scale(side, fan(rank_a, count_a)));
+    let arrive = add(add(b.position, scale(b.direction, handle_b)), scale(side, fan(rank_b, count_b)));
+    let mut points = vec![a.position];
+    for k in 0..=last {
+        // At a via point, the curve runs parallel to the line from the
+        // stop before it to the stop after it.
+        let c1 = if k == 0 { leave } else { add(stops[k], scale(sub(stops[k + 1], stops[k - 1]), 1.0 / 6.0)) };
+        let c2 = if k == last { arrive } else { sub(stops[k + 1], scale(sub(stops[k + 2], stops[k]), 1.0 / 6.0)) };
+        let p = [stops[k], c1, c2, stops[k + 1]];
+        points.extend((1..=SEGMENTS).map(|i| {
             let t = i as f64 / SEGMENTS as f64;
             let u = 1.0 - t;
             let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
-            let p = [a.position, c1, c2, b.position];
-            std::array::from_fn(|k| (0..4).map(|j| w[j] * p[j][k]).sum())
-        })
-        .collect()
+            std::array::from_fn(|c| (0..4).map(|j| w[j] * p[j][c]).sum::<f64>())
+        }));
+    }
+    points
 }
 
 /// The place of wire `index` among the wires at `end`, and how many there

@@ -1,1 +1,3 @@
-grogu.c2fc: 8 parts, 23 wires: no errors
+WARNING: wire 3 (cap.+ -> amp.VIN) runs into the enclosure at [-21.6, 25.5, -1.8], through a face facing -z: route it around with `via`, or carve it a channel_for(3)
+WARNING: wire 4 (cap.- -> amp.GND) runs into the enclosure at [-18.2, 25.5, -1.7], through a face facing -z: route it around with `via`, or carve it a channel_for(4)
+grogu.c2fc: 8 parts, 23 wires: no errors, 2 warnings

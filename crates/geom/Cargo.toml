@@ -8,6 +8,9 @@ license.workspace = true
 
 [dependencies]
 c2f-eval.workspace = true
+# The parts of a circuit and their annotations, for how they fit.
+c2f-circuit.workspace = true
+c2f-lang.workspace = true
 manifold-rust = "0.18"
 # Already used by manifold-rust: even-odd unions, and text() unites glyphs
 # on Clipper's integer grid.
@@ -18,6 +21,3 @@ ttf-parser = "0.25"
 rustybuzz = "0.20"
 # The glTF export's JSON part.
 serde_json = "1"
-
-[dev-dependencies]
-c2f-lang.workspace = true

@@ -15,6 +15,13 @@
 // Annotations are plain numbers: the solder point stays in its corner
 // whatever the size, at the default sheet's top.
 
+// @description Copper plate for a capacitive touch pad, wired to a touch pin
+// @description of the ESP32-S3 and glued under a thin shell.
+// @spec size: 10 to 50 mm square (20 mm by default), 0.3 mm thick
+// @spec material: copper sheet, or copper tape on card
+// @spec wiring: one wire to a touch GPIO, kept short
+// @source https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/cap_touch_sens.html touch sensor guide (Espressif)
+
 /* [Size] */
 // Side of the square.
 size = 20; // [10:50]

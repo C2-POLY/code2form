@@ -35,6 +35,34 @@ cube([20, 10, 1.6]); // @port usb [0, 5, 1] -x [8, 3]
 }
 
 #[test]
+fn pins_prints_the_sheet_and_check_reports_its_errors() {
+    let src = "\
+// @description A breakout board
+// @description for a light sensor.
+// @spec supply: 1.8 to 3.6 V
+// @source https://example.com/sensor datasheet
+// @pin VIN [1, 1, 1.6] power_in 3.6V
+cube([20, 10, 1.6]);
+";
+    let output = c2f("pins", "sheet", src);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "\
+1: @description A breakout board for a light sensor.
+3: @spec supply: 1.8 to 3.6 V
+4: @source https://example.com/sensor datasheet
+5: @pin VIN [1, 1, 1.6] up power_in 3.6V
+"
+    );
+    let output = c2f("check", "bad-sheet", "cube(1);\n// @spec supply 5 V\n// @source example.com\n");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("error: expected `key: value`") && stderr.contains(":2:4"), "{stderr}");
+    assert!(stderr.contains("error: a source is a web address") && stderr.contains(":3:12"), "{stderr}");
+}
+
+#[test]
 fn badly_written_annotations_fail_pins_and_check() {
     let src = "cube(1);\n// @pin A [0, 0, 0]\n// @pin A [1, 0, 0]\n";
     for command in ["pins", "check"] {

@@ -16,6 +16,16 @@
 // apart across the width), which not every copy has: check yours before
 // printing screw holes.
 
+// @description Small brushed DC motor, size 130 (Mabuchi FA-130 and its many
+// @description copies): the motor of toys and small robots, run from a few
+// @description volts.
+// @spec motor: brushed DC, size 130
+// @spec voltage: up to 6 V as annotated; Mabuchi's FA-130RA is rated 1.5 to 3 V, check your copy
+// @spec size: 20.1 x 15.1 x 25.1 mm without its boss
+// @spec shaft: 2 mm across
+// @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
+// @source https://www.mabuchi-motor.com Mabuchi Motor (the FA-130RA product page and drawing)
+
 /* [Build] */
 // Length of shaft out of the boss.
 shaft = 8; // [4:0.5:20]

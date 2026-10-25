@@ -18,6 +18,18 @@
 // Annotations are plain numbers. The board sits 0.04 mm up, on its pads
 // and the print underneath.
 
+// @description Mono class-D audio amplifier on a small breakout board: takes
+// @description I2S digital audio and drives a 4 to 8 ohm speaker directly, from
+// @description a 2.5 to 5.5 V supply.
+// @spec amplifier: Maxim (Analog Devices) MAX98357A, class D, mono
+// @spec input: I2S, 8 to 96 kHz sample rates, no master clock needed
+// @spec output: 3.2 W into 4 ohm at 5 V (10% THD)
+// @spec supply: 2.5 to 5.5 V (VIN)
+// @spec gain: 9 dB with GAIN unconnected; 3, 6, 12 or 15 dB as GAIN is wired
+// @spec size: 18 x 19 mm
+// @source https://www.analog.com/en/products/max98357a.html product page
+// @source https://www.analog.com/media/en/technical-documentation/data-sheets/MAX98357A-MAX98357B.pdf datasheet
+
 use <lib/pin_header.c2f>
 
 /* [Build] */

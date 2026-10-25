@@ -131,7 +131,7 @@ they are. Written in Rust, it renders as you type.
   from a template.
 - **Electronics library**: annotated parts in `library/electronics`
   (XIAO ESP32-S3, ESP32-S3-DevKitC-1, DRV8833, MAX98357A, INMP441,
-  capacitors, a speaker, a DC motor, a touch plate); see
+  a NeoPixel ring, capacitors, a speaker, a DC motor, a touch plate); see
   `library/README.md`.
 - **Enclosures**: a `.c2f` file that names its circuit
   (`// @circuit grogu.c2fc`) gets `standoffs_for()`, `holes_for()`,
@@ -141,14 +141,21 @@ they are. Written in Rust, it renders as you type.
   glTF, an OBJ, a STEP, the parts' JSON, an SVG or a DXF (or writes them,
   and a URDF, with `-o file`), and takes `-D name=value`, `-p presets.json`
   and `-P preset`; `c2f pins` prints a part's annotations, and `c2f circuit`
-  checks a circuit, prints its wiring list and bill of materials, and
-  exports its assembled parts (see the
+  checks a circuit, prints its wiring list and bill of materials, how
+  its parts fit in their enclosure, and exports its assembled parts (see the
   [guide](docs/electronics.md#6-from-the-command-line)).
 - **AI agents**: `c2f mcp` is a Model Context Protocol server, so that an
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window; and describes a
   circuit from the library's parts, has it checked and looks at it with
   its wires.
+- **Sheet of views**: one PNG of a model from the diagonal, the front,
+  the right and the top at one scale, each titled, with its size in
+  millimeters (width × depth × height) and a scale bar, and on request a
+  cut through its middle that shows the inside of a hollow part: to
+  approve a design at a glance without opening the app. The MCP `image`
+  tool draws it with `view` `sheet`, `c2f png --view sheet [--section]`
+  writes it, and so does View Sheet… in the app's Export menu.
 
 ## AI agents (MCP)
 
@@ -169,9 +176,16 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 |---|---|
 | `render` | The error that stops the model, with its file, line and column; the echo output and warnings; whether it is 3D or 2D, its triangles, volume (area in 2D) and bounding box |
 | `parameters` | The customizer parameters: name, group, description, default and widget |
-| `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report |
+| `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report; or with `view` `sheet` the sheet of views: diagonal, front, right and top at one scale with the size in millimeters and a scale bar, and with `section` the model cut through its middle |
+| `electrify` | Makes an approved design (`path`) ready for its electronics: its circuit file beside it, `// @circuit`, its drawing moved unchanged into `design()`, and empty `electronics_cuts()` and `electronics_mounts()`; reports the volume before and after |
 | `section` | Where a plane across `axis` (x, y or z) at `at` cuts the solid: its outlines at their real size, with area and bounds. To measure a mesh before writing it again as a design: a cut through the axis of a turned part is its profile |
 | `export` | Writes a solid as STL, 3MF, glTF (`.glb`, with `scale` in meters per unit), OBJ (and its `.mtl`), STEP, URDF (and its meshes, with `density`) or its parts as JSON, a 2D model as SVG or DXF, or a 3D model's outline seen from `view` as DXF, to `output`, in the `format` its extension gives |
+
+The server also offers two prompts that lead an agent from an idea to a
+printed object with its electronics: `design_object` (the model first,
+until you approve it) then `add_electronics` (see the
+[guide](docs/electronics.md#from-an-idea-to-a-build), and
+[a night light](docs/idea-to-build.md) made that way, step by step).
 
 For electronics, the agent finds parts and describes a circuit (`.c2fc`).
 The circuit tools take the circuit's text as `code` (its part files
@@ -183,9 +197,10 @@ resolving from `working_dir`, then the library folders) or a file as
 | `library_parts` | The parts in the `electronics/` folders of the library paths: the name a circuit gives as `part`, the file, and the file's first comment line |
 | `part_pins` | A part's pins (name, label, type, voltage, reserved, position, direction), mount holes and ports, and its badly written annotations, from `code` or `path` (as is, from `working_dir`, or from the library) |
 | `check_circuit` | Whether the circuit is fit to solder (`ok`): its errors and warnings with their file, line and column, from reading it, evaluating its parts and checking its wiring |
-| `circuit_image` | A PNG picture of the circuit, its parts placed and its wires as tubes in their colors, from `view`, `width` by `height` pixels; `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others |
+| `circuit_image` | A PNG picture of the circuit, its parts placed and its wires as tubes in their colors, inside its enclosure drawn see-through (unless `enclosure` is false), from `view`, `width` by `height` pixels, or its sheet of views (`view` `sheet`, with `section` to cut it open); `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others |
 | `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
 | `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
+| `fit` | How each part fits in the enclosure: its least clearance, its gaps to the enclosure and the nearest part with where, the ports no cutout opens and the mount holes no standoff holds, and the wires that run into the enclosure; `clearance` sets the room wanted (0.5 mm) |
 
 For example, ask Claude Code: "With the Code2Form tools, build a
 `robot.c2fc` circuit for a XIAO ESP32-S3 that drives a DC motor through

@@ -1,0 +1,122 @@
+// A night light: a round base that holds the electronics, a top that
+// closes it, and a dome that spreads the light. A touch on the ring
+// marked at the front of the top switches it on and off. Three printed
+// pieces, each on the bed as it is drawn for printing: the base and
+// the top in any color, the dome in white or natural PLA, thin enough to
+// glow.
+// @circuit nightlight.c2fc
+
+/* [Base] */
+// Diameter of the base.
+base_d = 80; // [60:120]
+// Height of the base with its top.
+base_h = 30; // [24:50]
+// Thickness of the base's wall and floor.
+wall = 2; // [1.2:0.2:3]
+
+/* [Top] */
+// Thickness of the top, which a touch reaches through.
+top = 1.6; // [1:0.2:3]
+// Diameter of the ring that marks where to touch.
+touch_d = 12; // [8:16]
+// Its distance from the center, towards the front (-y).
+touch_at = 30; // [26:34]
+
+/* [Dome] */
+// Diameter of the dome, and of the opening it closes.
+dome_d = 46; // [30:60]
+// Height of the dome above the top.
+dome_h = 26; // [10:40]
+// Thickness of the dome's shell: thinner lets more light through.
+shell = 1.2; // [0.8:0.2:2]
+
+/* [Fit] */
+// Room between a lip and the opening it presses into.
+fit = 0.2; // [0:0.05:0.5]
+
+/* [Look] */
+// The pieces side by side, for printing (else assembled).
+for_print = false;
+base_color = "SlateGray";
+dome_color = "WhiteSmoke";
+
+/* [Hidden] */
+$fn = 96;
+lip = 3;
+lip_wall = 1.2;
+
+if (for_print) {
+    part("Base") difference() { union() { color(base_color) base(); electronics_mounts(); } electronics_cuts(); }
+    translate([base_d + 10, 0, top]) rotate([180, 0, 0]) part("Top") color(base_color) top();
+    // The dome on its lip, its rim just over it.
+    translate([0, base_d / 2 + dome_d / 2 + 10, top + lip]) part("Dome") color(dome_color) dome();
+} else {
+    part("Base") difference() { union() { color(base_color) base(); electronics_mounts(); } electronics_cuts(); }
+    translate([0, 0, base_h - top]) part("Top") color(base_color) top();
+    translate([0, 0, base_h]) part("Dome") color(dome_color) dome();
+}
+
+// The base: a cup, open on top.
+module base() {
+    difference() {
+        cylinder(d = base_d, h = base_h - top);
+        translate([0, 0, wall]) cylinder(d = base_d - 2 * wall, h = base_h);
+    }
+}
+
+// The top: a disc with the dome's opening, a lip under it that presses
+// into the base, and the touch ring sunk 0.4 mm into it.
+module top() {
+    inner = base_d - 2 * wall - 2 * fit;
+    difference() {
+        union() {
+            cylinder(d = base_d, h = top);
+            translate([0, 0, -lip]) tube(inner, inner - 2 * lip_wall, lip);
+        }
+        translate([0, 0, -1]) cylinder(d = dome_d, h = top + 2);
+        translate([0, -touch_at, top - 0.4]) tube(touch_d, touch_d - 1.6, 1);
+    }
+}
+
+// The dome: a half-ellipsoid shell on a lip that presses into the top's
+// opening, its rim on the top.
+module dome() {
+    outer = dome_d - 2 * fit;
+    difference() {
+        union() {
+            scale([1, 1, dome_h / (dome_d / 2)]) difference() {
+                sphere(d = dome_d);
+                translate([0, 0, -dome_d]) cube(2 * dome_d, center = true);
+            }
+            translate([0, 0, -top - lip]) cylinder(d = outer, h = top + lip);
+        }
+        scale([1, 1, (dome_h - shell) / (dome_d / 2 - shell)]) sphere(d = dome_d - 2 * shell);
+        translate([0, 0, -top - lip - 1]) cylinder(d = outer - 2 * lip_wall, h = top + lip + 1);
+    }
+}
+
+// A tube `h` high from z = 0, its diameters `outer` and `inner`.
+module tube(outer, inner, h) {
+    difference() {
+        cylinder(d = outer, h = h);
+        translate([0, 0, -1]) cylinder(d = inner, h = h + 2);
+    }
+}
+
+// The electronics of part("Base"), in the design's coordinates (the
+// piece's, assembled): see nightlight.c2fc for the parts and their wires.
+
+// What the circuit's parts need from the design, subtracted: the opening
+// for the XIAO's USB-C through the back wall.
+module electronics_cuts() {
+    cutout_for("xiao", "usb_c", clearance = 0.5);
+}
+
+// What they need added: three posts from the floor that hold the ring
+// 1 mm under the top, clear of its pads (turned to +y) and of the XIAO,
+// up to its lowest point: the pads' plane, 0.02 mm under the board.
+module electronics_mounts() {
+    ring_bottom = base_h - top - 1 - 3.6 - 0.02;
+    color(base_color) for (a = [30, 150, 270])
+        rotate(a) translate([13, 0, wall - 0.01]) cylinder(d = 2.4, h = ring_bottom - wall + 0.01, $fn = 24);
+}

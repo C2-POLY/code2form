@@ -1,6 +1,7 @@
 //! `c2f circuit`: reads a `.c2fc` circuit and prints what building it
 //! takes: its problems (its parts' errors and its wiring's), its wiring list in the order the wires are laid,
-//! its bill of materials, or its parts assembled as one STL or 3MF.
+//! its bill of materials, how its parts fit in their enclosure, or its
+//! parts assembled as one STL or 3MF.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -9,26 +10,28 @@ use std::process::ExitCode;
 use c2f_circuit::check::{self, Severity};
 use c2f_circuit::{Circuit, Error, Instance, route};
 use c2f_eval::{Node, NodeKind};
+use c2f_geom::{Crossing, Model, PartFit};
 use c2f_lang::Diagnostic;
 
 use crate::Export;
 
-const COMMANDS: [&str; 5] = ["check", "wires", "bom", "stl", "3mf"];
+const COMMANDS: [&str; 6] = ["check", "wires", "bom", "fit", "stl", "3mf"];
 
 /// What `c2f circuit wires` adds to each wire's routed length by default,
 /// in millimeters: two stripped ends of 5 mm, as the app does.
 pub const DEFAULT_MARGIN: f64 = 10.0;
 
-/// `c2f circuit <command> [--csv] [--margin <mm>] <file.c2fc>`.
+/// `c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>`.
 pub fn run(args: &[String]) -> ExitCode {
     let csv = args.iter().any(|arg| arg == "--csv");
-    let mut margin = None;
+    let (mut margin, mut clearance) = (None, None);
     let mut rest: Vec<&str> = Vec::new();
     let mut args_left = args.iter().map(String::as_str);
     while let Some(arg) = args_left.next() {
-        let value = match arg.strip_prefix("--margin") {
-            Some("") => args_left.next(),
-            Some(inline) if inline.starts_with('=') => Some(&inline[1..]),
+        let option = ["--margin", "--clearance"].into_iter().find_map(|option| Some((option, arg.strip_prefix(option)?)));
+        let (option, value) = match option {
+            Some((option, "")) => (option, args_left.next()),
+            Some((option, inline)) if inline.starts_with('=') => (option, Some(&inline[1..])),
             _ => {
                 if arg != "--csv" {
                     rest.push(arg);
@@ -37,15 +40,25 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         };
         match value.and_then(|v| v.parse::<f64>().ok()).filter(|mm| mm.is_finite() && *mm >= 0.0) {
-            Some(mm) => margin = Some(mm),
+            Some(mm) if option == "--margin" => margin = Some(mm),
+            // Gaps are measured up to SEARCH: a larger clearance could not be told.
+            Some(mm) if mm <= c2f_geom::SEARCH => clearance = Some(mm),
+            Some(_) => {
+                eprintln!("error: --clearance takes a length in millimeters, from 0 to {}", c2f_geom::SEARCH);
+                return ExitCode::from(2);
+            }
             None => {
-                eprintln!("error: --margin takes a length in millimeters, 0 or more");
+                eprintln!("error: {option} takes a length in millimeters, 0 or more");
                 return ExitCode::from(2);
             }
         }
     }
     if margin.is_some() && rest.first() != Some(&"wires") {
         eprintln!("error: --margin goes with `c2f circuit wires`");
+        return ExitCode::from(2);
+    }
+    if clearance.is_some() && rest.first() != Some(&"fit") {
+        eprintln!("error: --clearance goes with `c2f circuit fit`");
         return ExitCode::from(2);
     }
     let [command, file] = rest[..] else {
@@ -86,6 +99,7 @@ pub fn run(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         "check" => check(&circuit, &src, path),
+        "fit" => fit_command(&circuit, &src, path, clearance.unwrap_or(c2f_geom::CLEARANCE)),
         // An export format.
         _ => {
             let assembly = assemble(&circuit, &src, path);
@@ -138,13 +152,13 @@ fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
         eprint!("{}", finding.render(src, path));
     }
     // Collisions need every part: a part that failed is reported already.
-    let collisions = if assembly.errors.is_empty() { collisions(circuit, &assembly) } else { Vec::new() };
-    for collision in &collisions {
-        eprintln!("WARNING: {collision}");
+    let placed = if assembly.errors.is_empty() { placed_warnings(circuit, &assembly) } else { Vec::new() };
+    for warning in &placed {
+        eprintln!("WARNING: {warning}");
     }
     let count = |severity| findings.iter().filter(|f| f.severity == severity).count();
     let errors = assembly.errors.len() + count(Severity::Error);
-    let warnings = count(Severity::Warning) + collisions.len();
+    let warnings = count(Severity::Warning) + placed.len();
     let mut summary = format!("{}: {}, {}: ", path.display(), plural(circuit.parts.len(), "part"), plural(circuit.wires.len(), "wire"));
     summary += &match errors {
         0 => "no errors".to_string(),
@@ -161,39 +175,136 @@ fn check(circuit: &Circuit, src: &str, path: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Where the parts run into each other or into the enclosure, one line
-/// each: `` `touch` runs into the enclosure by 120.00 mm³ ``.
-fn collisions(circuit: &Circuit, assembly: &Assembly) -> Vec<String> {
-    const IDENTITY: c2f_geom::Placement =
-        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
-    // Each part's nodes are placed already.
-    let mut models: Vec<c2f_geom::Model> =
-        assembly.nodes.iter().map(|node| c2f_geom::render(std::slice::from_ref(node)).model).collect();
-    if let Some(enclosure) = &circuit.enclosure {
-        let library_paths = c2f_eval::default_library_paths();
-        let program = c2f_eval::read_source(enclosure)
-            .ok()
-            .and_then(|src| c2f_eval::Program::load(&src, enclosure, &library_paths).ok());
-        match program {
-            Some(program) => {
-                let output = c2f_eval::evaluate(&program);
-                // `%` copies of the parts, there to be seen through, are
-                // not the enclosure: building them would only cost time.
-                let nodes: Vec<_> = output.nodes.into_iter().filter(|node| !node.background).collect();
-                models.push(c2f_geom::render_in(&nodes, enclosure.parent().unwrap_or(Path::new(""))).model);
-            }
-            None => return vec![format!("collisions: cannot load the enclosure {}", enclosure.display())],
-        }
-    }
-    let solids: Vec<_> = models.iter().map(|model| (model, IDENTITY)).collect();
+const IDENTITY: c2f_geom::Placement =
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+/// The solids of an assembly's parts, placed already, and the circuit's
+/// enclosure if it names one; the error when the enclosure does not load.
+fn solids(circuit: &Circuit, assembly: &Assembly) -> Result<(Vec<Model>, Option<Model>), String> {
+    let models = assembly.nodes.iter().map(|node| c2f_geom::render(std::slice::from_ref(node)).model).collect();
+    Ok((models, enclosure(circuit)?.map(|rendered| rendered.model)))
+}
+
+/// The circuit's enclosure rendered, if it names one; the error when it
+/// does not load.
+pub fn enclosure(circuit: &Circuit) -> Result<Option<c2f_geom::Rendered>, String> {
+    let Some(enclosure) = &circuit.enclosure else { return Ok(None) };
+    let library_paths = c2f_eval::default_library_paths();
+    let program = c2f_eval::read_source(enclosure)
+        .ok()
+        .and_then(|src| c2f_eval::Program::load(&src, enclosure, &library_paths).ok())
+        .ok_or_else(|| format!("cannot load the enclosure {}", enclosure.display()))?;
+    let output = c2f_eval::evaluate(&program);
+    // `%` copies of the parts, there to be seen through, are not the
+    // enclosure: building them would only cost time.
+    let nodes: Vec<_> = output.nodes.into_iter().filter(|node| !node.background).collect();
+    Ok(Some(c2f_geom::render_in(&nodes, enclosure.parent().unwrap_or(Path::new("")))))
+}
+
+/// Where the parts run into each other or into the enclosure, and where
+/// wires run into the enclosure, one line each: `` collision: `touch`
+/// runs into the enclosure by 120.00 mm³ ``.
+pub fn placed_warnings(circuit: &Circuit, assembly: &Assembly) -> Vec<String> {
+    let (models, enclosure) = match solids(circuit, assembly) {
+        Ok(solids) => solids,
+        Err(err) => return vec![format!("collisions: {err}")],
+    };
+    let mut solids: Vec<_> = models.iter().map(|model| (model, IDENTITY)).collect();
+    solids.extend(enclosure.iter().map(|model| (model, IDENTITY)));
     let name = |i: usize| format!("`{}`", circuit.parts[i].name);
-    c2f_geom::collisions(&solids)
+    let mut warnings: Vec<String> = c2f_geom::collisions(&solids)
         .into_iter()
         .map(|(a, b, volume)| match b < circuit.parts.len() {
             true => format!("collision: {} and {} overlap by {volume:.2} mm³", name(a), name(b)),
             false => format!("collision: {} runs into the enclosure by {volume:.2} mm³", name(a)),
         })
-        .collect()
+        .collect();
+    if let Some(enclosure) = &enclosure {
+        warnings.extend(c2f_geom::crossings(circuit, enclosure).iter().map(|crossing| crossing.message(circuit)));
+    }
+    warnings
+}
+
+/// How the parts of a circuit fit in its enclosure.
+pub struct Fitted {
+    /// In the order of the circuit's parts.
+    pub parts: Vec<PartFit>,
+    /// The wires that run into the enclosure.
+    pub crossings: Vec<Crossing>,
+    /// Whether the circuit has an enclosure.
+    pub enclosure: bool,
+}
+
+impl Fitted {
+    /// Every warning, part after part, then the wires'.
+    pub fn warnings(&self, circuit: &Circuit, clearance: f64) -> Vec<String> {
+        let parts = self.parts.iter().enumerate().flat_map(|(i, fit)| fit.warnings(circuit, i, clearance, true));
+        parts.chain(self.crossings.iter().map(|crossing| crossing.message(circuit))).collect()
+    }
+}
+
+/// How the parts of `circuit`, evaluated in `assembly` without errors,
+/// fit; the error when the enclosure does not load.
+pub fn fit(circuit: &Circuit, assembly: &Assembly) -> Result<Fitted, String> {
+    let (models, enclosure) = solids(circuit, assembly)?;
+    let parts: Vec<_> = models.iter().map(|model| (model, IDENTITY)).collect();
+    Ok(Fitted {
+        parts: c2f_geom::fit(circuit, &parts, enclosure.as_ref()),
+        crossings: enclosure.as_ref().map_or_else(Vec::new, |enclosure| c2f_geom::crossings(circuit, enclosure)),
+        enclosure: enclosure.is_some(),
+    })
+}
+
+/// Prints a row per part (its least room, to the enclosure and to the
+/// nearest part), then the warnings and a summary. Only a part or an
+/// enclosure that does not load fails: a tight part is a warning.
+fn fit_command(circuit: &Circuit, src: &str, path: &Path, clearance: f64) -> ExitCode {
+    let assembly = assemble(circuit, src, path);
+    for warning in &assembly.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    if !assembly.errors.is_empty() {
+        for error in &assembly.errors {
+            eprint!("{}", error.render());
+        }
+        return ExitCode::FAILURE;
+    }
+    let fitted = match fit(circuit, &assembly) {
+        Ok(fitted) => fitted,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let far = format!("over {} mm", c2f_geom::SEARCH);
+    // `any`: whether there is something to measure to.
+    let room = |gap: Option<&c2f_geom::Gap>, any: bool| match gap {
+        None if any => far.clone(),
+        None => "-".to_string(),
+        Some(gap) if gap.overlap > c2f_geom::TOUCHING => format!("overlaps by {:.2} mm³", gap.overlap),
+        Some(gap) => format!("{:.2} mm", gap.distance),
+    };
+    let mut rows = vec![["part", "clearance", "enclosure", "rests on", "nearest part"].map(String::from).to_vec()];
+    for (instance, part) in circuit.parts.iter().zip(&fitted.parts) {
+        let least = part.clearance().map_or_else(|| far.clone(), |mm| format!("{mm:.2} mm"));
+        let nearest = match part.parts.first() {
+            Some((other, gap)) => format!("{} {}", circuit.parts[*other].name, room(Some(gap), true)),
+            None => room(None, circuit.parts.len() > 1),
+        };
+        let enclosure = room(part.enclosure.as_ref(), fitted.enclosure);
+        rows.push(vec![instance.name.clone(), least, enclosure, room(part.rests.as_ref(), fitted.enclosure), nearest]);
+    }
+    print!("{}", text_table(&rows, &[]));
+    let warnings = fitted.warnings(circuit, clearance);
+    for warning in &warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    let summary = match warnings.len() {
+        0 => format!("everything fits with {clearance} mm of clearance"),
+        n => plural(n, "warning"),
+    };
+    println!("{}: {}, {summary}", path.display(), plural(circuit.parts.len(), "part"));
+    ExitCode::SUCCESS
 }
 
 pub fn plural(n: usize, word: &str) -> String {

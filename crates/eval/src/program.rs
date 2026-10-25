@@ -300,3 +300,10 @@ pub fn default_library_paths() -> Vec<PathBuf> {
 
 /// The user library folder, under the home folder.
 pub const USER_LIBRARIES: &str = "Documents/Code2Form/libraries";
+
+/// The folder of the user's own electronics parts, in the user library:
+/// where the app's "New part…" and the MCP server's `save_part` write
+/// them, and the catalogue finds them. `None` without a home folder.
+pub fn user_parts_folder() -> Option<PathBuf> {
+    Some(Path::new(&std::env::var_os("HOME")?).join(USER_LIBRARIES).join("electronics"))
+}

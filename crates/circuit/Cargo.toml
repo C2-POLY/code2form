@@ -16,5 +16,7 @@ toml = "1"
 c2f-eval.workspace = true
 # Renders the library's parts, for their bounds.
 c2f-geom.workspace = true
+# Casts rays at a solid, to see that a wire clears an enclosure.
+manifold-rust = "0.18"
 # Reads the JSON Schema of the format.
 serde_json = "1"

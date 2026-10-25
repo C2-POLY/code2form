@@ -1,0 +1,55 @@
+# The electronics of nightlight.c2f: a XIAO ESP32-S3 lights a ring of
+# twelve NeoPixels under the dome, and reads a copper plate glued under
+# the top as a touch switch. USB-C powers it all through the back wall.
+#
+# The ring takes 5 V from USB; its data comes at 3.3 V from the XIAO,
+# over a wire a few centimeters long. Adafruit asks for 5 V data: if the
+# ring flickers, put a 74AHCT125 level shifter on the data wire.
+
+version = 1
+
+enclosure = "nightlight.c2f"
+
+# Flat on the base's floor, its USB-C through the back wall (+y).
+[parts.xiao]
+part = "electronics/xiao_esp32s3.c2f"
+at = [-8.9, 14.5, 2]
+
+# Face up under the dome, 1 mm below the top, on three posts; its pads
+# turned to the XIAO.
+[parts.ring]
+part = "electronics/neopixel_ring_12.c2f"
+at = [0, 0, 23.8]
+rotate = [0, 0, 180]
+
+# Copper side up, glued under the top's touch ring; its solder point
+# faces down.
+[parts.touch]
+part = "electronics/touch_plate.c2f"
+at = [-5, -25, 28.4]
+rotate = [180, 0, 0]
+params = { size = 10 }
+
+# Ground first, then 5 V, then data, as Adafruit wires a NeoPixel.
+
+[[wires]]
+from = "xiao.GND"
+to = "ring.GND"
+color = "black"
+
+[[wires]]
+from = "xiao.5V"
+to = "ring.5V"
+color = "red"
+
+[[wires]]
+from = "xiao.D3"
+to = "ring.DIN"
+color = "green"
+label = "LED data"
+
+[[wires]]
+from = "xiao.D0"
+to = "touch.PAD"
+color = "white"
+label = "touch"

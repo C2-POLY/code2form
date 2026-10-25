@@ -253,7 +253,7 @@ fn the_schema_lists_the_fields_the_reader_takes() {
     };
     assert_eq!(keys(&schema), ["enclosure", "parts", "version", "wires"]);
     assert_eq!(keys(&schema["$defs"]["part"]), ["at", "color", "params", "part", "rotate"]);
-    assert_eq!(keys(&schema["$defs"]["wire"]), ["allow", "color", "from", "label", "to"]);
+    assert_eq!(keys(&schema["$defs"]["wire"]), ["allow", "color", "from", "label", "to", "via"]);
 }
 
 #[test]
@@ -276,4 +276,38 @@ fn wires_run_from_pin_to_pin_and_stay_apart() {
     let (a, b) = (paths[gnd[0]][12], paths[gnd[1]][12]);
     let apart = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
     assert!(apart > 1.0, "{apart}");
+}
+
+#[test]
+fn a_wire_passes_through_its_via_points() {
+    let folder = Folder::new("via", &[("board.c2f", BOARD)]);
+    let parts = "[parts.a]\npart = \"board.c2f\"\n[parts.b]\npart = \"board.c2f\"\nat = [40, 0, 0]\n";
+    let wire = "[[wires]]\nfrom = \"a.B\"\nto = \"b.B\"\n";
+    let via = [[10.0, 20.0, 5.0], [30.0, 20.0, 15.0]];
+    let routed = folder.parse(&format!("{parts}{wire}via = [[10, 20, 5], [30, 20, 15]]\n")).unwrap();
+    assert_eq!(routed.wires[0].via, via);
+    let path = c2f_circuit::route::path(&routed, 0);
+    // From pin to pin, through each point in turn, leaving the pin the way
+    // it points (up).
+    assert!(close(path[0], routed.place(routed.wires[0].from).position));
+    assert!(close(*path.last().unwrap(), routed.place(routed.wires[0].to).position));
+    let at = |point: [f64; 3]| path.iter().position(|&p| close(p, point)).unwrap_or_else(|| panic!("{point:?}: {path:?}"));
+    assert!(at(via[0]) < at(via[1]));
+    assert!(path[1][2] > path[0][2]);
+    // Its length counts the detour: at least the straight lines through
+    // the points, and more than the wire without them.
+    let distance = |a: [f64; 3], b: [f64; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+    let stops = [path[0], via[0], via[1], *path.last().unwrap()];
+    let straight: f64 = stops.windows(2).map(|pair| distance(pair[0], pair[1])).sum();
+    let length = c2f_circuit::route::length_of(&path);
+    assert!(length >= straight - 1e-9, "{length} < {straight}");
+    let direct = folder.parse(&format!("{parts}{wire}")).unwrap();
+    assert!(length > c2f_circuit::route::length_of(&c2f_circuit::route::path(&direct, 0)) + 10.0);
+    // A point is three finite numbers.
+    for bad in ["[[1, 2]]", "[[1, 2, nan]]"] {
+        assert_eq!(
+            errors(folder.parse(&format!("{parts}{wire}via = {bad}\n"))),
+            ["test.c2fc:9: `via` is a list of points of three finite numbers, [[x, y, z], ...]"]
+        );
+    }
 }

@@ -98,6 +98,32 @@ up; facing up or down, `width` runs along the part's x and `height`
 along its y. The XIAO's USB-C is a sideways one:
 `// @port usb_c [8.9, 21, 2.83] +y [8.94, 3.26] "USB-C"`.
 
+### Add its sheet
+
+A part also carries its technical sheet, which the catalogue shows and
+searches (section 4) and an agent reads (section 7): what it is, its
+key figures and where they come from.
+
+```scad
+// @description Ambient light sensor on a 20 x 15 mm breakout board, read
+// @description over I2C, with two mount holes.
+// @spec supply: 1.8 to 3.6 V
+// @spec interface: I2C
+// @spec size: 20 x 15 x 1.6 mm
+// @source https://example.com/light-sensor product page
+// @source https://example.com/light-sensor.pdf datasheet
+```
+
+| Annotation | Form |
+|---|---|
+| `@description` | what the part is and does, a sentence or two; several lines make one description |
+| `@spec` | `key: value`, one figure per line: supply, current, interface, size... Each key once |
+| `@source` | a URL starting with `https://` or `http://`, then an optional label (plain or `"quoted"`) |
+
+Their text runs to the end of the line. Give only figures your sources
+state, and a `@source` for each page they come from. The parts of the
+library each have one, from their maker's product page and datasheet.
+
 ### Check what you wrote
 
 Put the annotations at the top of the file and save it as
@@ -135,7 +161,10 @@ error: unknown pin field `3.6`: expected a direction (up, down, +x, -y, [x, y, z
   |                                     ^^^
 ```
 
-`c2f check` reports the same errors with the syntax errors of the file.
+`c2f pins` prints the sheet too, `@description` joined into one line.
+`c2f check` reports the same errors with the syntax errors of the file:
+a `@spec` without its `:`, a `@source` that is not a web address, a key
+or a URL given twice.
 
 Positions and sizes are plain numbers. They do not follow the file's
 variables: if a parameter moves a pin, the annotation stays where the
@@ -150,11 +179,18 @@ modules, capacitors, a speaker, a DC motor and a touch plate (see
 
 ```console
 $ c2f pins library/electronics/dc_motor.c2f
-19: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
-20: @pin - [0, 5, 7.55] -x passive 6V
-21: @mount_hole [25.1, -6, 7.55] d=2 +x
-22: @mount_hole [25.1, 6, 7.55] d=2 +x
-23: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
+19: @description Small brushed DC motor, size 130 (Mabuchi FA-130 and its many copies): the motor of toys and small robots, run from a few volts.
+22: @spec motor: brushed DC, size 130
+23: @spec voltage: up to 6 V as annotated; Mabuchi's FA-130RA is rated 1.5 to 3 V, check your copy
+24: @spec size: 20.1 x 15.1 x 25.1 mm without its boss
+25: @spec shaft: 2 mm across
+26: @spec mount: two 2 mm holes 12 mm apart on the front face, on some copies
+27: @source https://www.mabuchi-motor.com Mabuchi Motor (the FA-130RA product page and drawing)
+33: @pin + [0, -5, 7.55] -x passive 6V "terminal marked + or red"
+34: @pin - [0, 5, 7.55] -x passive 6V
+35: @mount_hole [25.1, -6, 7.55] d=2 +x
+36: @mount_hole [25.1, 6, 7.55] d=2 +x
+37: @port shaft [25.1, 0, 7.55] +x d=6 "shaft and bearing boss"
 ```
 
 ## 2. Write a circuit
@@ -213,6 +249,7 @@ label = "I2C"
 | `from`, `to` | two pins, as `part.pin`, required |
 | `color` | the wire's color: a CSS name (`red`, `orange`, `purple`...) or `#rrggbb` |
 | `label` | what the wire carries, shown in the legend and the wiring list |
+| `via` | points the wire passes through on its way, `[[x, y, z], ...]` in the circuit's coordinates (see [Wires through the enclosure](#wires-through-the-enclosure)) |
 | `allow` | warnings accepted for the pins at its two ends: `["reserved"]`, `["two_outputs"]`, `["common_ground"]` (see [Check the wiring](#3-check-the-wiring)) |
 
 A part's file is found next to the circuit first, then in the library
@@ -348,8 +385,73 @@ allow = ["reserved"]
 
 ```console
 $ c2f circuit check examples/grogu/grogu.c2fc
-examples/grogu/grogu.c2fc: 8 parts, 23 wires: no errors
+WARNING: wire 3 (cap.+ -> amp.VIN) runs into the enclosure at [-21.6, 25.5, -1.8], through a face facing -z: route it around with `via`, or carve it a channel_for(3)
+WARNING: wire 4 (cap.- -> amp.GND) runs into the enclosure at [-18.2, 25.5, -1.7], through a face facing -z: route it around with `via`, or carve it a channel_for(4)
+examples/grogu/grogu.c2fc: 8 parts, 23 wires: no errors, 2 warnings
 ```
+
+The two warnings come from the parts and the enclosure, not from the
+wiring: the capacitor's leads leave it downwards, through the plate.
+With an `enclosure`, the check also warns of a part that runs into
+another or into the enclosure (by its volume, in mm³), and of a wire
+whose curve runs into the enclosure: where its curve first is in the
+material, and the way the face it meets faces (`-z`, or a vector for a
+slanted wall). The wire's center line is checked, not its thickness.
+
+### Does it fit?
+
+`c2f circuit fit` measures the room each part has in the enclosure, in
+millimeters, and warns of what will not go together. On
+`crates/app/tests/fit/winder.c2fc`, a watch winder's XIAO, ULN2003
+board and stepper motor in a box whose back wall has no opening for the
+USB-C:
+
+```console
+$ c2f circuit fit winder.c2fc
+part    clearance  enclosure  rests on  nearest part
+xiao    3.50 mm    3.50 mm    0.00 mm   motor 9.39 mm
+driver  6.00 mm    6.00 mm    0.00 mm   over 10 mm
+motor   1.00 mm    1.00 mm    0.00 mm   xiao 9.39 mm
+WARNING: no cutout_for in front of port `xiao.usb_c`: the enclosure covers it at [26.5, 36.0, 5.6]
+winder.c2fc: 3 parts, 1 warning
+```
+
+| Column | Is |
+|---|---|
+| `clearance` | the least room around the part: the smaller of `enclosure` and `nearest part` |
+| `enclosure` | the shortest distance from the part to the enclosure around it, `overlaps by` a volume when it runs into it |
+| `rests on` | the distance to what the part rests on: the enclosure beyond the face of its mount holes (its bottom when it has none) |
+| `nearest part` | the closest other part, and how far |
+
+What the part rests on does not count against its clearance: a board
+touches its standoffs, a motor its flange's wall. What it puts through
+that support, as a motor's shaft through its hole, does: its room is
+measured from 1 mm past the face it rests on. Further than 10 mm,
+there is room enough and the distance is not measured (`over 10 mm`).
+
+Warnings, which do not fail the command:
+
+| Warning | When |
+|---|---|
+| "`motor` is 0.38 mm from the enclosure at [...], under the 0.5 mm clearance" | a part comes closer than the clearance to the enclosure or to another part; "touches" at 0, "runs into" or "overlap" when they share some volume |
+| "no cutout_for in front of port `xiao.usb_c`: the enclosure covers it at [...]" | a wall is in front of most of a port's opening, within 5 mm of it |
+| "no standoff under mount hole 2 of `driver` (at [...])" | the enclosure is nowhere within 1 mm along the hole's axis, around the hole |
+| "wire 7 (driver.A -> motor.blue) runs into the enclosure at [...]" | as for `c2f circuit check` |
+
+`--clearance 1` asks for 1 mm of room instead of 0.5 mm. "At [...]" is
+where, in the circuit's coordinates, to the nearest tenth of a
+millimeter.
+
+The distances are exact for the meshes as rendered: the shortest
+distance between the triangles of the two surfaces. A round face counts
+as its facets, so set `$fn` on both sides for a tight fit: a 9 mm boss in
+a 10 mm hole, both at `$fn = 48`, has 0.998 mm of room, not 1 mm. Where
+two surfaces come closest is located to within the size of the smaller
+of the two triangles there: on a large flat face, about where. Ports and
+mount holes are probed with rays, a grid of 25 across a port's opening
+(out to 80% of the way to its edge: a grille counts as open when most of
+its rays pass) and a ring of 8 around a hole at 0.75 times its diameter,
+between a standoff's bore and its outside.
 
 The app runs the same checks each time the circuit changes, and prints
 them in the console. The line of the first error is marked in the
@@ -391,10 +493,30 @@ shows it. It follows the circuit as you type, before you save.
 
 A part that runs into the enclosure or into another part turns red, and
 the console says by how much, as "Collision: `touch` runs into the
-enclosure by 120.00 mm³". Parts that only touch are fine.
+enclosure by 120.00 mm³". Parts that only touch are fine. A part closer
+than 0.5 mm to the enclosure or to another part turns amber, and the
+console gives the warnings of [`c2f circuit fit`](#does-it-fit), with
+the wires that run into the enclosure.
 
 To look inside, turn on **Layers**: the slider cuts the parts, the
 enclosure and the wires at a height.
+
+Or turn on **Section** (the box cut open, among the view's tools): it
+cuts the enclosure alone across **X**, **Y** or **Z**, where its slider
+says, and the parts and wires stay whole inside it. The same card's
+**Opacity** slider (also under **Enclosure** in the **Views** menu)
+sets how see-through the enclosure is, from 0 to 100 % (28 % by
+default); opaque, the cut runs through its walls in red. Neither
+renders anything again. A design without a circuit gets the same
+**Section** tool, which cuts the model.
+
+The **Parts** card, at the bottom left of the view, lists each part in
+the color it shows in: a click picks it out with its wires, as a click
+on it in the view does, and a second click clears it.
+
+For a screenshot, `CODE2FORM_SCREENSHOT_SELECT=cut:z:20` cuts the view
+across z at 20 mm; add `,opacity:100` for an opaque enclosure, and a
+part's name to pick it out.
 
 ### Catalogue
 
@@ -403,8 +525,18 @@ of every part under `electronics/` in the library folders: the
 library's, the app's and your own (`~/Documents/Code2Form/libraries/electronics`),
 a part found in several listed once, from the first folder searched.
 Each row shows a picture of the part, its name, the first sentence of
-its opening comment and its number of pins; the search field filters on
-the name, that sentence and the pins' names.
+its `@description` (or of its opening comment) and its number of pins.
+
+The search field ranks the parts that answer every word typed, best
+first: a word in the name weighs more than in the description, then the
+specs, then the pins' names and labels. Case and accents do not matter,
+French and English both work, and it knows the domain's synonyms:
+`micro I2S` finds the INMP441, `driver moteur` the DRV8833,
+`haut-parleur` the speaker, `ampli` the MAX98357A.
+
+Hover a part's name to see its sheet; click it to keep the sheet open
+under its row: its description, its specs, its pins by type (power,
+ground, inputs and outputs...) and its sources as links.
 
 - **Drag a picture into the view**: the part goes where you drop it, on
   the ground (z = 0), to the nearest 0.1 mm. Dropping outside the view
@@ -517,6 +649,7 @@ standoffs and cutouts follow at the next render.
 | `standoffs_for(part, height, d, hole, screw)` | a standoff under each mount hole of the part, `height` long, along the hole's direction |
 | `holes_for(part, depth, hole, screw)` | a clearance hole at each mount hole, from 1 mm behind it, `depth` long (10 by default), to subtract |
 | `cutout_for(part, port, clearance = 0.5, depth = 10)` | the port's opening grown by `clearance`, from 1 mm behind it along the way it faces, to subtract from a wall |
+| `channel_for(wire, d = 3)` | a tube `d` across along the wire's curve, its `via` points included, to subtract so that the wire passes |
 | `circuit_part(part)` | the part itself, with its params, where the circuit places it |
 
 `screw = "M2"`, `"M2.5"` or `"M3"` sizes a standoff and its pilot hole
@@ -561,6 +694,49 @@ Without `@circuit`, or with a part or port the circuit does not have,
 the modules warn and draw nothing. The reference implementation ignores
 them as unknown modules.
 
+### Wires through the enclosure
+
+A wire is drawn as a curve from pin to pin, and `c2f circuit check`
+warns when that curve runs into the enclosure. Two ways out: route it
+around, or carve it a passage.
+
+`via` lists points the wire passes through, in order, in the circuit's
+coordinates. The curve still leaves each pin the way the pin points,
+then runs through each point, turning smoothly there. The views draw it
+so, and the wiring list's lengths count the detour. Over the left wall
+of a box:
+
+```toml
+[[wires]]
+from = "xiao.5V"
+to = "driver.VCC"
+color = "red"
+label = "5 V"
+via = [[-53.5, 0, 55]]
+```
+
+`channel_for(wire, d = 3)` makes a tube `d` across along the same curve,
+to subtract from the enclosure: a passage the wire, 1 mm thick as
+drawn, runs through without touching. `wire` is the wire's number, from
+1 in the file's order (as the check's warnings and the app's `wire:7`
+name it), or a label: every wire with that label, carved as a bundle.
+The watch winder's motor cable runs through its back plate; its frame
+file carves the five wires a passage:
+
+```scad
+// @circuit winder.c2fc
+include <watch_winder.c2f>
+difference() {
+    frame();
+    channel_for("motor cable", d = 4, $fn = 12);
+}
+```
+
+A channel is a chain of spheres, hulled two by two, 24 to a stretch of
+wire: under a file's `$fn = 64` it renders in seconds, with `$fn = 12`
+in a fraction of one. A channel follows its wire: move a part or a
+`via` point, and the channel moves at the next render.
+
 ## 6. From the command line
 
 ```sh
@@ -571,6 +747,8 @@ c2f circuit wires grogu.c2fc            # the wiring list, in the order to lay t
 c2f circuit wires --csv grogu.c2fc      # the same, as CSV
 c2f circuit bom grogu.c2fc              # the bill of materials
 c2f circuit bom --csv grogu.c2fc
+c2f circuit fit grogu.c2fc              # each part's room in the enclosure, and what does not fit
+c2f circuit fit --clearance 1 grogu.c2fc
 c2f circuit stl grogu.c2fc > grogu.stl  # the parts assembled (not the wires)
 c2f circuit 3mf grogu.c2fc > grogu.3mf
 ```
@@ -618,17 +796,117 @@ with `claude mcp add code2form -- c2f mcp` (see the README's
 
 | Tool | Does |
 |---|---|
-| `library_parts` | lists the library's electronics parts, by the name a circuit gives as `part` |
+| `library_parts` | lists the library's electronics parts, by the name a circuit gives as `part`, with their description, specs and sources; `query` ranks them as the catalogue's search does |
 | `part_pins` | a part's pins, mount holes, ports and badly written annotations, from `code` or `path` |
 | `check_circuit` | the wiring checks, with `ok` false on an error |
-| `circuit_image` | a PNG of the circuit with its wires; `net` (as `xiao.GND`) highlights one net |
+| `circuit_image` | a PNG of the circuit with its wires, in its enclosure drawn see-through (`enclosure` false leaves it out), or its sheet of views (`view` `sheet`, `section` cuts it open); `net` (as `xiao.GND`) highlights one net |
 | `circuit_wires` | the wiring list |
 | `circuit_bom` | the bill of materials |
+| `fit` | how each part fits in the enclosure, as [`c2f circuit fit`](#does-it-fit) says it; `clearance` sets the room wanted |
+| `check_part` | a part's annotations checked against its rendered shape (see below) |
+| `save_part` | writes a part into your parts folder, then checks it (see below) |
 
 The circuit tools take the circuit as `code` (its parts found from
-`working_dir`, then the library) or as a file `path`. A typical request:
+`working_dir`, then the library) or as a file `path`. `check_circuit`
+also gives, as warnings, the parts that run into each other or into the
+enclosure and the wires that run into it.
+
+`fit` answers in JSON, a part at a time: its `name`, its least
+`clearance_mm` (null over 10 mm), `tight` when it is under `clearance`
+or collides, `enclosure`, `rests_on` and `nearest` (each with
+`distance_mm`, `overlap_mm3` and `at`, the nearest with its `part`; null
+over 10 mm), its `covered_ports` and `loose_holes` with where, and its
+`warnings`. Then `wires`, those that run into the enclosure (`wire`
+from 1, `from`, `to`, `at`, `facing`), and all the `warnings`, word for
+word those of `c2f circuit fit`. A typical request:
 "With the Code2Form tools, build a `robot.c2fc` circuit for a XIAO
 ESP32-S3 that drives a DC motor through a DRV8833: look up the parts'
 pins, check the circuit until it has no errors, and show me the
 wiring." Then open `robot.c2fc` in the app and wire it in Assembly
 mode.
+
+### Create a part from its product page
+
+When the library lacks a part, an agent that can read the web writes it
+from the supplier's product page and datasheet: the board drawn as a
+module of the file's name, its pins, mount holes and ports, and its
+sheet (section 1). Code2Form does not fetch the pages itself; its tools
+check what the agent wrote and file it.
+
+- `check_part` (`code`, or a `path`) reads the annotations, renders the
+  part with its default parameters and compares the two. Errors, with
+  their line, make `ok` false: a badly written annotation, a part that
+  does not render, a pin or a mount hole outside the part's bounding box
+  (by more than 0.5 mm), two pins at the same place, a port whose
+  direction points into the part rather than out of it, a power pin
+  without its voltage. A missing `@description` or `@source` is a
+  warning. The report also gives the bounding box and how many pins,
+  holes, ports, specs and sources the part has.
+- `save_part` (`name`, `code`, `overwrite`) writes `NAME.c2f` into your
+  parts folder, `~/Documents/Code2Form/libraries/electronics`, the one
+  the catalogue's **New part...** uses: the catalogue lists it, and a
+  circuit names it `electronics/NAME.c2f`. It refuses a file that does
+  not parse, in which `check_part` finds errors, or without a `@description`
+  and at least one `@source`, and it does not replace a part unless
+  `overwrite` is true. It returns the path and the `check_part` report.
+
+A typical request: "Find the Adafruit BME280 breakout's product page and
+datasheet, write it as a Code2Form part with its pins, mount holes and
+sheet, check it until it has no errors, and save it as
+`bme280_breakout`." Then **⟳** in the catalogue lists it.
+
+### From an idea to a build
+
+The server offers two prompts, which Claude Code lists as
+`/mcp__code2form__design_object` and `/mcp__code2form__add_electronics`
+(Claude Desktop under the + button). They keep the work in order, each
+step ending on what you approve:
+
+1. **`design_object`** (a `description`, maybe `constraints` and a
+   `folder`): the agent writes a parametric design, renders it, looks
+   at it from every side, and shows it to you until you approve it. No
+   electronics yet.
+2. **`add_electronics`** (the approved `design` and its `components`,
+   as product page links or library names): the agent finds or creates
+   each part, tells you its wiring plan, then calls `electrify` on the
+   design, places the parts and wires them, checks the circuit, gives
+   the design what the parts need, and shows you the build.
+
+`electrify` makes an approved design ready for its electronics without
+rewriting it. It creates the circuit file beside the design, with the
+design as its `enclosure`, names the circuit in the design
+(`// @circuit`), and moves what the design draws, unchanged, into a
+module `design()`. Its assignments, modules and functions stay where
+they are, so it draws the same: the tool reports the volume before and
+after. Two empty modules take what the electronics need, and the design
+draws all three once:
+
+```scad
+difference() {
+    union() {
+        design();
+        electronics_mounts();   // standoffs_for(...)
+    }
+    electronics_cuts();         // cutout_for(...), holes_for(...)
+}
+```
+
+A design made of pieces (`part("Base")`, `part("Dome")`) keeps them
+apart: a piece inside that `difference()` would be merged into the
+geometry around it. So `electrify` leaves the drawing where it is and
+gives the cuts and mounts to the piece that holds the electronics, named
+with `piece` when there are several, wherever the design draws it:
+
+```scad
+part("Base") difference() { union() { base(); electronics_mounts(); } electronics_cuts(); }
+```
+
+They are written in the design's coordinates, which are the piece's
+where the design draws it assembled.
+
+In the app, a design that names its circuit has an Electronics button
+on the top bar, and a circuit with an enclosure a Part button, to go
+from one to the other.
+
+[From an idea to a night light](idea-to-build.md) follows the two
+prompts on a real example, step by step, with the pictures of each.

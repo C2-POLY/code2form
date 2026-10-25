@@ -102,6 +102,8 @@ pub enum Reply {
 enum Request {
     Render { generation: u64, source: String, path: PathBuf, values: Vec<(String, Literal)>, t: f64 },
     Export { target: PathBuf, format: Format, options: ExportOptions },
+    /// The sheet of views of the model, as PNG.
+    Sheet(PathBuf),
     Libraries(Vec<PathBuf>),
 }
 
@@ -235,6 +237,11 @@ impl Worker {
         let _ = self.requests.send(Request::Export { target, format, options });
     }
 
+    /// Writes the sheet of views of the last good model to `target`.
+    pub fn sheet(&self, target: PathBuf) {
+        let _ = self.requests.send(Request::Sheet(target));
+    }
+
     pub fn latest(&self) -> u64 {
         self.latest.load(Ordering::Acquire)
     }
@@ -254,12 +261,14 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         // Only the newest render matters; exports are all honored.
         let mut render = None;
         let mut exports = Vec::new();
+        let mut sheets = Vec::new();
         for request in std::iter::once(first).chain(requests.try_iter()) {
             match request {
                 Request::Render { generation, source, path, values, t } => {
                     render = Some((generation, source, path, values, t))
                 }
                 Request::Export { target, format, options } => exports.push((target, format, options)),
+                Request::Sheet(target) => sheets.push(target),
                 Request::Libraries(folders) => {
                     library_paths = folders.into_iter().chain(defaults.iter().cloned()).collect()
                 }
@@ -299,6 +308,13 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         }
         for (target, format, options) in exports {
             let result = export(shown.as_mut(), &target, format, &options);
+            if replies.send(Reply::Exported { target, result }).is_err() {
+                return;
+            }
+            ctx.request_repaint();
+        }
+        for target in sheets {
+            let result = sheet(shown.as_ref(), &target);
             if replies.send(Reply::Exported { target, result }).is_err() {
                 return;
             }
@@ -410,7 +426,14 @@ fn render_circuit(
                 render_enclosure(text, enclosure_path, path, &found, library_paths)
             });
             let collisions = parts.collisions(&found, &rendered, enclosure.as_ref());
-            Ok(circuit::scene(&found, &rendered, enclosure.as_deref(), &collisions, source, &mut console))
+            let fits = parts.fits(&found, &rendered, enclosure.as_ref());
+            let scene = circuit::scene(&found, &rendered, enclosure.as_deref(), &collisions, &fits, source, &mut console);
+            // Not kept: a wire's edit moves it, and rays cost little.
+            if let Some(enclosure) = &enclosure {
+                let crossings = c2f_geom::crossings(&found, &enclosure.model);
+                console.extend(crossings.iter().map(|crossing| Line::new(Level::Warning, crossing.message(&found))));
+            }
+            Ok(scene)
         }
         Err(errors) => {
             console.extend(errors.iter().map(|err| Line::new(Level::Error, err.render())));
@@ -627,6 +650,27 @@ fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &Ex
         (rendered.stats.triangles, tr("triangles", "triangles"))
     };
     Ok(tr!("Exported {} {} to {}", "{} {} exportés dans {}", group_digits(count), what, target.display()))
+}
+
+/// Writes the sheet of views of the model shown, a 3D one with its cut
+/// through the middle, as PNG.
+fn sheet(shown: Option<&Shown>, target: &Path) -> Result<String, String> {
+    let Shown { program, .. } = shown.ok_or_else(|| tr("there is no model to export yet", "il n’y a pas encore de modèle à exporter").to_string())?;
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
+    let png = catch_unwind(AssertUnwindSafe(|| -> Result<Option<Vec<u8>>, String> {
+        let output = c2f_eval::evaluate(program);
+        if let Some(error) = output.error {
+            return Err(error);
+        }
+        // The rendering kept for exports gave its triangles to the view:
+        // built again, rather than kept twice for every render.
+        let rendered = c2f_geom::render_in(&output.nodes, base_dir);
+        Ok(rendered.sheet(!rendered.is_2d))
+    }))
+    .map_err(|panic| tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic)))??
+    .ok_or_else(|| tr("the model is empty: nothing to draw", "le modèle est vide : rien à dessiner").to_string())?;
+    std::fs::write(target, png).map_err(|err| tr!("cannot write {}: {}", "impossible d’écrire {} : {}", target.display(), err))?;
+    Ok(tr!("Saved the sheet of views to {}", "Planche de vues enregistrée dans {}", target.display()))
 }
 
 /// Writes the program's parts: as OBJ and its `.mtl`, as a URDF and its
@@ -849,6 +893,33 @@ mod tests {
         let (result, bytes) = export_with(&worker, Format::Glb, false);
         assert_eq!(result, Err("the model is 2D; glTF holds solids".to_string()));
         assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn the_sheet_of_views_is_saved_as_png() {
+        let worker = Worker::spawn(egui::Context::default());
+        let generation = worker.render("difference() { cube(30); translate([5, 5, 5]) cube(20); }".into(), path(), Vec::new(), 0.0);
+        wait_for(&worker, generation);
+        let target = std::env::temp_dir().join(format!("code2form-test-{}-sheet.png", std::process::id()));
+        worker.sheet(target.clone());
+        let start = Instant::now();
+        let result = loop {
+            if let Some(Reply::Exported { result, .. }) = worker.poll().into_iter().next() {
+                break result;
+            }
+            assert!(start.elapsed() < Duration::from_secs(30), "no reply");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(result.unwrap().starts_with("Saved the sheet of views to "));
+        let png = std::fs::read(&target).unwrap();
+        let _ = std::fs::remove_file(&target);
+        // The same sheet as `image` draws with a section: three views across.
+        assert!(png.starts_with(b"\x89PNG"));
+        let rendered = c2f_geom::render(&c2f_eval::evaluate(
+            &c2f_eval::Program::load("difference() { cube(30); translate([5, 5, 5]) cube(20); }", &path(), &[]).unwrap(),
+        )
+        .nodes);
+        assert_eq!(Some(png), rendered.sheet(true));
     }
 
     #[test]

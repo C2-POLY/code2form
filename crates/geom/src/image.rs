@@ -6,6 +6,11 @@
 use crate::export::crc32;
 use crate::mesh::{RenderMesh, Rendered};
 
+mod font;
+mod sheet;
+
+pub use sheet::sheet_png;
+
 /// The views the app's presets look from: name, then the camera's angle
 /// around Z from +X and its elevation, in degrees.
 pub const VIEWS: &[(&str, f32, f32)] = &[
@@ -31,6 +36,11 @@ const CREASE: f32 = 0.866;
 const EDGE_SHADE: f32 = 0.45;
 const BACKGROUND_TOP: [f32; 3] = [0.215, 0.240, 0.290];
 const BACKGROUND_BOTTOM: [f32; 3] = [0.078, 0.086, 0.106];
+/// Where a section cuts the solid: its inside, hatched in the colors
+/// drawings mark a cut with, every this many pixels.
+const CAP: [f32; 3] = [0.62, 0.13, 0.12];
+const HATCH: [f32; 3] = [0.93, 0.55, 0.50];
+const HATCH_SPACING: usize = 7;
 
 impl Rendered {
     /// A PNG picture of the model, `width` by `height` pixels, seen from
@@ -67,20 +77,29 @@ struct Camera {
     right: [f32; 3],
     up: [f32; 3],
     forward: [f32; 3],
-    /// Pixels per unit of `x / depth`, and the center of the image.
+    /// Pixels per unit of `x / depth`, and the center of the image; for an
+    /// orthographic camera, pixels per unit.
     scale: f32,
     center: [f32; 2],
+    /// An orthographic camera's farthest depth: what it measures nearness
+    /// from. `None` for a perspective one.
+    far: Option<f32>,
+}
+
+/// The camera's frame looking from `yaw` and `pitch`: towards the camera,
+/// right, up and forward.
+fn frame(yaw: f32, pitch: f32) -> [[f32; 3]; 4] {
+    let (sy, cy) = yaw.to_radians().sin_cos();
+    let (sp, cp) = pitch.clamp(-MAX_PITCH, MAX_PITCH).to_radians().sin_cos();
+    let back = [cp * cy, cp * sy, sp];
+    let forward = scale(back, -1.0);
+    let right = normalize(cross(forward, [0.0, 0.0, 1.0]));
+    [back, right, cross(right, forward), forward]
 }
 
 impl Camera {
     fn new(lo: [f32; 3], hi: [f32; 3], yaw: f32, pitch: f32, width: usize, height: usize) -> Camera {
-        let (sy, cy) = yaw.to_radians().sin_cos();
-        let (sp, cp) = pitch.clamp(-MAX_PITCH, MAX_PITCH).to_radians().sin_cos();
-        let back = [cp * cy, cp * sy, sp];
-        let forward = scale(back, -1.0);
-        let right = normalize(cross(forward, [0.0, 0.0, 1.0]));
-        let up = cross(right, forward);
-
+        let [back, right, up, forward] = frame(yaw, pitch);
         let target = scale(add(lo, hi), 0.5);
         let radius = (length(sub(hi, lo)) * 0.5).max(0.5);
         let half_y = (FOV_Y * 0.5).to_radians();
@@ -94,16 +113,52 @@ impl Camera {
             forward,
             scale: height as f32 * 0.5 / half_y.tan(),
             center: [width as f32 * 0.5, height as f32 * 0.5],
+            far: None,
         }
     }
 
-    /// Where `p` lands in the image, in pixels, and one over its depth
-    /// (which, unlike the depth, varies linearly across a triangle there).
+    /// An orthographic camera on `target`, `pixels` per unit, seeing what
+    /// lies within `radius` of it: views drawn at one scale show sizes that
+    /// compare, which perspective does not.
+    fn orthographic(target: [f32; 3], radius: f32, yaw: f32, pitch: f32, pixels: f32, width: usize, height: usize) -> Camera {
+        let [back, right, up, forward] = frame(yaw, pitch);
+        let distance = radius.max(0.5) * 2.0;
+        Camera {
+            eye: add(target, scale(back, distance)),
+            right,
+            up,
+            forward,
+            scale: pixels,
+            center: [width as f32 * 0.5, height as f32 * 0.5],
+            far: Some(distance * 2.0),
+        }
+    }
+
+    /// Where `p` lands in the image, in pixels, and its nearness: one over
+    /// its depth for a perspective camera, which unlike the depth varies
+    /// linearly across a triangle there; for an orthographic one, the depth
+    /// itself does, counted from the far end so that nearer is larger.
     fn project(&self, p: [f32; 3]) -> [f32; 3] {
         let d = sub(p, self.eye);
-        let z = dot(d, self.forward).max(1e-6);
-        let k = self.scale / z;
-        [self.center[0] + dot(d, self.right) * k, self.center[1] - dot(d, self.up) * k, 1.0 / z]
+        let z = dot(d, self.forward);
+        match self.far {
+            Some(far) => {
+                [self.center[0] + dot(d, self.right) * self.scale, self.center[1] - dot(d, self.up) * self.scale, far - z]
+            }
+            None => {
+                let z = z.max(1e-6);
+                let k = self.scale / z;
+                [self.center[0] + dot(d, self.right) * k, self.center[1] - dot(d, self.up) * k, 1.0 / z]
+            }
+        }
+    }
+
+    /// The direction from `p` towards the camera.
+    fn towards(&self, p: [f32; 3]) -> [f32; 3] {
+        match self.far {
+            Some(_) => scale(self.forward, -1.0),
+            None => sub(self.eye, p),
+        }
     }
 }
 
@@ -115,6 +170,9 @@ struct Canvas {
     depth: Vec<f32>,
     /// Its normal, turned towards the camera, in 127ths.
     normal: Vec<[i8; 3]>,
+    /// Faces seen from behind are the inside of a solid cut open: hatched
+    /// as a cut, rather than lit as the far wall they are.
+    caps: bool,
 }
 
 impl Canvas {
@@ -130,7 +188,7 @@ impl Canvas {
                 color.push(scale(row, 1.0 - 0.35 * (qx * qx + qy * qy)));
             }
         }
-        Canvas { width, height, color, depth: vec![0.0; width * height], normal: vec![[0; 3]; width * height] }
+        Canvas { width, height, color, depth: vec![0.0; width * height], normal: vec![[0; 3]; width * height], caps: false }
     }
 
     fn draw(&mut self, camera: &Camera, mesh: &RenderMesh) {
@@ -139,16 +197,25 @@ impl Canvas {
         {
             // Two-sided: lit on the side that faces the camera.
             let centroid = scale(add(add(corners[0], corners[1]), corners[2]), 1.0 / 3.0);
-            let normal = if dot(normals[0], sub(camera.eye, centroid)) < 0.0 { scale(normals[0], -1.0) } else { normals[0] };
-            let shade = shade(camera, normal, colors[0]);
+            let towards = camera.towards(centroid);
+            let behind = dot(normals[0], towards) < 0.0;
             let projected = [camera.project(corners[0]), camera.project(corners[1]), camera.project(corners[2])];
-            self.fill(projected, shade, colors[0][3], normal.map(|v| (v * 127.0).round() as i8));
+            if behind && self.caps {
+                // All one flat face, so that no crease shows across the cut.
+                let normal = normalize(towards).map(|v| (v * 127.0).round() as i8);
+                self.fill(projected, CAP, colors[0][3], normal, true);
+                continue;
+            }
+            let normal = if behind { scale(normals[0], -1.0) } else { normals[0] };
+            let shade = shade(camera, normal, colors[0]);
+            self.fill(projected, shade, colors[0][3], normal.map(|v| (v * 127.0).round() as i8), false);
         }
     }
 
     /// Fills a projected triangle: opaque ones write the depth, translucent
     /// ones blend over what is in front of them without hiding anything.
-    fn fill(&mut self, [a, b, c]: [[f32; 3]; 3], color: [f32; 3], alpha: f32, normal: [i8; 3]) {
+    /// A `hatched` one is crossed by diagonal lines.
+    fn fill(&mut self, [a, b, c]: [[f32; 3]; 3], color: [f32; 3], alpha: f32, normal: [i8; 3], hatched: bool) {
         let edge = |p: [f32; 3], q: [f32; 3], x: f32, y: f32| (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0]);
         let area = edge(a, b, c[0], c[1]);
         if !area.is_normal() {
@@ -170,6 +237,7 @@ impl Canvas {
                 if depth <= self.depth[i] {
                     continue;
                 }
+                let color = if hatched && (x + y) % (HATCH_SPACING * SUPERSAMPLE) < SUPERSAMPLE { HATCH } else { color };
                 if alpha >= 0.999 {
                     self.color[i] = color;
                     self.depth[i] = depth;
