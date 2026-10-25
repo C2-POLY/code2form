@@ -40,9 +40,10 @@ fn parts_and_enclosures_outside_the_scope_are_refused() {
     assert_eq!(circuit.scope, Some(folders.scope()), "the circuit carries its scope");
 
     for src in [
-        format!("[parts.led]\npart = \"{}\"\n", secret.display()),
+        // Literal strings: a Windows path's `\` is no escape there.
+        format!("[parts.led]\npart = '{}'\n", secret.display()),
         "[parts.led]\npart = \"../outside/secret.c2f\"\n".to_string(),
-        format!("enclosure = \"{}\"\n", secret.display()),
+        format!("enclosure = '{}'\n", secret.display()),
     ] {
         // Unscoped, as `c2f circuit` reads it: found.
         assert!(c2f_circuit::parse(&src, &path, &[]).is_ok(), "{src}");

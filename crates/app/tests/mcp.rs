@@ -1167,7 +1167,8 @@ fn the_studio_s_tools_come_after_the_built_in_ones() {
 fn the_studio_s_settings_guard_c2f_mcp_studio_only() {
     let home = temp_dir("guarded-home");
     let settings = "agent-allow-export = false\n";
-    for dir in [home.join("Library/Application Support/Code2Form"), home.join(".config/code2form")] {
+    let app_data = home.join("AppData");
+    for dir in [home.join("Library/Application Support/Code2Form"), home.join(".config/code2form"), app_data.join("Code2Form")] {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("settings.txt"), settings).unwrap();
     }
@@ -1178,6 +1179,7 @@ fn the_studio_s_settings_guard_c2f_mcp_studio_only() {
     let env = [
         ("HOME", home.as_os_str()),
         ("XDG_CONFIG_HOME", config.as_os_str()),
+        ("APPDATA", app_data.as_os_str()),
         ("CODE2FORM_STUDIO_SOCKET", socket.as_os_str()),
     ];
     let include = json!({ "code": format!("include <{}>\ncube(1);", secret.display()) });

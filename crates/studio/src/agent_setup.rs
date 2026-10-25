@@ -817,10 +817,12 @@ mod tests {
     #[test]
     fn the_policy_json_reads_back() {
         let agent = AgentSettings { ask_first: true, allow_export: false, allow_electrify: false, ..AgentSettings::default() };
-        let libraries = vec![PathBuf::from("/libs"), PathBuf::from("relative")];
+        // Absolute on every system: `/libs` has no drive on Windows.
+        let libs = std::env::temp_dir().join("libs");
+        let libraries = vec![libs.clone(), PathBuf::from("relative")];
         let (back, read) = AgentSettings::from_policy_json(&agent.policy_json(&libraries)).unwrap();
         assert!(back.ask_first && !back.allow_export && !back.allow_electrify && back.allow_save_part && back.allow_new_files);
-        assert_eq!(read, vec![PathBuf::from("/libs")], "a relative folder is left out");
+        assert_eq!(read, vec![libs], "a relative folder is left out");
         assert!(AgentSettings::from_policy_json("nope").is_none());
     }
 

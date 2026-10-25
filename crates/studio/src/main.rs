@@ -251,12 +251,14 @@ mod tests {
     fn the_server_takes_the_policy_it_is_given() {
         use std::ffi::OsString;
         let agent = crate::agent_setup::AgentSettings { allow_export: false, ask_first: true, ..Default::default() };
-        let json = agent.policy_json(&[std::path::PathBuf::from("/libs")]);
+        // Absolute on every system: `/libs` has no drive on Windows.
+        let (libs, work) = (std::env::temp_dir().join("libs"), std::env::temp_dir().join("work"));
+        let json = agent.policy_json(std::slice::from_ref(&libs));
         let args = [OsString::from("--policy"), OsString::from(json)];
-        let policy = super::server_policy(&args, std::path::Path::new("/work"));
+        let policy = super::server_policy(&args, &work);
         assert!(!policy.export && policy.ask_first);
         let scope = policy.scope.unwrap();
-        assert_eq!((scope.folder.as_path(), &scope.read_only[0]), (std::path::Path::new("/work"), &std::path::PathBuf::from("/libs")));
+        assert_eq!((&scope.folder, &scope.read_only[0]), (&work, &libs));
     }
 
     /// The studio's agent calls the very tools `c2f mcp` serves.
