@@ -150,3 +150,5 @@ cargo run --release -p c2f-cli -- circuit wires examples/nightlight/nightlight.c
 
 or open `examples/nightlight/nightlight.c2fc` in the app: the Section
 button cuts the base open, and the Part button opens the design.
+In the app, the [Agent panel](agent.md) sends the same prompts with its
+Design and Electronics buttons, and edits the open night light live.

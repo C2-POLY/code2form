@@ -10,7 +10,8 @@ The result is in `examples/winder/`.
 
 ## 1. The questions
 
-In Claude Code, `/mcp__code2form__plan_object` with the idea:
+In Claude Code, `/mcp__code2form__plan_object` with the idea (in the
+app, the Plan button of the [Agent panel](agent.md) sends the same):
 
 > a winder for my automatic watch, on my bedside table
 
