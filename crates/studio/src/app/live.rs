@@ -871,29 +871,35 @@ impl StudioApp {
         });
         let Some(image) = image else { return };
         let Some(reply) = self.live.shot.take() else { return };
-        let scale = ctx.pixels_per_point();
-        let [width, height] = image.size;
-        let rect = self.view_rect;
-        let x0 = ((rect.left() * scale).round().max(0.0) as usize).min(width);
-        let y0 = ((rect.top() * scale).round().max(0.0) as usize).min(height);
-        let x1 = ((rect.right() * scale).round().max(0.0) as usize).clamp(x0, width);
-        let y1 = ((rect.bottom() * scale).round().max(0.0) as usize).clamp(y0, height);
-        let step = (x1 - x0).max(y1 - y0).div_ceil(MAX_SHOT).max(1);
-        let (w, h) = ((x1 - x0) / step, (y1 - y0) / step);
-        if w == 0 || h == 0 {
-            let _ = reply.send(Err("the 3D view has no size on screen".into()));
-            return;
-        }
-        let mut rgb = Vec::with_capacity(w * h * 3);
-        for y in 0..h {
-            for x in 0..w {
-                let color = image.pixels[(y0 + y * step) * width + x0 + x * step];
-                rgb.extend_from_slice(&[color.r(), color.g(), color.b()]);
-            }
-        }
-        let png = c2f_geom::encode_png(w, h, &rgb);
-        let _ = reply.send(Ok(c2f_agent::image_content(&png)));
+        let answer = view_png(&image, self.view_rect, ctx.pixels_per_point())
+            .map(|png| c2f_agent::image_content(&png))
+            .ok_or_else(|| "the 3D view has no size on screen".into());
+        let _ = reply.send(answer);
     }
+}
+
+/// The view, cut from a picture of the window at `scale` pixels per point
+/// from its `rect`, as a PNG at most [`MAX_SHOT`] pixels on its longest
+/// side; `None` when it has no size on screen.
+pub(super) fn view_png(image: &egui::ColorImage, rect: egui::Rect, scale: f32) -> Option<Vec<u8>> {
+    let [width, height] = image.size;
+    let x0 = ((rect.left() * scale).round().max(0.0) as usize).min(width);
+    let y0 = ((rect.top() * scale).round().max(0.0) as usize).min(height);
+    let x1 = ((rect.right() * scale).round().max(0.0) as usize).clamp(x0, width);
+    let y1 = ((rect.bottom() * scale).round().max(0.0) as usize).clamp(y0, height);
+    let step = (x1 - x0).max(y1 - y0).div_ceil(MAX_SHOT).max(1);
+    let (w, h) = ((x1 - x0) / step, (y1 - y0) / step);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let color = image.pixels[(y0 + y * step) * width + x0 + x * step];
+            rgb.extend_from_slice(&[color.r(), color.g(), color.b()]);
+        }
+    }
+    Some(c2f_geom::encode_png(w, h, &rgb))
 }
 
 #[cfg(test)]

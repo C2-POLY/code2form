@@ -25,6 +25,7 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::app::selection_context::{self, Suggestion};
 use crate::i18n::tr;
 use crate::icons::{self, Icon};
 use crate::settings::Settings;
@@ -387,6 +388,14 @@ pub struct AgentPanel {
     /// one that could not be read.
     thumbnails: HashMap<(String, usize), Option<TextureHandle>>,
     focus_input: bool,
+    /// What is selected in the view, and in the code: sent with the next
+    /// message unless removed.
+    suggested: [Suggestion; 2],
+    /// Whether a picture of the view goes with each message.
+    attach_view: bool,
+    /// A message waiting for the picture of the view, and whether it was
+    /// asked for.
+    awaiting_view: Option<(String, bool)>,
 }
 
 impl AgentPanel {
@@ -411,6 +420,9 @@ impl AgentPanel {
             unfolded: HashSet::new(),
             thumbnails: HashMap::new(),
             focus_input: false,
+            suggested: Default::default(),
+            attach_view: false,
+            awaiting_view: None,
         }
     }
 
@@ -433,10 +445,77 @@ impl AgentPanel {
 
     /// Adds something to send with the next message: a picture of the
     /// view, or what the user selected.
-    #[allow(dead_code, reason = "the view's selection is attached once it is wired")]
     pub fn attach(&mut self, attachment: Attachment) {
         if !self.attachments.contains(&attachment) {
             self.attachments.push(attachment);
+        }
+    }
+
+    // ---- The selection ----
+
+    /// Follows what is selected in the view and in the code, every frame.
+    pub fn suggest(&mut self, view: Option<Attachment>, code: Option<Attachment>) {
+        let [in_view, in_code] = &mut self.suggested;
+        in_view.follow(view);
+        in_code.follow(code);
+    }
+
+    /// The suggestions shown: neither dismissed nor attached already.
+    fn suggestions(&self) -> impl Iterator<Item = (usize, &Attachment)> {
+        let attached = |a: &Attachment| self.attachments.iter().any(|b| selection_context::label(b) == selection_context::label(a));
+        self.suggested.iter().enumerate().filter_map(move |(i, s)| s.shown().filter(|a| !attached(a)).map(|a| (i, a)))
+    }
+
+    /// Opens the panel, its field focused, with `attachment` to send.
+    pub fn ask_about(&mut self, attachment: Attachment) {
+        self.open = true;
+        self.focus_input = true;
+        self.attach(attachment);
+    }
+
+    /// The attachments of the message being sent, the suggestions with
+    /// them.
+    fn outgoing(&mut self) -> Vec<Attachment> {
+        let mut attachments = std::mem::take(&mut self.attachments);
+        for suggestion in &mut self.suggested {
+            if let Some(attachment) = suggestion.take() {
+                let label = selection_context::label(&attachment);
+                if !attachments.iter().any(|a| selection_context::label(a) == label) {
+                    attachments.push(attachment);
+                }
+            }
+        }
+        attachments
+    }
+
+    /// Whether to ask for the picture of the view a message waits for:
+    /// true once.
+    pub fn wants_view(&mut self) -> bool {
+        match &mut self.awaiting_view {
+            Some((_, asked)) if !*asked => {
+                *asked = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a message waits for the picture of the view.
+    pub fn awaits_view(&self) -> bool {
+        self.awaiting_view.is_some()
+    }
+
+    /// Sends the message that waited for the view, with its picture,
+    /// `None` when the view is hidden.
+    pub fn send_with_view(&mut self, png: Option<Vec<u8>>) {
+        let Some((text, _)) = self.awaiting_view.take() else { return };
+        let shown = png.is_some();
+        if let Some(png) = png {
+            self.attach(Attachment::Image { png });
+        }
+        self.send(&text);
+        if !shown {
+            self.problem = Some(tr("The 3D view is hidden: sent without its picture", "La vue 3D est masquée : envoyé sans son image").into());
         }
     }
 
@@ -465,7 +544,7 @@ impl AgentPanel {
         if text.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
-        let message = UserMessage { text: text.trim().to_string(), attachments: std::mem::take(&mut self.attachments) };
+        let message = UserMessage { text: text.trim().to_string(), attachments: self.outgoing() };
         self.start(message, None);
     }
 
@@ -598,7 +677,7 @@ impl AgentPanel {
         match prompt_text(shortcut, answer, self.file.as_deref(), self.folder.as_deref()) {
             Ok(text) => {
                 self.asking = None;
-                let message = UserMessage { text, attachments: std::mem::take(&mut self.attachments) };
+                let message = UserMessage { text, attachments: self.outgoing() };
                 self.start(message, Some(format!("{} · {}", shortcut.label(), answer.trim())));
             }
             Err(why) => self.problem = Some(why),
@@ -722,8 +801,8 @@ impl AgentPanel {
         if let Some(problem) = &self.problem {
             ui.label(RichText::new(problem).size(12.0).color(palette.error));
         }
-        if !self.attachments.is_empty() {
-            let mut remove = None;
+        if !self.attachments.is_empty() || self.suggestions().next().is_some() {
+            let (mut remove, mut dismiss) = (None, None);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
                 for (index, attachment) in self.attachments.iter().enumerate() {
@@ -731,9 +810,17 @@ impl AgentPanel {
                         remove = Some(index);
                     }
                 }
+                for (index, attachment) in self.suggestions() {
+                    if chip(ui, attachment, true) {
+                        dismiss = Some(index);
+                    }
+                }
             });
             if let Some(index) = remove {
                 self.attachments.remove(index);
+            }
+            if let Some(index) = dismiss {
+                self.suggested[index].dismiss();
             }
             ui.add_space(4.0);
         }
@@ -757,9 +844,12 @@ impl AgentPanel {
             response.request_focus();
         }
         ui.add_space(4.0);
-        let mut send = enter && !self.running();
+        let mut send = enter && !self.running() && !self.awaits_view();
         ui.horizontal(|ui| {
-            if self.running() {
+            if self.awaits_view() {
+                ui.add(egui::Spinner::new().size(12.0).color(palette.accent_strong));
+                ui.label(RichText::new(tr("Taking the view…", "Capture de la vue…")).size(12.0).color(palette.accent_strong));
+            } else if self.running() {
                 ui.add(egui::Spinner::new().size(12.0).color(palette.accent_strong));
                 ui.label(RichText::new(tr("Working…", "En cours…")).size(12.0).color(palette.accent_strong));
             } else if self.transcript.usage != Usage::default() {
@@ -776,17 +866,30 @@ impl AgentPanel {
                         self.stop();
                     }
                 } else {
-                    let ready = !self.input.trim().is_empty() || !self.attachments.is_empty();
+                    let ready = (!self.input.trim().is_empty() || !self.attachments.is_empty()) && !self.awaits_view();
                     let button = Button::new(RichText::new(tr("Send", "Envoyer")).color(palette.on_accent).strong())
                         .fill(palette.accent)
                         .stroke(Stroke::NONE)
                         .corner_radius(CornerRadius::same(6));
                     send |= ui.add_enabled(ready, button).clicked();
+                    let view = Button::selectable(self.attach_view, RichText::new(tr("Attach the view", "Joindre la vue")).size(12.0));
+                    let hint = tr(
+                        "Attach a picture of the 3D view, as you see it, to each message",
+                        "Joindre à chaque message une image de la vue 3D, telle que vous la voyez",
+                    );
+                    if ui.add(view).on_hover_text(hint).clicked() {
+                        self.attach_view = !self.attach_view;
+                    }
                 }
             });
         });
         if send {
             let text = std::mem::take(&mut self.input);
+            if self.attach_view && (!text.trim().is_empty() || !self.attachments.is_empty()) {
+                // Sent once the app has taken the picture.
+                self.awaiting_view = Some((text, false));
+                return;
+            }
             self.send(&text);
             if !self.running() && self.transcript.entries.is_empty() {
                 // Nothing was sent: the text stays.
@@ -1277,6 +1380,40 @@ mod tests {
         let count = panel.transcript().entries.len();
         panel.send("   ");
         assert_eq!(panel.transcript().entries.len(), count);
+    }
+
+    #[test]
+    fn the_selection_goes_with_the_message_once() {
+        let context = |label: &str| Attachment::Context { label: label.into(), text: label.into() };
+        let done = || vec![Event::Done { usage: None, cost_usd: None, session_id: None }];
+        let mut panel = fake(vec![done(), done(), done()]);
+        panel.suggest(Some(context("Selection: ring")), Some(context("Lines 3–4")));
+        panel.suggested[1].dismiss();
+        panel.send("make it bigger");
+        panel.poll();
+        let sent = |panel: &AgentPanel| match panel.transcript().entries.iter().rev().find(|e| matches!(e, Entry::User { .. })) {
+            Some(Entry::User { message, .. }) => message.attachments.clone(),
+            _ => panic!("nothing sent"),
+        };
+        assert_eq!(sent(&panel), [context("Selection: ring")], "the code's was removed");
+        // Sent once: the same selection is not offered again.
+        panel.suggest(Some(context("Selection: ring")), Some(context("Lines 3–4")));
+        assert_eq!(panel.suggestions().count(), 0);
+
+        // Asked about from the view: attached once, with a picture taken
+        // when sent.
+        panel.ask_about(context("Face of Top"));
+        assert!(panel.open);
+        panel.suggest(Some(context("Face of Top")), None);
+        assert_eq!(panel.suggestions().count(), 0, "attached already");
+        panel.attach_view = true;
+        panel.awaiting_view = Some(("this face".into(), false));
+        assert!(panel.wants_view());
+        assert!(!panel.wants_view(), "asked once");
+        panel.send_with_view(Some(vec![1, 2, 3]));
+        panel.poll();
+        assert!(!panel.awaits_view());
+        assert_eq!(sent(&panel), [context("Face of Top"), Attachment::Image { png: vec![1, 2, 3] }]);
     }
 
     #[test]

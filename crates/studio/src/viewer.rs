@@ -145,6 +145,8 @@ pub struct Viewer {
     explode: f32,
     explode_how: c2f_geom::Explode,
     assembled: RenderMesh,
+    /// A design's solid without parts, for picking a face.
+    design_positions: Vec<[f32; 3]>,
     /// The box around the parts all the way apart, framed while exploded.
     exploded_bounds: Option<(Vec3, Vec3)>,
     /// The pause being dragged on the slider, and the layer it is over.
@@ -157,6 +159,17 @@ pub struct Viewer {
     /// The room the app's bars take over the view's edges: the view's own
     /// badges, gizmo, hints and layer slider keep clear of it.
     pub insets: Insets,
+}
+
+/// A face of a design, picked in the view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceHit {
+    /// In millimeters.
+    pub point: [f32; 3],
+    /// Of unit length, out of the solid as its triangles turn.
+    pub normal: [f32; 3],
+    /// The `part("name")` it belongs to.
+    pub part: Option<String>,
 }
 
 /// Room taken over the edges of the view, in points.
@@ -213,6 +226,7 @@ impl Viewer {
             explode: 0.0,
             explode_how: c2f_geom::Explode::default(),
             assembled: RenderMesh::default(),
+            design_positions: Vec::new(),
             exploded_bounds: None,
             dragging: None,
             menu: None,
@@ -256,6 +270,8 @@ impl Viewer {
         self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
         self.solid_positions = if scene.parts.is_empty() { Vec::new() } else { scene.solid.positions.clone() };
+        let plain = scene.parts.is_empty() && scene.exploded.is_none() && !scene.is_2d;
+        self.design_positions = if plain { scene.solid.positions.clone() } else { Vec::new() };
         self.part_colors = scene
             .parts
             .iter()
@@ -478,6 +494,34 @@ impl Viewer {
         // Five points either way, at a distance of one.
         let slack = 5.0 * 2.0 * (self.camera.fov_y * 0.5).tan() / rect.height().max(1.0);
         Ray { origin, direction, slack }
+    }
+
+    /// The face of a design the ray meets first: where, its normal, and
+    /// the `part()` it belongs to, in the model's coordinates even while
+    /// the parts are drawn apart. `None` for a circuit, or nothing there.
+    pub fn pick_face(&self, ray: &Ray) -> Option<FaceHit> {
+        let moved;
+        let positions: &[[f32; 3]] = match &self.exploded {
+            Some(exploded) => {
+                moved = exploded.at(self.explode, self.explode_how).positions;
+                &moved
+            }
+            None => &self.design_positions,
+        };
+        let corners = |t: usize| [0, 1, 2].map(|k| Vec3::from(positions[t * 3 + k]));
+        let (along, triangle) = (0..positions.len() / 3)
+            .filter_map(|t| ray.triangle(corners(t)).map(|along| (along, t)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        let [a, b, c] = corners(triangle);
+        let normal = (b - a).cross(c - a).normalize_or_zero();
+        let mut point = ray.origin + ray.direction * along;
+        let mut part = None;
+        if let Some(exploded) = &self.exploded {
+            // Back where the model puts it.
+            point -= a - Vec3::from(exploded.mesh.positions[triangle * 3]);
+            part = exploded.part_at(triangle * 3).map(String::from);
+        }
+        Some(FaceHit { point: point.to_array(), normal: normal.to_array(), part })
     }
 
     /// The model's box and the overlay's, together, and the parts' all
@@ -1268,6 +1312,19 @@ mod tests {
         bare.parts = std::iter::once(0..3).collect();
         viewer.set_scene(bare, false);
         assert!(!viewer.can_section() && viewer.shown_section().is_none());
+    }
+
+    #[test]
+    fn a_face_is_picked_with_its_point_and_normal() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(scene(20.0), false);
+        let down = |x: f32, y: f32| Ray { origin: Vec3::new(x, y, 100.0), direction: Vec3::NEG_Z, slack: 0.0 };
+        let face = viewer.pick_face(&down(16.0, 4.0)).unwrap();
+        assert!(Vec3::from(face.point).distance(Vec3::new(16.0, 4.0, 4.0)) < 1e-3, "{face:?}");
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(Vec3::from(face.normal).distance(Vec3::new(0.0, -half, half)) < 1e-5, "{face:?}");
+        assert_eq!(face.part, None);
+        assert_eq!(viewer.pick_face(&down(4.0, 16.0)), None, "beside it");
     }
 
     #[test]

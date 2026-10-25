@@ -51,6 +51,8 @@ use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
 /// The agent's live tools: they read and edit the open documents.
 pub mod live;
+/// What the user selects, sent to the agent with the message.
+pub mod selection_context;
 
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {
@@ -1319,6 +1321,8 @@ impl StudioApp {
     /// tab; an edit's link shows its line in the code.
     fn agent_panel(&mut self, ctx: &egui::Context) {
         self.agent.set_tab(self.doc.path.as_deref(), self.doc.directory());
+        self.suggest_selection();
+        self.agent_view_shot(ctx);
         if let Some(line) = self.agent.show(ctx) {
             if self.arrangement == Arrangement::View {
                 self.arrangement = Arrangement::Split;
@@ -2844,6 +2848,7 @@ impl StudioApp {
             let response = self.doc.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
+            self.view_menu(ctx, &response);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
             if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
                 let name = &original.parts[drag.part].name;

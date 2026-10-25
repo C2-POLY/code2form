@@ -459,6 +459,18 @@ impl Editor {
         self.selection.map(|r| r.primary.index)
     }
 
+    /// The lines (from 1, both included) of the selection as last shown,
+    /// when it is not empty; one ending at a line's start leaves it out.
+    pub fn selected_lines(&self, text: &str) -> Option<(usize, usize)> {
+        let [start, end] = self.selection?.sorted_cursors();
+        if start.index == end.index {
+            return None;
+        }
+        let first = line_and_column(text, start.index).0;
+        let (last, column) = line_and_column(text, end.index);
+        Some((first + 1, if column == 0 && last > first { last } else { last + 1 }))
+    }
+
     /// Replaces the text from outside the editor, as one step of its undo
     /// history, with the cursor at char `cursor`.
     pub fn replace_text(&self, ctx: &egui::Context, text: &mut String, new_text: String, cursor: usize) {
@@ -898,6 +910,26 @@ mod tests {
         assert_eq!(editor.find.query, "a");
         assert!(editor.find.replace);
         assert_eq!(count(&editor), "2 of 3", "starts at the selection");
+    }
+
+    #[test]
+    fn the_selection_spans_lines() {
+        let ctx = egui::Context::default();
+        let mut editor = Editor::new();
+        let mut text = "a = 1;\nb = 2;\nc = 3;\n".to_string();
+        editor.focus(&ctx);
+        let mut select = |from: usize, to: usize| {
+            frame(&ctx, &mut editor, &mut text, vec![]);
+            let mut state = TextEdit::load_state(&ctx, editor.id).unwrap();
+            state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(from), CCursor::new(to))));
+            state.store(&ctx, editor.id);
+            frame(&ctx, &mut editor, &mut text, vec![]);
+            editor.selected_lines(&text)
+        };
+        assert_eq!(select(3, 3), None, "a cursor alone");
+        assert_eq!(select(3, 5), Some((1, 1)));
+        assert_eq!(select(16, 2), Some((1, 3)), "backwards");
+        assert_eq!(select(0, 14), Some((1, 2)), "ending at a line's start");
     }
 
     #[test]
