@@ -53,6 +53,7 @@ pub enum Entry {
     /// What the user sent; `shown` is what the panel shows of it instead
     /// of its text, for a prompt sent by its button.
     User {
+        #[serde(with = "stored_message")]
         message: UserMessage,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shown: Option<String>,
@@ -62,6 +63,39 @@ pub enum Entry {
     Tool(ToolCall),
     /// What the panel says itself: the turn stopped, or failed.
     Notice { text: String, error: bool },
+}
+
+/// A message as a transcript keeps it: its pictures as base64 text rather
+/// than arrays of numbers, four times as long; the arrays older
+/// transcripts kept still read.
+mod stored_message {
+    use c2f_agent::conversation::{Attachment, UserMessage};
+    use serde::de::Error as _;
+    use serde::ser::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use serde_json::Value;
+
+    pub fn serialize<S: Serializer>(message: &UserMessage, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut value = serde_json::to_value(message).map_err(S::Error::custom)?;
+        let items = value.get_mut("attachments").and_then(Value::as_array_mut).into_iter().flatten();
+        for (item, attachment) in items.zip(&message.attachments) {
+            if let Attachment::Image { png } = attachment {
+                item["png"] = c2f_agent::image_content(png)["data"].clone();
+            }
+        }
+        serde::Serialize::serialize(&value, serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<UserMessage, D::Error> {
+        let mut value = Value::deserialize(deserializer)?;
+        for item in value.get_mut("attachments").and_then(Value::as_array_mut).into_iter().flatten() {
+            if let Some(text) = item.get("png").and_then(Value::as_str) {
+                let png = super::base64_decode(text).ok_or_else(|| D::Error::custom("a picture is not base64"))?;
+                item["png"] = Value::from(png);
+            }
+        }
+        serde_json::from_value(value).map_err(D::Error::custom)
+    }
 }
 
 /// A tool the agent called, and what it gave back.
@@ -155,18 +189,19 @@ impl Transcript {
     }
 }
 
-/// The line (from 1) an `edit_code` call changed, once it succeeded: its
-/// input's `line` or `start_line`, else its result's.
+/// The line (from 1) an `edit_code` call changed, once it succeeded: the
+/// first of its result's `changed_lines` (`[[first, last], ...]`, from 1),
+/// else its input's `range.start_line`.
 pub fn edited_line(call: &ToolCall) -> Option<usize> {
     if call.name != "edit_code" || call.status != Status::Ok {
         return None;
     }
-    let line = |value: &Value| {
-        ["line", "start_line"].iter().find_map(|key| value.get(key)?.as_u64()).map(|n| n as usize)
-    };
-    line(&call.input).or_else(|| {
-        call.content.iter().find_map(|item| line(&serde_json::from_str(item.get("text")?.as_str()?).ok()?))
-    })
+    let changed = call.content.iter().find_map(|item| {
+        let result: Value = serde_json::from_str(item.get("text")?.as_str()?).ok()?;
+        result["changed_lines"].get(0)?.get(0)?.as_u64()
+    });
+    let asked = || call.input.get("range")?.get("start_line")?.as_u64();
+    changed.or_else(asked).filter(|&n| n >= 1).map(|n| n as usize)
 }
 
 /// A tool's input on one line: `key: value` for each argument, the
@@ -367,7 +402,12 @@ pub struct AgentPanel {
     /// with, and the check of the engines it saw.
     agent: AgentSettings,
     libraries: Vec<PathBuf>,
-    built_for: Option<(AgentSettings, Vec<PathBuf>, u64)>,
+    /// The settings, libraries, check and folder it was made for: a new
+    /// folder (an untitled tab saved) makes a new engine.
+    built_for: Option<(AgentSettings, Vec<PathBuf>, u64, Option<PathBuf>)>,
+    /// The turn under way was started again once without its session,
+    /// which Claude Code no longer had.
+    retried: bool,
     /// Checks which engines this computer has, once the panel or the
     /// settings are first shown, and the `claude` path it checked.
     prober: Prober,
@@ -426,6 +466,7 @@ impl AgentPanel {
             agent: AgentSettings::default(),
             libraries: Vec::new(),
             built_for: None,
+            retried: false,
             prober: Prober::default(),
             probed: None,
             key_input: String::new(),
@@ -457,6 +498,11 @@ impl AgentPanel {
     /// conversation as it is; what the user should know of it goes into
     /// the conversation.
     fn build(&mut self) {
+        // Claude Code keeps a session in its folder: in another folder it
+        // has none to resume, and starts a new one.
+        if self.built_for.as_ref().is_some_and(|built| built.3 != self.folder) {
+            self.transcript.session_id = None;
+        }
         let (generation, probe) = self.prober.current();
         let request = EngineRequest {
             agent: &self.agent,
@@ -472,7 +518,7 @@ impl AgentPanel {
         if let Some(notice) = built.notice.filter(|_| !self.transcript.entries.is_empty()) {
             self.transcript.entries.push(Entry::Notice { text: notice, error: false });
         }
-        self.built_for = Some((self.agent.clone(), self.libraries.clone(), generation));
+        self.built_for = Some((self.agent.clone(), self.libraries.clone(), generation, self.folder.clone()));
     }
 
     /// Takes the agent's settings and the user's library folders, every
@@ -489,7 +535,7 @@ impl AgentPanel {
             self.probed = Some(self.agent.claude_path.clone());
             self.prober.check(ctx, self.agent.claude_path.clone(), KeyChange::Keep);
         }
-        let now = (self.agent.clone(), self.libraries.clone(), self.prober.current().0);
+        let now = (self.agent.clone(), self.libraries.clone(), self.prober.current().0, self.folder.clone());
         if self.built_for.as_ref() != Some(&now) && !self.running() {
             self.build();
         }
@@ -503,8 +549,8 @@ impl AgentPanel {
         agent_setup::page(ui, ctx, agent, &self.prober, &mut self.key_input);
     }
 
-    /// What the conversation holds so far, for the live tools to read.
-    #[allow(dead_code, reason = "the live tools read it once they are wired")]
+    /// What the conversation holds so far.
+    #[cfg(test)]
     pub fn transcript(&self) -> &Transcript {
         &self.transcript
     }
@@ -639,25 +685,54 @@ impl AgentPanel {
             self.owner = self.file.clone();
         }
         self.problem = None;
-        let (sender, receiver) = mpsc::channel();
+        self.retried = false;
         self.transcript.push_user(message.clone(), shown);
+        self.send_to_engine(message);
+        self.save();
+    }
+
+    /// Sends `message` to the engine, its turn's events to come.
+    fn send_to_engine(&mut self, message: UserMessage) {
+        let (sender, receiver) = mpsc::channel();
         match self.engine.send(message, sender) {
             Ok(()) => self.events = Some(receiver),
             Err(why) => self.transcript.entries.push(Entry::Notice { text: why, error: true }),
         }
-        self.save();
+    }
+
+    /// Whether the turn failed on a session Claude Code does not have
+    /// (made in another folder, or cleared), and was started again without
+    /// it: once a turn, from a fresh engine.
+    fn retry_without_session(&mut self, event: &Event) -> bool {
+        let Event::Error { message } = event else { return false };
+        if self.retried || self.transcript.session_id.is_none() || !message.contains("No conversation found") {
+            return false;
+        }
+        self.retried = true;
+        self.transcript.session_id = None;
+        let last = self.transcript.entries.iter().rev().find_map(|entry| match entry {
+            Entry::User { message, .. } => Some(message.clone()),
+            _ => None,
+        });
+        let Some(message) = last else { return false };
+        self.events = None;
+        self.build();
+        self.send_to_engine(message);
+        true
     }
 
     /// Takes in what the engine streamed since the last frame; whether
     /// anything came.
     pub fn poll(&mut self) -> bool {
-        let Some(events) = &self.events else { return false };
         let mut changed = false;
         let mut over = false;
-        loop {
+        while let Some(events) = &self.events {
             match events.try_recv() {
                 Ok(event) => {
                     changed = true;
+                    if self.retry_without_session(&event) {
+                        continue;
+                    }
                     if self.transcript.apply(event) {
                         over = true;
                         break;
@@ -746,8 +821,12 @@ impl AgentPanel {
             return;
         }
         let path = conversation_path(store, owner);
+        // Written beside it, then put in its place: a crash midway leaves
+        // the last conversation whole.
+        let partial = path.with_extension("json.partial");
         let written = std::fs::create_dir_all(store)
-            .and_then(|()| std::fs::write(&path, serde_json::to_vec(&self.transcript).unwrap_or_default()));
+            .and_then(|()| std::fs::write(&partial, serde_json::to_vec(&self.transcript).unwrap_or_default()))
+            .and_then(|()| std::fs::rename(&partial, &path));
         if let Err(err) = written {
             self.problem = Some(tr!("Cannot save the conversation: {err}", "Impossible d'enregistrer la conversation : {err}"));
         }
@@ -1435,8 +1514,12 @@ mod tests {
             Event::Text { delta: "**a cube**.".into() },
             Event::ToolCall { id: "t1".into(), name: "render".into(), input: json!({ "code": "cube(10);\nsphere(2);" }) },
             Event::ToolResult { id: "t1".into(), content: vec![json!({ "type": "text", "text": "{\"volume\": 1000}" })], is_error: false },
-            Event::ToolCall { id: "t2".into(), name: "edit_code".into(), input: json!({ "line": 3, "text": "cube(12);" }) },
-            Event::ToolResult { id: "t2".into(), content: vec![json!({ "type": "text", "text": "done" })], is_error: false },
+            Event::ToolCall { id: "t2".into(), name: "edit_code".into(), input: json!({ "edits": [{ "old": "cube(10);", "new": "cube(12);" }] }) },
+            Event::ToolResult {
+                id: "t2".into(),
+                content: vec![json!({ "type": "text", "text": "{\"edited\": true, \"changed_lines\": [[3, 3]], \"render\": {\"ok\": true}}" })],
+                is_error: false,
+            },
             Event::Text { delta: " Done.".into() },
             Event::Done { usage: Some(Usage { input_tokens: 120, output_tokens: 40 }), cost_usd: Some(0.01), session_id: Some("s1".into()) },
         ]
@@ -1505,6 +1588,15 @@ mod tests {
         let Entry::Tool(edit) = &t.entries[3] else { panic!() };
         assert_eq!(edited_line(edit), Some(3));
         assert_eq!(edited_line(render), None);
+        // A range edit whose result is not read: its input's start line.
+        let ranged = ToolCall {
+            id: "t3".into(),
+            name: "edit_code".into(),
+            input: json!({ "range": { "start_line": 7, "end_line": 8 }, "new": "x", "revision": "r" }),
+            status: Status::Ok,
+            content: vec![],
+        };
+        assert_eq!(edited_line(&ranged), Some(7));
         assert_eq!(t.entries[4], Entry::Assistant { text: " Done.".into() });
         assert_eq!(t.usage, Usage { input_tokens: 120, output_tokens: 40 });
         assert_eq!(t.session_id.as_deref(), Some("s1"));
@@ -1614,6 +1706,75 @@ mod tests {
         assert_eq!(panel.transcript().entries.len(), count);
         panel.stop();
         assert_eq!(stops.load(Ordering::SeqCst), 1, "nothing to stop");
+    }
+
+    #[test]
+    fn a_new_folder_makes_a_new_engine_without_the_old_session() {
+        // The folder and the session of each engine made.
+        type Made = (Option<PathBuf>, Option<String>);
+        let made: Arc<Mutex<Vec<Made>>> = Arc::default();
+        let log = made.clone();
+        let mut panel = AgentPanel::new(
+            move |request: &EngineRequest| {
+                log.lock().unwrap().push((request.folder.map(Path::to_path_buf), request.transcript.session_id.clone()));
+                Built::ready(Box::new(FakeEngine::new(vec![turn()])), "fake")
+            },
+            None,
+        );
+        let ctx = egui::Context::default();
+        let scratch = PathBuf::from("/settings/agent-scratch/0");
+        panel.set_tab(None, Some(scratch.clone()));
+        panel.configure(&ctx, &AgentSettings::default(), &[]);
+        panel.send("a cube");
+        panel.poll();
+        assert_eq!(panel.transcript().session_id.as_deref(), Some("s1"));
+        // The untitled tab saved: its folder now.
+        let file = PathBuf::from("/work/box.c2f");
+        panel.set_tab(Some(&file), Some(PathBuf::from("/work")));
+        panel.configure(&ctx, &AgentSettings::default(), &[]);
+        let made = made.lock().unwrap();
+        assert_eq!(made.last().unwrap(), &(Some(PathBuf::from("/work")), None), "{made:?}");
+        assert!(panel.transcript().session_id.is_none(), "no --resume across folders");
+    }
+
+    #[test]
+    fn a_session_claude_code_lost_is_started_again_once_without_it() {
+        let lost = || vec![Event::Error { message: "Claude Code stopped before the end of the turn (exit status: 1): No conversation found with session ID: s1".into() }];
+        let sessions: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let log = sessions.clone();
+        let mut panel = AgentPanel::new(
+            move |request: &EngineRequest| {
+                log.lock().unwrap().push(request.transcript.session_id.clone());
+                let turns = if request.transcript.session_id.is_some() { vec![lost(), lost()] } else { vec![turn()] };
+                Built::ready(Box::new(FakeEngine::new(turns)), "fake")
+            },
+            None,
+        );
+        panel.transcript.session_id = Some("s1".into());
+        panel.build();
+        panel.send("a cube");
+        while panel.running() {
+            panel.poll();
+        }
+        assert_eq!(sessions.lock().unwrap().last().unwrap(), &None, "made again without the session");
+        let t = panel.transcript();
+        assert!(!t.entries.iter().any(|e| matches!(e, Entry::Notice { error: true, .. })), "{:?}", t.entries);
+        assert!(t.entries.iter().any(|e| matches!(e, Entry::Assistant { .. })), "answered");
+        assert_eq!(t.entries.iter().filter(|e| matches!(e, Entry::User { .. })).count(), 1, "sent once");
+    }
+
+    #[test]
+    fn pictures_are_kept_as_base64_and_old_arrays_still_read() {
+        let mut transcript = Transcript::default();
+        let png = vec![0x89, b'P', b'N', b'G', 0, 255];
+        let message = UserMessage { text: "this".into(), attachments: vec![Attachment::Image { png: png.clone() }] };
+        transcript.push_user(message.clone(), None);
+        let text = serde_json::to_string(&transcript).unwrap();
+        assert!(text.contains("\"png\":\"iVBORwD/\""), "{text}");
+        assert_eq!(serde_json::from_str::<Transcript>(&text).unwrap(), transcript);
+        let old = r#"{"entries":[{"type":"user","message":{"text":"this","attachments":[{"type":"image","png":[137,80,78,71,0,255]}]}}]}"#;
+        let read: Transcript = serde_json::from_str(old).unwrap();
+        assert_eq!(read.entries[0], Entry::User { message, shown: None });
     }
 
     fn temp_store(name: &str) -> PathBuf {

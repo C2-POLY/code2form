@@ -11,14 +11,13 @@
 
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use c2f_eval::customizer::Literal;
 use eframe::egui::{self, Align, Button, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke, Vec2};
-use serde_json::Value;
 
 use super::StudioApp;
-use super::live::{self, CodeEdit};
+use super::live::{self, CodeEdit, Waiter};
 use crate::console::Level;
 use crate::i18n::tr;
 use crate::theme;
@@ -162,7 +161,7 @@ pub struct Pending {
     lines: Vec<Range<usize>>,
     /// Where the answer goes: the agent waits on it. `None` for a review
     /// shown without an agent (a screenshot).
-    reply: Option<Sender<Result<Value, String>>>,
+    reply: Option<Waiter>,
     preview: Option<Receiver<Preview>>,
     /// Why the proposed model does not render, once known.
     problem: Option<String>,
@@ -172,6 +171,11 @@ impl Pending {
     /// Whether the preview is in, or will never be.
     pub fn settled(&self) -> bool {
         self.preview.is_none()
+    }
+
+    /// Whether the agent stopped waiting for the answer.
+    pub fn gone(&self) -> bool {
+        self.reply.as_ref().is_some_and(Waiter::gone)
     }
 }
 
@@ -211,10 +215,10 @@ impl StudioApp {
     /// `reply` until they accept or decline it: the entry point of the
     /// live `edit_code` handler. An edit that cannot be made, or a second
     /// one while a review waits, is refused at once.
-    pub(super) fn review_agent_edit(&mut self, ctx: &egui::Context, edit: CodeEdit, reply: Option<Sender<Result<Value, String>>>) {
-        let refuse = |reply: Option<Sender<Result<Value, String>>>, why: String| {
+    pub(super) fn review_agent_edit(&mut self, ctx: &egui::Context, edit: CodeEdit, reply: Option<Waiter>) {
+        let refuse = |reply: Option<Waiter>, why: String| {
             if let Some(reply) = reply {
-                let _ = reply.send(Err(why));
+                reply.send(Err(why));
             }
         };
         if self.live.review.is_some() {
@@ -320,10 +324,17 @@ impl StudioApp {
     /// Applies the change under review, or declines it, and tells the
     /// agent.
     pub(super) fn answer_review(&mut self, ctx: &egui::Context, accepted: bool) {
+        if self.live.review.as_ref().is_some_and(Pending::gone) {
+            // Accepted now, the change would be made for no one.
+            self.drop_review(ctx, None);
+            self.doc.console.log(Level::Info, live::stopped_waiting());
+            self.agent.note(live::stopped_waiting().into(), false);
+            return;
+        }
         let Some(pending) = self.live.review.take() else { return };
         let Some(index) = self.tab_index(pending.tab) else {
             if let Some(reply) = pending.reply {
-                let _ = reply.send(Err("the tab was closed during the review".into()));
+                reply.send(Err("the tab was closed during the review".into()));
             }
             return;
         };
@@ -331,10 +342,15 @@ impl StudioApp {
         let mut answer = Err(String::new());
         self.in_tab(index, |app| {
             answer = if accepted {
-                // The user may have typed meanwhile: the edit is made again
-                // on the text as it is now.
+                // The user may have typed meanwhile: an edit of text found
+                // is made again on the text as it is now; lines by number
+                // may have moved, and are not.
                 let made = if app.doc.text == pending.state.current {
                     Ok((pending.state.proposed.clone(), pending.lines.clone()))
+                } else if matches!(pending.edit, CodeEdit::Lines { .. }) {
+                    Err("the code changed during the review, and the lines of your `range` may have moved: nothing was \
+                         changed. Call studio_state again and give the range anew"
+                        .to_string())
                 } else {
                     live::apply(&app.doc.text, &pending.edit).map_err(live::refused)
                 };
@@ -347,8 +363,22 @@ impl StudioApp {
             };
         });
         if let Some(reply) = pending.reply {
-            let _ = reply.send(answer);
+            reply.send(answer);
         }
+    }
+
+    /// Closes the review without making its change: the view shows the
+    /// current model again, and the agent, if it still waits, reads `why`.
+    pub(super) fn drop_review(&mut self, ctx: &egui::Context, why: Option<&str>) {
+        let Some(pending) = self.live.review.take() else { return };
+        if let (Some(reply), Some(why)) = (pending.reply, why) {
+            reply.send(Err(why.to_string()));
+        }
+        if let Some(index) = self.tab_index(pending.tab) {
+            let shown = index == self.shelf.active();
+            self.in_tab(index, |app| app.render_when_shown(shown));
+        }
+        ctx.request_repaint();
     }
 }
 

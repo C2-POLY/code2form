@@ -158,18 +158,59 @@ impl AgentSettings {
         let _ = writeln!(text, "agent-max-tool-rounds = {}", self.max_tool_rounds);
     }
 
-    /// What the agent's tools may do: the tools allowed, in `folder` when
-    /// there is one, the `libraries` (the user's and the default ones)
+    /// What the agent's tools may do: the tools allowed, always in
+    /// `folder` (an untitled tab's is a scratch folder of its own, never
+    /// "anywhere"), the `libraries` (the user's and the default ones)
     /// readable besides.
-    pub fn policy(&self, folder: Option<&Path>, libraries: &[PathBuf]) -> Policy {
+    pub fn policy(&self, folder: &Path, libraries: &[PathBuf]) -> Policy {
         let read_only = libraries.iter().cloned().chain(c2f_eval::default_library_paths()).collect();
+        // ---- M4 reconcile: once `guard::Policy` has `ask_first`, set it
+        // here from `self.ask_first`. The in-process engine and the hidden
+        // `mcp --studio` server both build their policy through this. ----
         Policy {
             new_files: self.allow_new_files,
             export: self.allow_export,
             save_part: self.allow_save_part,
             electrify: self.allow_electrify,
-            scope: folder.map(|folder| Scope { folder: folder.to_path_buf(), read_only }),
+            scope: Some(Scope { folder: folder.to_path_buf(), read_only }),
         }
+    }
+
+    /// The settings the `mcp --studio` server needs to guard the tools,
+    /// and the user's `libraries`, as one line of JSON: the engine gives
+    /// it to the server it starts, which thus never reads a `settings.txt`
+    /// older than the engine.
+    pub fn policy_json(&self, libraries: &[PathBuf]) -> String {
+        serde_json::json!({
+            "ask_first": self.ask_first,
+            "new_files": self.allow_new_files,
+            "export": self.allow_export,
+            "save_part": self.allow_save_part,
+            "electrify": self.allow_electrify,
+            "libraries": libraries,
+        })
+        .to_string()
+    }
+
+    /// The settings and the libraries [`AgentSettings::policy_json`]
+    /// wrote; `None` when `text` is not such JSON. A flag left out is as by
+    /// default.
+    pub fn from_policy_json(text: &str) -> Option<(AgentSettings, Vec<PathBuf>)> {
+        let value: serde_json::Value = serde_json::from_str(text).ok()?;
+        let mut agent = AgentSettings::default();
+        let flag = |key: &str, field: &mut bool| {
+            if let Some(on) = value.get(key).and_then(serde_json::Value::as_bool) {
+                *field = on;
+            }
+        };
+        flag("ask_first", &mut agent.ask_first);
+        flag("new_files", &mut agent.allow_new_files);
+        flag("export", &mut agent.allow_export);
+        flag("save_part", &mut agent.allow_save_part);
+        flag("electrify", &mut agent.allow_electrify);
+        let libraries = value.get("libraries")?.as_array()?;
+        let libraries = libraries.iter().filter_map(serde_json::Value::as_str).map(PathBuf::from).filter(|p| p.is_absolute());
+        Some((agent, libraries.collect()))
     }
 
     fn claude_model(&self) -> Option<String> {
@@ -293,11 +334,20 @@ impl Prober {
 // ---- The choice ----
 
 /// The engine picked.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Pick {
     ClaudeCode(PathBuf),
     /// With its key.
     Api(String),
+}
+
+impl fmt::Debug for Pick {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Pick::ClaudeCode(path) => f.debug_tuple("ClaudeCode").field(path).finish(),
+            Pick::Api(_) => f.debug_tuple("Api").field(&"<redacted>").finish(),
+        }
+    }
 }
 
 /// The engine `agent` picks among those of `probe`; the error says, in a
@@ -395,35 +445,121 @@ impl Engine for Unavailable {
     }
 }
 
+/// The folder the agent works in for a tab without a file, `name` setting
+/// it apart from the others': an empty folder of its own in the settings
+/// folder, made when an engine is, never the home folder.
+pub fn scratch_folder(name: &str) -> PathBuf {
+    let settings = crate::recent::settings_dir().unwrap_or_else(|| std::env::temp_dir().join("code2form"));
+    settings.join("agent-scratch").join(name)
+}
+
+/// The files open in the studio with unsaved edits, kept up to date by
+/// the app: the tools that write a file refuse to write onto them.
+pub type UnsavedFiles = Arc<Mutex<Vec<PathBuf>>>;
+
+/// The files the tool `name` called with `args` writes, its paths made
+/// absolute already.
+fn written_files(name: &str, args: &serde_json::Value) -> Vec<PathBuf> {
+    let path = |key: &str| args.get(key).and_then(serde_json::Value::as_str).map(PathBuf::from);
+    match name {
+        "export" => path("output").into_iter().collect(),
+        "electrify" => {
+            let Some(design) = path("path") else { return Vec::new() };
+            let circuit = match args.get("circuit").and_then(serde_json::Value::as_str) {
+                Some(circuit) => design.with_file_name(circuit),
+                None => design.with_extension("c2fc"),
+            };
+            vec![design, circuit]
+        }
+        "save_part" => {
+            let Some(part) = args.get("name").and_then(serde_json::Value::as_str) else { return Vec::new() };
+            let part = part.strip_suffix(".c2f").unwrap_or(part);
+            c2f_eval::user_parts_folder().map(|folder| folder.join(format!("{part}.c2f"))).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Tools that refuse to write onto a file open in the studio with unsaved
+/// edits, which the write would lose or the tab would overwrite.
+struct KeepUnsaved {
+    tools: Registry,
+    unsaved: UnsavedFiles,
+}
+
+impl Tools for KeepUnsaved {
+    fn list(&self) -> Vec<serde_json::Value> {
+        self.tools.list()
+    }
+
+    fn call(&self, name: &str, args: &serde_json::Value) -> Option<Result<Vec<serde_json::Value>, String>> {
+        let open = self.unsaved.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let same = |a: &Path, b: &Path| a == b || a.canonicalize().ok().is_some_and(|a| b.canonicalize().is_ok_and(|b| a == b));
+        if let Some(file) = written_files(name, args).into_iter().find(|file| open.iter().any(|o| same(o, file))) {
+            return Some(Err(format!(
+                "`{name}` would write {}, which is open in the studio with unsaved edits: ask the user to save or close \
+                 it first (or change it with edit_code)",
+                file.display()
+            )));
+        }
+        self.tools.call(name, args)
+    }
+}
+
+/// The folder the agent of `request` works in: the active file's, else a
+/// scratch one (made here), never "anywhere" nor the home folder.
+fn work_folder(request: &EngineRequest) -> PathBuf {
+    let folder = request.folder.map_or_else(|| scratch_folder("default"), Path::to_path_buf);
+    if folder.starts_with(scratch_folder("")) {
+        let _ = std::fs::create_dir_all(&folder);
+    }
+    folder
+}
+
+/// How to run Claude Code for `request`: in its folder, its server started
+/// by `mcp_command` with the policy as the settings say now (not as
+/// `settings.txt` last kept them).
+fn claude_code_options(request: &EngineRequest, claude: PathBuf, mcp_command: (PathBuf, Vec<String>)) -> ClaudeCodeOptions {
+    let agent = request.agent;
+    let (program, mut args) = mcp_command;
+    args.extend(["--policy".to_string(), agent.policy_json(request.libraries)]);
+    ClaudeCodeOptions {
+        claude,
+        cwd: work_folder(request),
+        mcp_command: (program, args),
+        model: agent.claude_model(),
+        resume: request.transcript.session_id.clone(),
+        permission: if agent.ask_first { Permission::AskFirst } else { Permission::ApplyDirectly },
+        write_files: agent.allow_new_files,
+        max_turns: Some(agent.max_tool_rounds),
+    }
+}
+
 /// The engine `request` asks for, the studio's `live` tools among its
-/// tools; `mcp_command` starts the server Claude Code reaches them by.
-pub fn engine_for(request: &EngineRequest, live: Option<Box<dyn Tools>>, mcp_command: (PathBuf, Vec<String>)) -> Built {
+/// tools; `mcp_command` starts the server Claude Code reaches them by. The
+/// tools of the API engine leave alone the `unsaved` files.
+pub fn engine_for(
+    request: &EngineRequest,
+    live: Option<Box<dyn Tools>>,
+    mcp_command: (PathBuf, Vec<String>),
+    unsaved: Option<&UnsavedFiles>,
+) -> Built {
     let Some(probe) = request.probe else {
         return Built::unavailable(tr("Checking the engines…", "Vérification des moteurs…"));
     };
     let agent = request.agent;
+    let folder = work_folder(request);
     match choose(agent, probe) {
         Err(why) => Built::unavailable(why),
         Ok(Pick::ClaudeCode(claude)) => {
-            let cwd = request.folder.map(Path::to_path_buf).or_else(home).unwrap_or_else(std::env::temp_dir);
-            let resume = request.transcript.session_id.clone();
-            let notice = (resume.is_none() && !request.transcript.entries.is_empty()).then(|| {
+            let options = claude_code_options(request, claude, mcp_command);
+            let notice = (options.resume.is_none() && !request.transcript.entries.is_empty()).then(|| {
                 tr(
                     "The earlier messages are shown, but Claude Code starts a new context.",
                     "Les messages précédents restent affichés, mais Claude Code repart d'un contexte neuf.",
                 )
                 .to_string()
             });
-            let options = ClaudeCodeOptions {
-                claude,
-                cwd,
-                mcp_command,
-                model: agent.claude_model(),
-                resume,
-                permission: if agent.ask_first { Permission::AskFirst } else { Permission::ApplyDirectly },
-                write_files: agent.allow_new_files,
-                max_turns: Some(agent.max_tool_rounds),
-            };
             let model = agent.claude_model().unwrap_or_else(|| tr("default model", "modèle par défaut").into());
             Built { notice, ..Built::ready(Box::new(ClaudeCodeEngine::new(options)), format!("Claude Code · {model}")) }
         }
@@ -435,7 +571,11 @@ pub fn engine_for(request: &EngineRequest, live: Option<Box<dyn Tools>>, mcp_com
                     Err(err) => return Built::unavailable(err),
                 };
             }
-            let registry = Guarded::registry(tools, agent.policy(request.folder, request.libraries));
+            if let Some(unsaved) = unsaved {
+                let kept = KeepUnsaved { tools, unsaved: unsaved.clone() };
+                tools = Registry::new().with(Box::new(kept)).expect("a single provider");
+            }
+            let registry = Guarded::registry(tools, agent.policy(&folder, request.libraries));
             let mut options = ApiOptions::new(key, Arc::new(registry));
             options.model = agent.api_model.clone();
             options.max_tool_rounds = agent.max_tool_rounds;
@@ -449,10 +589,6 @@ pub fn engine_for(request: &EngineRequest, live: Option<Box<dyn Tools>>, mcp_com
             Built::ready(Box::new(engine), format!("{} · {model}", EngineChoice::Api.name()))
         }
     }
-}
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
 
 // ---- The settings page ----
@@ -646,7 +782,66 @@ mod tests {
 
     fn built(agent: &AgentSettings, probe: Option<&Probe>, transcript: &Transcript) -> Built {
         let request = EngineRequest { agent, libraries: &[], probe, folder: Some(Path::new("/work")), transcript };
-        engine_for(&request, None, ("/bin/code2form".into(), vec!["mcp".into(), "--studio".into()]))
+        engine_for(&request, None, ("/bin/code2form".into(), vec!["mcp".into(), "--studio".into()]), None)
+    }
+
+    #[test]
+    fn without_a_file_the_agent_works_in_a_scratch_folder_not_anywhere() {
+        let agent = AgentSettings::default();
+        let transcript = Transcript::default();
+        let probe = probe(ready(), true);
+        let scratch = scratch_folder("test-untitled");
+        let request = EngineRequest { agent: &agent, libraries: &[], probe: Some(&probe), folder: Some(&scratch), transcript: &transcript };
+        let options = claude_code_options(&request, "/opt/claude".into(), ("/bin/code2form".into(), vec!["mcp".into(), "--studio".into()]));
+        assert_eq!(options.cwd, scratch);
+        assert!(scratch.is_dir(), "made for the engine");
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let none = EngineRequest { folder: None, ..request };
+        let cwd = claude_code_options(&none, "/opt/claude".into(), ("/bin/code2form".into(), vec![])).cwd;
+        assert!(cwd.ends_with("agent-scratch/default") && Some(&cwd) != home.as_ref(), "{}", cwd.display());
+        // The server Claude Code starts gets the policy as it is now.
+        let (_, args) = options.mcp_command;
+        assert_eq!(args[..3], ["mcp", "--studio", "--policy"]);
+        let (back, libraries) = AgentSettings::from_policy_json(&args[3]).unwrap();
+        assert_eq!((back.ask_first, back.allow_export, libraries.len()), (agent.ask_first, agent.allow_export, 0));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn the_policy_json_reads_back() {
+        let agent = AgentSettings { ask_first: true, allow_export: false, allow_electrify: false, ..AgentSettings::default() };
+        let libraries = vec![PathBuf::from("/libs"), PathBuf::from("relative")];
+        let (back, read) = AgentSettings::from_policy_json(&agent.policy_json(&libraries)).unwrap();
+        assert!(back.ask_first && !back.allow_export && !back.allow_electrify && back.allow_save_part && back.allow_new_files);
+        assert_eq!(read, vec![PathBuf::from("/libs")], "a relative folder is left out");
+        assert!(AgentSettings::from_policy_json("nope").is_none());
+    }
+
+    #[test]
+    fn a_tool_does_not_write_onto_a_file_open_with_unsaved_edits() {
+        let dir = std::env::temp_dir().join(format!("c2f-unsaved-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let open = dir.join("box.c2f");
+        std::fs::write(&open, "cube(1);").unwrap();
+        let unsaved: UnsavedFiles = Arc::new(Mutex::new(vec![open.clone()]));
+        let tools = KeepUnsaved { tools: Registry::builtin(), unsaved: unsaved.clone() };
+        let export = serde_json::json!({ "code": "cube(1);", "output": open });
+        let err = tools.call("export", &export).unwrap().unwrap_err();
+        assert!(err.contains("unsaved edits"), "{err}");
+        let electrify = serde_json::json!({ "path": open, "brief": "x" });
+        assert!(tools.call("electrify", &electrify).unwrap().unwrap_err().contains("unsaved edits"));
+        // Another file, or the tab saved: the tool runs.
+        let elsewhere = serde_json::json!({ "code": "cube(1);", "output": dir.join("box.stl") });
+        assert!(tools.call("export", &elsewhere).unwrap().is_ok());
+        unsaved.lock().unwrap().clear();
+        assert!(!matches!(tools.call("export", &export), Some(Err(e)) if e.contains("unsaved")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_api_key_is_not_in_a_pick_s_debug() {
+        let shown = format!("{:?}", Pick::Api("sk-ant-secret".into()));
+        assert!(!shown.contains("sk-ant-secret") && shown.contains("redacted"), "{shown}");
     }
 
     #[test]
@@ -717,12 +912,11 @@ mod tests {
     #[test]
     fn the_policy_follows_the_settings() {
         let agent = AgentSettings { allow_export: false, ..AgentSettings::default() };
-        let policy = agent.policy(Some(Path::new("/work")), &[PathBuf::from("/libs")]);
+        let policy = agent.policy(Path::new("/work"), &[PathBuf::from("/libs")]);
         assert!(!policy.export && policy.new_files && policy.save_part && policy.electrify);
         let scope = policy.scope.unwrap();
         assert_eq!(scope.folder, Path::new("/work"));
         assert_eq!(scope.read_only[0], Path::new("/libs"));
-        assert!(agent.policy(None, &[]).scope.is_none());
     }
 
     /// A real turn on the user's Claude Code, with Haiku, through the
@@ -739,7 +933,7 @@ mod tests {
         let transcript = Transcript::default();
         let request = EngineRequest { agent: &agent, libraries: &[], probe: Some(&probe), folder: Some(&folder), transcript: &transcript };
         let server = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/code2form");
-        let mut built = engine_for(&request, None, (server, vec!["mcp".into(), "--studio".into()]));
+        let mut built = engine_for(&request, None, (server, vec!["mcp".into(), "--studio".into()]), None);
         assert!(built.problem.is_none(), "{:?}", built.problem);
         let (sender, events) = mpsc::channel();
         let ask = "Call the code2form `render` tool with code `cube(2);`, then reply with the volume alone.";

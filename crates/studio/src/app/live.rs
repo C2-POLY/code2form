@@ -13,6 +13,7 @@
 use std::fmt::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -25,15 +26,26 @@ use serde_json::{Map, Value, json};
 use super::{StudioApp, Tab, find_hit};
 use crate::agent_confirm::{Proposal, confirm_agent_change};
 use crate::console::Level;
+use crate::i18n::tr;
 use crate::pick::Hit;
 
 /// How long a call waits for the UI thread to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
-/// How long a change waits for the user's answer, when they are asked:
-/// time to read an edit's diff and look at its model.
+/// How long a change waits for the user's answer, when they are asked
+/// ("Ask before each change"): time to read an edit's diff and look at
+/// its model. Otherwise a change waits [`ANSWER_WAIT`], for the UI thread
+/// to make it.
 const CONFIRM_WAIT: Duration = Duration::from_secs(600);
-/// How long an edit waits for its render.
-const RENDER_WAIT: Duration = Duration::from_secs(30);
+/// How long a change, once made, waits for its render, the parts it
+/// moved and their flash included: past it the call answers that the
+/// change is made and still renders.
+pub(super) const RENDER_WAIT: Duration = Duration::from_secs(30);
+
+// A call through the studio's socket waits for the longest of them, with
+// room to spare: the studio answers before the caller gives up.
+const _: () = assert!(
+    c2f_agent::studio_link::CALL_TIMEOUT.as_secs() > CONFIRM_WAIT.as_secs() + RENDER_WAIT.as_secs() + ANSWER_WAIT.as_secs()
+);
 /// The longest side of a picture of the view, in pixels.
 const MAX_SHOT: usize = 1200;
 /// The console rows `studio_state` gives, the latest.
@@ -48,6 +60,9 @@ pub struct LiveTools {
     /// The parts of the design last edited, with the text and values they
     /// were read from, to tell which parts the next edit moved.
     parts: PartsSeen,
+    /// The settings say "Ask before each change": a change waits for the
+    /// user's answer. Kept up to date by the app.
+    ask_first: Arc<AtomicBool>,
 }
 
 /// The parts of the design last edited, and what they were read from.
@@ -59,20 +74,64 @@ pub(super) type PartBox = (String, [f32; 3], [f32; 3]);
 /// A call on its way to the UI thread, and where its answer goes.
 pub struct Request {
     op: Op,
+    waiter: Waiter,
+}
+
+/// Where the answer to a call goes, and whether its caller still waits
+/// for it.
+pub(super) struct Waiter {
     reply: Sender<Result<Value, String>>,
+    gone: Arc<AtomicBool>,
+}
+
+impl Waiter {
+    /// A waiter, and the mark its caller sets once it stops waiting.
+    fn new() -> (Waiter, Receiver<Result<Value, String>>, StopsWaiting) {
+        let (reply, answer) = mpsc::channel();
+        let gone = Arc::new(AtomicBool::new(false));
+        (Waiter { reply, gone: gone.clone() }, answer, StopsWaiting(gone))
+    }
+
+    /// Whether the caller stopped waiting (it gave up, or its turn ended):
+    /// the answer would reach no one, and a change made for it nobody
+    /// waits for.
+    pub(super) fn gone(&self) -> bool {
+        self.gone.load(Ordering::SeqCst)
+    }
+
+    /// Answers the caller, if it still listens.
+    pub(super) fn send(self, result: Result<Value, String>) {
+        let _ = self.reply.send(result);
+    }
+}
+
+/// Marks the request gone when its caller stops waiting, however it does.
+struct StopsWaiting(Arc<AtomicBool>);
+
+impl Drop for StopsWaiting {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// What the user reads when a change waiting for them is dropped.
+pub(super) fn stopped_waiting() -> &'static str {
+    tr("The agent stopped waiting; nothing was changed.", "L'agent a cessé d'attendre ; rien n'a été modifié.")
 }
 
 /// What the UI thread is asked to do: each quick, the waiting is done by
-/// the caller.
+/// the caller. A tab is named by its id, which stays while tabs open and
+/// close; the active one when `None`.
 enum Op {
     /// The state of the studio; `tab`'s text, numbered or not.
-    State { tab: Option<usize>, numbered: bool },
+    State { tab: Option<u64>, numbered: bool },
     /// A tab's text, file and parameter values.
-    Snapshot { tab: Option<usize> },
-    /// Edits a tab's text: `{tab_id, generation, changed_lines}`.
-    Edit { tab: Option<usize>, edit: CodeEdit },
+    Snapshot { tab: Option<u64> },
+    /// Edits a tab's text, if it is still at `revision` when one is given:
+    /// `{tab_id, generation, changed_lines, revision}`.
+    Edit { tab: Option<u64>, edit: CodeEdit, revision: Option<String> },
     /// Sets parameters: `{tab_id, generation}`.
-    SetParameters { tab: Option<usize>, values: Map<String, Value> },
+    SetParameters { tab: Option<u64>, values: Map<String, Value> },
     /// The render report of tab `id` once `generation` is rendered;
     /// `null` until then.
     Rendered { id: u64, generation: u64 },
@@ -103,7 +162,7 @@ impl Op {
 pub struct Live {
     tools: LiveTools,
     requests: Receiver<Request>,
-    shot: Option<Sender<Result<Value, String>>>,
+    shot: Option<Waiter>,
     /// The agent's edit waiting for the user's review.
     pub(super) review: Option<super::review::Pending>,
     /// The other changes waiting for the user's answer, in "Ask before
@@ -118,7 +177,7 @@ impl Live {
     /// The live tools of the app drawn in `ctx`, and their requests.
     pub fn new(ctx: &egui::Context) -> Live {
         let (requests, received) = mpsc::channel();
-        let tools = LiveTools { requests, ctx: ctx.clone(), parts: Arc::default() };
+        let tools = LiveTools { requests, ctx: ctx.clone(), parts: Arc::default(), ask_first: Arc::default() };
         Live { tools, requests: received, shot: None, review: None, asking: Vec::new() }
     }
 
@@ -306,48 +365,88 @@ fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_default()
 }
 
-/// The `tab` argument: a tab's index, from 0.
-fn tab_arg(args: &Value) -> Result<Option<usize>, String> {
+/// The `tab` argument: a tab's id, as studio_state lists them.
+fn tab_arg(args: &Value) -> Result<Option<u64>, String> {
     match args.get("tab") {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v.as_u64().map(|n| Some(n as usize)).ok_or_else(|| "`tab` must be a tab's index, from 0, as studio_state lists them".into()),
+        Some(v) => v.as_u64().map(Some).ok_or_else(|| "`tab` must be a tab's `id`, as studio_state lists them".into()),
     }
 }
 
 fn tab_schema() -> Value {
-    json!({ "type": "integer", "minimum": 0, "description": "The tab, by its index in studio_state's `tabs` (default: the active tab)." })
+    json!({ "type": "integer", "minimum": 0, "description": "The tab, by its `id` in studio_state's `tabs` (default: the active tab)." })
+}
+
+/// The revision of a tab's `text`, as studio_state gives it: it changes
+/// with every change of the text, the user's or the agent's.
+pub(super) fn revision(text: &str) -> String {
+    // FNV-1a: the same for the same text, from one call to the next.
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
+    format!("{hash:016x}")
+}
+
+/// Refuses an edit written for `revision` of a text now at another.
+fn check_revision(text: &str, asked: Option<&str>) -> Result<(), String> {
+    match asked {
+        Some(asked) if asked != revision(text) => Err(format!(
+            "the code changed since revision {asked} (the user types too, or another edit landed): call studio_state \
+             again and write the edit against the code as it is now; nothing was changed"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// What a change answers once made but still rendering when its time is
+/// up: `why`, or that it is still rendering.
+fn still_rendering(why: Option<String>) -> Value {
+    let note = why.map_or_else(
+        || format!("the change is made; still rendering after {} s: call studio_state later for the outcome", RENDER_WAIT.as_secs()),
+        |why| format!("the change is made, but its render is unknown ({why}): call studio_state for the outcome"),
+    );
+    json!({ "rendering": true, "note": note })
 }
 
 impl LiveTools {
-    /// Sends `op` to the UI thread and waits for its answer; a change
-    /// waits longer, for the user may be asked.
+    /// Sends `op` to the UI thread and waits for its answer: a change the
+    /// user is asked about waits for them, anything else for the UI
+    /// thread only.
     fn ask(&self, op: Op) -> Result<Value, String> {
-        let wait = if op.changes() { CONFIRM_WAIT } else { ANSWER_WAIT };
-        let (reply, answer) = mpsc::channel();
-        self.requests.send(Request { op, reply }).map_err(|_| "the studio is closing".to_string())?;
+        let wait = if op.changes() && self.ask_first.load(Ordering::SeqCst) { CONFIRM_WAIT } else { ANSWER_WAIT };
+        self.ask_within(op, wait)
+    }
+
+    /// Sends `op` to the UI thread and waits `wait` at most for its answer;
+    /// past it, the request is marked gone and its answer dropped.
+    fn ask_within(&self, op: Op, wait: Duration) -> Result<Value, String> {
+        let (waiter, answer, _gone_on_return) = Waiter::new();
+        self.requests.send(Request { op, waiter }).map_err(|_| "the studio is closing".to_string())?;
         self.ctx.request_repaint();
         match answer.recv_timeout(wait) {
             Ok(result) => result,
-            Err(RecvTimeoutError::Timeout) => {
-                Err(format!("the studio did not answer within {} s (busy, or a dialog is open): try again", wait.as_secs()))
-            }
+            Err(RecvTimeoutError::Timeout) => Err(format!(
+                "the studio did not answer within {} s (busy, or the user did not answer): nothing was changed; try again",
+                wait.as_secs()
+            )),
             Err(RecvTimeoutError::Disconnected) => Err("the studio dropped the request: try again".into()),
         }
     }
 
-    /// Waits for the render of tab `id` numbered `generation`: its report,
-    /// or one saying it is still running.
-    pub(super) fn wait_render(&self, id: u64, generation: u64) -> Result<Value, String> {
-        let deadline = Instant::now() + RENDER_WAIT;
+    /// Waits for the render of tab `id` numbered `generation` until
+    /// `deadline`: its report, or one saying the change is made and still
+    /// renders. Never an error: the change is made.
+    pub(super) fn wait_render(&self, id: u64, generation: u64, deadline: Instant) -> Value {
         loop {
-            let report = self.ask(Op::Rendered { id, generation })?;
-            if !report.is_null() {
-                return Ok(report);
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return still_rendering(None);
             }
-            if Instant::now() >= deadline {
-                return Ok(json!({ "rendering": true, "note": "still rendering after 30 s: call studio_state later for the outcome" }));
+            match self.ask_within(Op::Rendered { id, generation }, left.min(ANSWER_WAIT)) {
+                Ok(report) if !report.is_null() => return report,
+                Ok(_) => {}
+                Err(why) if Instant::now() < deadline => return still_rendering(Some(why)),
+                Err(_) => return still_rendering(None),
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
         }
     }
 
@@ -382,12 +481,22 @@ impl LiveTools {
             }
             _ => return Err("give either `edits` (a list of {old, new}) or `range` with `new`".into()),
         };
-        let done = self.ask(Op::Edit { tab: tab_arg(args)?, edit })?;
-        let report = self.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0))?;
-        let mut result = json!({ "edited": true, "changed_lines": done["changed_lines"], "render": report });
+        let revision = match args.get("revision") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_str().ok_or("`revision` is the text studio_state gave")?.to_string()),
+        };
+        if matches!(edit, CodeEdit::Lines { .. }) && revision.is_none() {
+            return Err("with `range`, give `revision` as studio_state (or your last edit) gave it: line numbers hold \
+                        only for the text they were read from"
+                .into());
+        }
+        let done = self.ask(Op::Edit { tab: tab_arg(args)?, edit, revision })?;
+        let deadline = Instant::now() + RENDER_WAIT;
+        let report = self.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0), deadline);
+        let mut result = json!({ "edited": true, "changed_lines": done["changed_lines"], "revision": done["revision"], "render": report });
         if let Some(part) = done["part"].as_str().filter(|_| report["ok"] == true) {
             result["part"] = json!(part);
-            if let Some(changed) = self.touched_parts(&done, part) {
+            if let Some(changed) = self.touched_parts(&done, part, deadline) {
                 result["parts_changed"] = changed;
             }
         }
@@ -396,10 +505,23 @@ impl LiveTools {
 
     /// Once an edit inside part `part` rendered: flashes the part in the
     /// view, and gives the parts whose box the edit changed, when the
-    /// parts before it are known from the last edit.
-    fn touched_parts(&self, done: &Value, part: &str) -> Option<Value> {
-        let snapshot = self.ask(Op::Snapshot { tab: done["tab"].as_u64().map(|n| n as usize) }).ok()?;
-        let after = design_parts(&snapshot).ok()?;
+    /// parts before it are known from the last edit. Skipped past
+    /// `deadline`, the call's budget.
+    fn touched_parts(&self, done: &Value, part: &str, deadline: Instant) -> Option<Value> {
+        let left = || Some(deadline.saturating_duration_since(Instant::now())).filter(|left| !left.is_zero());
+        let snapshot = self.ask_within(Op::Snapshot { tab: done["tab_id"].as_u64() }, left()?.min(ANSWER_WAIT)).ok()?;
+        // The design is rendered again for its parts, on a thread of its
+        // own: one that takes too long is left to finish alone.
+        let (sender, parts) = mpsc::channel();
+        let read = snapshot.clone();
+        std::thread::Builder::new()
+            .name("c2f-live-parts".into())
+            .stack_size(crate::worker::STACK)
+            .spawn(move || {
+                let _ = sender.send(design_parts(&read));
+            })
+            .ok()?;
+        let after = parts.recv_timeout(left()?).ok()?.ok()?;
         let key = |text: &Value| json!([text, snapshot["values"]]);
         let before = {
             let mut cache = self.parts.lock().ok()?;
@@ -407,8 +529,8 @@ impl LiveTools {
             *cache = Some((key(&snapshot["text"]), after.clone()));
             before
         };
-        if let Some((_, lo, hi)) = after.iter().find(|p| p.0 == part) {
-            let _ = self.ask(Op::Flash { id: done["tab_id"].as_u64().unwrap_or(0), lo: *lo, hi: *hi });
+        if let (Some((_, lo, hi)), Some(left)) = (after.iter().find(|p| p.0 == part), left()) {
+            let _ = self.ask_within(Op::Flash { id: done["tab_id"].as_u64().unwrap_or(0), lo: *lo, hi: *hi }, left.min(ANSWER_WAIT));
         }
         Some(json!(changed_parts(&before?, &after)))
     }
@@ -416,7 +538,8 @@ impl LiveTools {
     fn set_parameters(&self, args: &Value) -> Result<Vec<Value>, String> {
         let values = args.get("values").and_then(Value::as_object).ok_or("`values` must be an object of names and values")?;
         let done = self.ask(Op::SetParameters { tab: tab_arg(args)?, values: values.clone() })?;
-        let report = self.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0))?;
+        let deadline = Instant::now() + RENDER_WAIT;
+        let report = self.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0), deadline);
         Ok(vec![text(pretty(&json!({ "set": true, "parameters": done["parameters"], "render": report })))])
     }
 
@@ -549,7 +672,8 @@ impl Tools for LiveTools {
                 "name": "studio_state",
                 "title": "What the studio shows",
                 "description": "Reads the Code2Form studio the user has open, as it is on screen, unsaved edits included: \
-                                the open tabs (index, file, whether unsaved, design or circuit), the active tab's code with \
+                                the open tabs (`id`, which names a tab in the other tools, file, whether unsaved, design or \
+                                circuit, and `revision`, which changes with every change of its text), the active tab's code with \
                                 line numbers (`N<tab>` before each line: leave them out of edit_code's `old`), its customizer \
                                 parameters with their current values, what is selected (a circuit's part, pin or wire, the \
                                 cursor's line), the last render (errors with their line, warnings, volume, bounding box in mm), \
@@ -571,9 +695,12 @@ impl Tools for LiveTools {
                                 error and its line, the warnings, the volume and the bounding box, so you can fix your own \
                                 errors. Either `edits`, a list of {old, new}: each `old` must occur exactly once in the text \
                                 (copied exactly, without line numbers), else nothing is changed and the error says how many \
-                                times it occurs; the edits apply in order, all or none. Or `range` with `new`: lines \
-                                start_line to end_line (from 1, both included) become `new`; end_line = start_line - 1 \
-                                inserts `new` before start_line. The file is not saved: the user saves it.",
+                                times it occurs; the edits apply in order, all or none. Or `range` with `new` and \
+                                `revision`: lines start_line to end_line (from 1, both included) become `new`; end_line = \
+                                start_line - 1 inserts `new` before start_line. `revision` (required with `range`, optional \
+                                with `edits`) is the tab's revision studio_state or your last edit gave: when the text \
+                                changed since, nothing is changed and you read it again. The result gives the new \
+                                `revision`. The file is not saved: the user saves it.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -601,6 +728,7 @@ impl Tools for LiveTools {
                             "required": ["start_line", "end_line"],
                         },
                         "new": { "type": "string", "description": "With `range`: the lines that replace them." },
+                        "revision": { "type": "string", "description": "The tab's `revision` the edit was written against, as studio_state or the last edit gave it; required with `range`." },
                     },
                 },
             }),
@@ -731,14 +859,18 @@ impl StudioApp {
 
     /// Answers the live tools' requests, each frame.
     pub(super) fn serve_live(&mut self, ctx: &egui::Context) {
+        self.live.tools.ask_first.store(self.settings.agent.ask_first, Ordering::SeqCst);
         self.take_live_shot(ctx);
-        while let Ok(Request { op, reply }) = self.live.requests.try_recv() {
+        self.drop_gone_questions(ctx);
+        while let Ok(Request { op, waiter }) = self.live.requests.try_recv() {
+            // Its caller gave up before it was served: nothing is done.
+            if waiter.gone() {
+                continue;
+            }
             if let Op::Screenshot = op {
                 match self.ask_live_shot(ctx) {
-                    Ok(()) => self.live.shot = Some(reply),
-                    Err(why) => {
-                        let _ = reply.send(Err(why));
-                    }
+                    Ok(()) => self.live.shot = Some(waiter),
+                    Err(why) => waiter.send(Err(why)),
                 }
                 continue;
             }
@@ -747,28 +879,66 @@ impl StudioApp {
             // the other changes through a dialog.
             if op.changes() && self.settings.agent.ask_first {
                 match op {
-                    Op::Edit { tab, edit } => {
-                        let index = tab.unwrap_or(self.shelf.active());
-                        if index < self.shelf.len() {
-                            self.in_tab(index, |app| app.review_agent_edit(ctx, edit, Some(reply)));
-                        } else {
-                            let _ = reply.send(Err(format!("no tab {index}: there are {} (studio_state lists them)", self.shelf.len())));
+                    Op::Edit { tab, edit, revision } => {
+                        let reviewed = self.on_tab(tab, |app, _| {
+                            check_revision(&app.doc.text, revision.as_deref())?;
+                            Ok(Value::Null)
+                        });
+                        match reviewed {
+                            Ok(_) => {
+                                let index = self.tab_index(tab.unwrap_or(self.doc.id)).unwrap_or(self.shelf.active());
+                                self.in_tab(index, |app| app.review_agent_edit(ctx, edit, Some(waiter)));
+                            }
+                            Err(why) => waiter.send(Err(why)),
                         }
                     }
                     op => match self.propose(&op) {
-                        Ok(proposal) => self.live.asking.push((Request { op, reply }, proposal)),
-                        Err(why) => {
-                            let _ = reply.send(Err(why));
-                        }
+                        Ok(proposal) => self.live.asking.push((Request { op, waiter }, proposal)),
+                        Err(why) => waiter.send(Err(why)),
                     },
                 }
                 continue;
             }
             let answer = self.answer_live(ctx, op);
-            // A caller that gave up waiting is gone.
-            let _ = reply.send(answer);
+            waiter.send(answer);
         }
         self.confirm_live(ctx);
+    }
+
+    /// Drops the changes waiting for the user whose agent stopped waiting
+    /// for them, closing their review or dialog: accepted later, they would
+    /// be made for no one. The user is told.
+    fn drop_gone_questions(&mut self, ctx: &egui::Context) {
+        let before = self.live.asking.len();
+        self.live.asking.retain(|(request, _)| !request.waiter.gone());
+        let mut dropped = before - self.live.asking.len();
+        if self.live.review.as_ref().is_some_and(|pending| pending.gone()) {
+            self.drop_review(ctx, None);
+            dropped += 1;
+        }
+        if dropped > 0 {
+            self.doc.console.log(Level::Info, stopped_waiting());
+            self.agent.note(stopped_waiting().into(), false);
+            ctx.request_repaint();
+        }
+    }
+
+    /// Refuses every change waiting for the user, `why` telling the agent:
+    /// the agent's turn is over, nobody waits for them any more.
+    pub(super) fn drop_live_questions(&mut self, ctx: &egui::Context, why: &str) {
+        let asked = std::mem::take(&mut self.live.asking);
+        let reviewed = self.live.review.is_some();
+        let count = asked.len() + usize::from(reviewed);
+        for (request, _) in asked {
+            request.waiter.send(Err(why.to_string()));
+        }
+        if reviewed {
+            self.drop_review(ctx, Some(why));
+        }
+        if count > 0 {
+            self.doc.console.log(Level::Info, stopped_waiting());
+            ctx.request_repaint();
+        }
     }
 
     /// Asks the user about the first change waiting, and makes it or
@@ -783,18 +953,24 @@ impl StudioApp {
         }
     }
 
-    /// Makes the first change waiting, or refuses it.
+    /// Makes the first change waiting, or refuses it; one its agent stopped
+    /// waiting for is not made.
     fn answer_asked(&mut self, ctx: &egui::Context, accept: bool) {
         if self.live.asking.is_empty() {
             return;
         }
-        let (Request { op, reply }, _) = self.live.asking.remove(0);
+        let (Request { op, waiter }, _) = self.live.asking.remove(0);
+        if waiter.gone() {
+            self.doc.console.log(Level::Info, stopped_waiting());
+            self.agent.note(stopped_waiting().into(), false);
+            return;
+        }
         let result = if accept {
             self.answer_live(ctx, op)
         } else {
             Err("declined by the user: the change was not made. Ask them what they want instead.".into())
         };
-        let _ = reply.send(result);
+        waiter.send(result);
     }
 
     /// The change `op` makes, to show the user in a dialog before it is
@@ -849,11 +1025,10 @@ impl StudioApp {
                     "values": values,
                 }))
             }),
-            Op::Edit { tab, edit } => self.on_tab(tab, |app, index| {
+            Op::Edit { tab, edit, revision } => self.on_tab(tab, |app, _| {
+                check_revision(&app.doc.text, revision.as_deref())?;
                 let (text, lines) = apply(&app.doc.text, &edit).map_err(refused)?;
-                let mut done = app.land_agent_edit(ctx, text, lines);
-                done["tab"] = json!(index);
-                Ok(done)
+                Ok(app.land_agent_edit(ctx, text, lines))
             }),
             Op::Flash { id, lo, hi } => {
                 self.flash_part(id, lo, hi);
@@ -930,7 +1105,9 @@ impl StudioApp {
             }
             Op::Circuit(op) => self.answer_circuit(ctx, op),
             Op::Open { path } => {
-                let dir = self.doc.directory().ok_or("the active tab has no folder")?;
+                // The folder the agent works in: an untitled tab's is its
+                // scratch folder, not the working directory.
+                let dir = self.agent_folder();
                 let asked = Path::new(&path);
                 let full = if asked.is_absolute() { asked.to_path_buf() } else { dir.join(asked) };
                 let full = full.canonicalize().map_err(|err| format!("cannot open {}: {err}", full.display()))?;
@@ -940,18 +1117,19 @@ impl StudioApp {
                 }
                 self.open(ctx, full.clone());
                 let index = self.tab_of(&full).ok_or_else(|| format!("cannot open {} (the console says why)", full.display()))?;
-                Ok(json!({ "opened": full.display().to_string(), "tab": index }))
+                let id = self.shelf.iter(&self.doc).nth(index).map(|tab| tab.id);
+                Ok(json!({ "opened": full.display().to_string(), "tab": id, "index": index }))
             }
         }
     }
 
-    /// Runs `f` on tab `tab` (by default the active one), as if it were
-    /// the active tab, with its index.
-    fn on_tab(&mut self, tab: Option<usize>, f: impl FnOnce(&mut Self, usize) -> Result<Value, String>) -> Result<Value, String> {
-        let index = tab.unwrap_or(self.shelf.active());
-        if index >= self.shelf.len() {
-            return Err(format!("no tab {index}: there are {} (studio_state lists them)", self.shelf.len()));
-        }
+    /// Runs `f` on the tab of id `tab` (by default the active one), as if
+    /// it were the active tab, with its index.
+    fn on_tab(&mut self, tab: Option<u64>, f: impl FnOnce(&mut Self, usize) -> Result<Value, String>) -> Result<Value, String> {
+        let index = match tab {
+            None => self.shelf.active(),
+            Some(id) => self.tab_index(id).ok_or_else(|| format!("no tab has the id {id}: it was closed (studio_state lists the tabs)"))?,
+        };
         let mut result = Err(String::new());
         self.in_tab(index, |app| result = f(app, index));
         result
@@ -975,7 +1153,9 @@ impl StudioApp {
             .enumerate()
             .map(|(i, tab)| {
                 json!({
+                    "id": tab.id,
                     "index": i,
+                    "revision": revision(&tab.text),
                     "file": tab.path.as_ref().map(|p| p.display().to_string()),
                     "name": tab.file_name(),
                     "unsaved": tab.is_dirty(),
@@ -1025,7 +1205,9 @@ impl StudioApp {
             .collect();
         json!({
             "tabs": tabs,
-            "tab": active,
+            "tab": doc.id,
+            "index": active,
+            "revision": revision(&doc.text),
             "file": doc.path.as_ref().map(|p| p.display().to_string()),
             "kind": if doc.is_circuit() { "circuit" } else { "design" },
             "unsaved": doc.is_dirty(),
@@ -1066,11 +1248,11 @@ impl StudioApp {
             })
         });
         let Some(image) = image else { return };
-        let Some(reply) = self.live.shot.take() else { return };
+        let Some(waiter) = self.live.shot.take() else { return };
         let answer = view_png(&image, self.view_rect, ctx.pixels_per_point())
             .map(|png| c2f_agent::image_content(&png))
             .ok_or_else(|| "the 3D view has no size on screen".into());
-        let _ = reply.send(answer);
+        waiter.send(answer);
     }
 }
 
@@ -1231,8 +1413,13 @@ mod tests {
         assert_eq!(app.doc.agent_marks, vec![2..3]);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), saved, "the file is not saved");
 
+        // The edit gave the text's new revision, the one studio_state reads.
+        let state = report(&call(&mut app, &ctx, "studio_state", json!({})).unwrap());
+        assert_eq!(done["revision"], state["revision"]);
+        assert_eq!(state["tabs"][0]["id"], state["tab"]);
         // A mistake comes back with its line, for the agent to fix.
-        let failed = report(&call(&mut app, &ctx, "edit_code", json!({ "range": { "start_line": 3, "end_line": 3 }, "new": "cube([width, 30, 5]" })).unwrap());
+        let range = json!({ "range": { "start_line": 3, "end_line": 3 }, "new": "cube([width, 30, 5]", "revision": done["revision"] });
+        let failed = report(&call(&mut app, &ctx, "edit_code", range).unwrap());
         assert_eq!(failed["render"]["ok"], false, "{failed}");
         assert!(failed["render"]["error_line"].is_number(), "{failed}");
         let refused = call(&mut app, &ctx, "edit_code", json!({ "edits": [{ "old": "nothing", "new": "x" }] })).unwrap_err();
@@ -1360,6 +1547,143 @@ mod tests {
     }
 
     #[test]
+    fn a_line_range_needs_the_revision_it_was_read_at_and_a_tab_is_named_by_its_id() {
+        let (dir, file) = scratch("revision", "width = 20;\ncube([width, 10, 5]);\n");
+        let other = dir.join("other.c2f");
+        std::fs::write(&other, "sphere(1);\n").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        let range = |revision: Value| json!({ "range": { "start_line": 1, "end_line": 1 }, "new": "width = 30;", "revision": revision });
+        let err = call(&mut app, &ctx, "edit_code", json!({ "range": { "start_line": 1, "end_line": 1 }, "new": "x" })).unwrap_err();
+        assert!(err.contains("revision"), "{err}");
+        let read = revision(&app.doc.text);
+        // The user adds a line on top: line 1 is not the line read.
+        app.doc.text.insert_str(0, "// mine\n");
+        let err = call(&mut app, &ctx, "edit_code", range(json!(read))).unwrap_err();
+        assert!(err.contains("changed since") && err.contains("nothing was changed"), "{err}");
+        assert!(app.doc.text.starts_with("// mine\nwidth = 20;"), "{}", app.doc.text);
+        let now = revision(&app.doc.text);
+        let done = report(&call(&mut app, &ctx, "edit_code", range(json!(now))).unwrap());
+        assert_eq!(app.doc.text, "width = 30;\nwidth = 20;\ncube([width, 10, 5]);\n");
+        assert_eq!(done["revision"], json!(revision(&app.doc.text)));
+
+        // Another tab, named by its id, whichever is active.
+        let opened = report(&call(&mut app, &ctx, "open_file", json!({ "path": "other.c2f" })).unwrap());
+        let first = app.shelf.iter(&app.doc).next().unwrap().id;
+        assert_ne!(opened["tab"], json!(first));
+        let edit = json!({ "tab": first, "edits": [{ "old": "width = 30;", "new": "width = 31;" }] });
+        call(&mut app, &ctx, "edit_code", edit).unwrap();
+        assert!(app.shelf.iter(&app.doc).next().unwrap().text.starts_with("width = 31;"));
+        assert_eq!(app.doc.text, "sphere(1);\n", "the active tab is left alone");
+        assert!(call(&mut app, &ctx, "studio_state", json!({ "tab": 99 })).unwrap_err().contains("no tab has the id 99"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_change_the_agent_stopped_waiting_for_is_dropped_not_applied_later() {
+        let (dir, file) = scratch("gone", PARTS);
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        app.settings.agent.ask_first = true;
+        let original = app.doc.text.clone();
+        let frame = |app: &mut StudioApp| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                app.receive();
+                app.serve_live(ctx);
+                app.receive_review();
+            });
+        };
+        // An edit whose caller gives up after a short wait.
+        let tools = app.live_tools();
+        let edit = CodeEdit::Replace(vec![("[20, 10, 2]".into(), "[20, 10, 4]".into())]);
+        let caller = std::thread::spawn(move || tools.ask_within(Op::Edit { tab: None, edit, revision: None }, Duration::from_millis(1500)));
+        let start = Instant::now();
+        while app.live.review.is_none() {
+            assert!(start.elapsed() < Duration::from_secs(60), "not reviewed");
+            frame(&mut app);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(caller.join().unwrap().unwrap_err().contains("nothing was changed"));
+        frame(&mut app);
+        assert!(app.live.review.is_none(), "its review is closed");
+        app.answer_review(&ctx, true);
+        assert_eq!(app.doc.text, original, "accepting later changes nothing");
+        assert!(app.doc.console.rows().any(|r| r.1.contains("stopped waiting")));
+
+        // A parameter's dialog, likewise; and the next edit is not held up.
+        let tools = app.live_tools();
+        let values = json!({ "width": 2 }).as_object().unwrap().clone();
+        let caller = std::thread::spawn(move || tools.ask_within(Op::SetParameters { tab: None, values }, Duration::from_millis(1500)));
+        let start = Instant::now();
+        while app.live.asking.is_empty() && !caller.is_finished() {
+            assert!(start.elapsed() < Duration::from_secs(60), "not asked");
+            frame(&mut app);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(caller.join().unwrap().is_err());
+        frame(&mut app);
+        assert!(app.live.asking.is_empty(), "its dialog is closed");
+
+        // The panel's turn ends while a review waits: the agent is told.
+        app.follow_agent_turn(&ctx, true);
+        let tools = app.live_tools();
+        let args = json!({ "edits": [{ "old": "[20, 10, 5]", "new": "[25, 10, 5]" }] });
+        let caller = std::thread::spawn(move || tools.call("edit_code", &args).expect("a live tool"));
+        let start = Instant::now();
+        while app.live.review.is_none() {
+            assert!(start.elapsed() < Duration::from_secs(60), "not reviewed");
+            frame(&mut app);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.follow_agent_turn(&ctx, false);
+        assert!(caller.join().unwrap().unwrap_err().contains("turn ended"));
+        assert!(app.live.review.is_none());
+        assert_eq!(app.doc.text, original);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_range_reviewed_while_the_user_typed_is_not_applied() {
+        let (dir, file) = scratch("review-range", PARTS);
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        app.settings.agent.ask_first = true;
+        let tools = app.live_tools();
+        let args = json!({ "range": { "start_line": 1, "end_line": 1 }, "new": "cube(1);", "revision": revision(&app.doc.text) });
+        let caller = std::thread::spawn(move || tools.call("edit_code", &args).expect("a live tool"));
+        let start = Instant::now();
+        while app.live.review.is_none() {
+            assert!(start.elapsed() < Duration::from_secs(60), "not reviewed");
+            app.receive();
+            app.serve_live(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.doc.text.insert_str(0, "// mine\n");
+        let typed = app.doc.text.clone();
+        app.answer_review(&ctx, true);
+        let err = caller.join().unwrap().unwrap_err();
+        assert!(err.contains("range") && err.contains("studio_state"), "{err}");
+        assert_eq!(app.doc.text, typed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn waiting_for_a_render_ends_at_the_deadline_with_the_change_made() {
+        let ctx = egui::Context::default();
+        // Nobody serves the requests: the render never comes.
+        let live = Live::new(&ctx);
+        let tools = live.tools();
+        let start = Instant::now();
+        let report = tools.wait_render(0, 1, Instant::now() + Duration::from_millis(200));
+        assert!(start.elapsed() < Duration::from_secs(5), "bounded by the deadline");
+        assert_eq!(report["rendering"], true);
+        assert!(report["note"].as_str().unwrap().contains("the change is made"), "{report}");
+        // A change without "Ask before each change" waits for the UI only.
+        assert!(!tools.ask_first.load(Ordering::SeqCst));
+        drop(live);
+    }
+
+    #[test]
     fn the_tools_are_named_apart_from_the_built_in_ones() {
         let ctx = egui::Context::default();
         let tools = Live::new(&ctx).tools();
@@ -1425,7 +1749,8 @@ mod tests {
         app.doc.text = app.doc.text.replace("30, 5", "31, 5");
         let refused = call(&mut app, &ctx, "edit_code", json!({ "edits": [{ "old": "cube([width, 30, 5]);", "new": "x" }] })).unwrap_err();
         assert!(refused.contains("studio_state"), "{refused}");
-        let refused = call(&mut app, &ctx, "edit_code", json!({ "range": { "start_line": 9, "end_line": 9 }, "new": "x" })).unwrap_err();
+        let current = revision(&app.doc.text);
+        let refused = call(&mut app, &ctx, "edit_code", json!({ "range": { "start_line": 9, "end_line": 9 }, "new": "x", "revision": current })).unwrap_err();
         assert!(refused.contains("call studio_state again"), "{refused}");
         assert!(app.doc.text.contains("abcdefghij// mine"));
         let _ = std::fs::remove_dir_all(&dir);

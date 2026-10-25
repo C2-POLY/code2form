@@ -196,7 +196,10 @@ behind the window.
 
 Parameters set and circuit edits get a dialog instead, with the text
 before and after, and **Apply** or **Decline**. The agent waits for your
-answer up to ten minutes.
+answer up to ten minutes. Once it stops waiting (the time is up, or its
+turn ends or is stopped), the review or the dialog closes and nothing is
+changed; the console says "The agent stopped waiting; nothing was
+changed."
 
 With Claude Code, this mode also takes away its own Edit and Write
 tools: it reads the folder, and changes things only through the studio's
@@ -257,8 +260,8 @@ names another path, for the studio and the server alike.
 
 | Tool | What it does |
 |---|---|
-| `studio_state` | The open tabs, the active tab's code with line numbers, its parameters and values, the selection, the last render, the lines the agent last changed and the console |
-| `edit_code` | Replaces text that occurs exactly once, or a range of lines, in a tab's code as one undo step; renders and gives the report |
+| `studio_state` | The open tabs (each with its `id` and the `revision` of its text), the active tab's code with line numbers, its parameters and values, the selection, the last render, the lines the agent last changed and the console |
+| `edit_code` | Replaces text that occurs exactly once, or a range of lines, in a tab's code as one undo step; renders and gives the report and the new `revision`. A range needs the `revision` it was read at, and is refused once the text changed since |
 | `set_parameters` | Sets customizer parameters as the Parameters card does; renders and gives the report |
 | `view_image` | A PNG of the view as you see it, or from a preset view, or the sheet of views |
 | `focus` | Selects a part (a design's `part()`, a circuit's part, pin or wire), frames the view on it, and shows a line of the code |
@@ -275,14 +278,16 @@ names another path, for the studio and the server alike.
   finds no studio, and the Claude Code engine, which reaches the live
   tools through it, has the built-in tools only. The API engine has the
   live tools, in the app itself.
-- **An untitled document** has no folder. Claude Code then works in your
-  home folder; the API engine's paths are not held to a folder. Save the
-  file first.
+- **An untitled document** has no folder. The agent then works in an
+  empty scratch folder of its own, `agent-scratch/tab-N` in the settings
+  folder, and nowhere else. Save the file and the agent moves to its
+  folder, in a new Claude Code session.
 - **Pointing in a design** goes by faces: a right-click gives a face, and
   the `part()` it is in. There is no selection of a design's objects to
   send as a chip, as a circuit's parts are.
 - **The live tools act on the active tab**, but for `studio_state`,
-  `edit_code` and `set_parameters`, which take a `tab`. `assembly` needs
+  `edit_code` and `set_parameters`, which take a `tab` by the `id`
+  `studio_state` gives. `assembly` needs
   the circuit saved.
 - **Edits are not saved.** The agent changes the document in the app;
   you save it.

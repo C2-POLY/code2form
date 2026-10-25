@@ -68,9 +68,10 @@ fn main() -> ExitCode {
     // An agent run by the studio (or by anyone, with the app's executable
     // and no c2f installed) serves the tools there, the live ones too, on
     // stdin and stdout, without a window.
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args == ["mcp", "--studio"] {
-        return mcp();
+    // Not `args()`, which panics on an argument that is not UTF-8.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(rest) = studio_server_args(&args) {
+        return mcp(rest);
     }
     // Old macOS versions add a process serial number to apps the Finder starts.
     let paths: Vec<PathBuf> =
@@ -154,8 +155,28 @@ fn main() -> ExitCode {
     if ERRORS.failed.load(Ordering::Relaxed) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
+/// The arguments after `mcp --studio`, when the command line starts so.
+fn studio_server_args(args: &[std::ffi::OsString]) -> Option<&[std::ffi::OsString]> {
+    match args {
+        [mcp, studio, rest @ ..] if mcp == "mcp" && studio == "--studio" => Some(rest),
+        _ => None,
+    }
+}
+
+/// What the server lets the agent do: the `--policy` JSON the engine
+/// gives (`args`), else `CODE2FORM_AGENT_POLICY`, else the settings as
+/// `settings.txt` keeps them.
+fn server_policy(args: &[std::ffi::OsString]) -> (agent_setup::AgentSettings, Vec<PathBuf>) {
+    let given = args.iter().position(|a| a == "--policy").and_then(|at| args.get(at + 1)?.to_str().map(str::to_string));
+    let spec = given.or_else(|| std::env::var("CODE2FORM_AGENT_POLICY").ok());
+    spec.and_then(|spec| agent_setup::AgentSettings::from_policy_json(&spec)).unwrap_or_else(|| {
+        let settings = settings::Settings::load(settings::store().as_deref());
+        (settings.agent, settings.library_folders)
+    })
+}
+
 /// `code2form mcp --studio`: `c2f mcp --studio`, from the app itself.
-fn mcp() -> ExitCode {
+fn mcp(args: &[std::ffi::OsString]) -> ExitCode {
     eprintln!("code2form mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
     let tools = match c2f_agent::Registry::builtin().with(Box::new(c2f_agent::studio_link::StudioProxy::new())) {
         Ok(tools) => tools,
@@ -164,11 +185,16 @@ fn mcp() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // What the user lets the agent do, from the studio's settings: Claude
-    // Code starts this server in the active file's folder, its scope.
-    let settings = settings::Settings::load(settings::store().as_deref());
-    let folder = std::env::current_dir().ok();
-    let policy = settings.agent.policy(folder.as_deref(), &settings.library_folders);
+    // What the user lets the agent do: Claude Code starts this server in
+    // the active file's folder (a scratch one for an untitled tab), its
+    // scope; never "anywhere".
+    let (agent, libraries) = server_policy(args);
+    let folder = std::env::current_dir().unwrap_or_else(|_| {
+        let scratch = agent_setup::scratch_folder("default");
+        let _ = std::fs::create_dir_all(&scratch);
+        scratch
+    });
+    let policy = agent.policy(&folder, &libraries);
     let tools = c2f_agent::guard::Guarded::registry(tools, policy);
     match c2f_agent::Server::new(tools).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -204,6 +230,34 @@ impl log::Log for Errors {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+
+    #[test]
+    fn the_server_s_arguments_may_be_any_bytes() {
+        use std::ffi::OsString;
+        let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(super::studio_server_args(&args(&["mcp", "--studio"])), Some(&[][..]));
+        let with = args(&["mcp", "--studio", "--policy", "{}"]);
+        assert_eq!(super::studio_server_args(&with).map(<[_]>::len), Some(2));
+        assert!(super::studio_server_args(&args(&["box.c2f"])).is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            // Not UTF-8: a file to open, no panic.
+            let odd = vec![OsString::from_vec(vec![0x66, 0xff, 0x6f])];
+            assert!(super::studio_server_args(&odd).is_none());
+        }
+    }
+
+    #[test]
+    fn the_server_takes_the_policy_it_is_given() {
+        use std::ffi::OsString;
+        let agent = crate::agent_setup::AgentSettings { allow_export: false, ask_first: true, ..Default::default() };
+        let json = agent.policy_json(&[std::path::PathBuf::from("/libs")]);
+        let args = [OsString::from("--policy"), OsString::from(json)];
+        let (back, libraries) = super::server_policy(&args);
+        assert!(!back.allow_export && back.ask_first);
+        assert_eq!(libraries, [std::path::PathBuf::from("/libs")]);
+    }
 
     /// The studio's agent calls the very tools `c2f mcp` serves.
     #[test]

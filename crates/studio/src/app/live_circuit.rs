@@ -13,6 +13,7 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use c2f_agent::Tools;
 use c2f_circuit::check::{self, Severity};
@@ -21,7 +22,7 @@ use c2f_lang::Span;
 use eframe::egui;
 use serde_json::{Map, Value, json};
 
-use super::live::LiveTools;
+use super::live::{LiveTools, RENDER_WAIT};
 use super::{StudioApp, find_hit};
 use crate::console::Level;
 use crate::mount;
@@ -567,13 +568,13 @@ fn parse_disconnect(args: &Value) -> Result<CircuitEdit, String> {
 /// Makes `edit` in the studio and waits for its render.
 fn modify(tools: &LiveTools, edit: CircuitEdit) -> Result<Vec<Value>, String> {
     let done = tools.ask_circuit(CircuitOp::Edit(edit))?;
-    let report = tools.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0))?;
+    let report = tools.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0), Instant::now() + RENDER_WAIT);
     Ok(vec![text(pretty(&json!({ "done": done["done"], "check": done["check"], "render": report })))])
 }
 
 fn check_live(tools: &LiveTools) -> Result<Vec<Value>, String> {
     let shown = tools.ask_circuit(CircuitOp::Refresh)?;
-    let render = tools.wait_render(shown["tab_id"].as_u64().unwrap_or(0), shown["generation"].as_u64().unwrap_or(0))?;
+    let render = tools.wait_render(shown["tab_id"].as_u64().unwrap_or(0), shown["generation"].as_u64().unwrap_or(0), Instant::now() + RENDER_WAIT);
     let call = json!({ "code": shown["text"], "working_dir": shown["dir"] });
     // A report, whether the tool succeeds or finds errors.
     let report = |tool: &str| -> Value {

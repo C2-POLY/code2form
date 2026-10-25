@@ -172,7 +172,7 @@ impl Section {
 
 /// Makes the Agent panel's engines, the studio's `live` tools among their
 /// tools; a screenshot run, which is no one's studio, gets a stand-in.
-fn agent_factory(live: live::LiveTools) -> impl FnMut(&agent_setup::EngineRequest) -> agent_setup::Built {
+fn agent_factory(live: live::LiveTools, unsaved: agent_setup::UnsavedFiles) -> impl FnMut(&agent_setup::EngineRequest) -> agent_setup::Built {
     let screenshot = std::env::var_os("CODE2FORM_SCREENSHOT").is_some();
     move |request| {
         if screenshot {
@@ -182,7 +182,7 @@ fn agent_factory(live: live::LiveTools) -> impl FnMut(&agent_setup::EngineReques
         // `mcp --studio` mode serves the tools, the live ones through the
         // studio's socket.
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("code2form"));
-        agent_setup::engine_for(request, Some(Box::new(live.clone())), (exe, vec!["mcp".into(), "--studio".into()]))
+        agent_setup::engine_for(request, Some(Box::new(live.clone())), (exe, vec!["mcp".into(), "--studio".into()]), Some(&unsaved))
     }
 }
 
@@ -509,6 +509,9 @@ pub struct StudioApp {
     live: live::Live,
     /// Whether the agent's turn was under way at the last frame.
     agent_running: bool,
+    /// The files open with unsaved edits, which the agent's tools do not
+    /// write onto.
+    unsaved: agent_setup::UnsavedFiles,
 }
 
 impl StudioApp {
@@ -550,7 +553,8 @@ impl StudioApp {
     ) -> Self {
         let session_store = stores.session;
         let live = live::Live::new(ctx);
-        let agent = AgentPanel::new(agent_factory(live.tools()), stores.conversations);
+        let unsaved = agent_setup::UnsavedFiles::default();
+        let agent = AgentPanel::new(agent_factory(live.tools(), unsaved.clone()), stores.conversations);
         let mut app = StudioApp {
             doc: Tab::new(0, gl.as_ref()),
             shelf: Shelf::default(),
@@ -591,6 +595,7 @@ impl StudioApp {
             agent,
             live,
             agent_running: false,
+            unsaved,
         };
         app.apply_settings(ctx);
         // A screenshot of a layout, as `layout:view`.
@@ -1356,6 +1361,16 @@ impl StudioApp {
 
     // ---- Agent ----
 
+    /// The folder the agent works in for the active tab: its file's, or
+    /// for an untitled tab a scratch folder of its own, never the working
+    /// directory nor the home folder.
+    fn agent_folder(&self) -> PathBuf {
+        match self.doc.path.as_deref().and_then(Path::parent) {
+            Some(folder) => folder.to_path_buf(),
+            None => agent_setup::scratch_folder(&format!("tab-{}", self.doc.id)),
+        }
+    }
+
     /// The Agent panel, on the right of the window, following the active
     /// tab; an edit's link shows its line in the code.
     fn agent_panel(&mut self, ctx: &egui::Context) {
@@ -1364,7 +1379,9 @@ impl StudioApp {
             self.settings_open = true;
             self.settings_section = Section::Agent;
         }
-        self.agent.set_tab(self.doc.path.as_deref(), self.doc.directory());
+        self.agent.set_tab(self.doc.path.as_deref(), Some(self.agent_folder()));
+        let unsaved: Vec<PathBuf> = self.shelf.iter(&self.doc).filter(|tab| tab.is_dirty()).filter_map(|tab| tab.path.clone()).collect();
+        *self.unsaved.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = unsaved;
         self.suggest_selection();
         self.agent_view_shot(ctx);
         self.agent.undo_offer = self.agent_undo_offer();

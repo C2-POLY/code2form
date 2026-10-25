@@ -26,6 +26,8 @@ const HOLD: Duration = Duration::from_millis(1000);
 const FADE: Duration = Duration::from_millis(2000);
 /// How long the touched part flashes in the view, in two pulses.
 const FLASH: Duration = Duration::from_millis(1600);
+/// The pause that ends a group of edits of an agent outside the studio.
+const IDLE: Duration = Duration::from_secs(10);
 
 /// The lines the agent changed in a tab's text.
 #[derive(Clone, Debug, PartialEq)]
@@ -96,6 +98,8 @@ pub struct AgentGroup {
     /// The tab's id.
     pub tab: u64,
     pub started: Instant,
+    /// When its last edit landed.
+    pub last: Instant,
     /// The answer goes on: its next edits join the group.
     pub open: bool,
     pub edits: usize,
@@ -104,15 +108,18 @@ pub struct AgentGroup {
 impl AgentGroup {
     /// `group` with the edit from `before` to `after` of tab `tab` in it:
     /// the same group while it is open and the user did not edit since its
-    /// last edit, else a new one.
-    pub fn record(group: Option<AgentGroup>, tab: u64, before: &str, after: &str, now: Instant) -> AgentGroup {
+    /// last edit, else a new one. Without a turn of the panel's under way
+    /// (`turn`), the edits come from an agent outside the studio, whose
+    /// answers are not seen: a pause of [`IDLE`] ends its group.
+    pub fn record(group: Option<AgentGroup>, tab: u64, before: &str, after: &str, now: Instant, turn: bool) -> AgentGroup {
         match group {
-            Some(mut group) if group.open && group.text_after == before => {
+            Some(mut group) if group.open && group.text_after == before && (turn || now.saturating_duration_since(group.last) < IDLE) => {
                 group.text_after = after.to_string();
                 group.edits += 1;
+                group.last = now;
                 group
             }
-            _ => AgentGroup { text_before: before.to_string(), text_after: after.to_string(), tab, started: now, open: true, edits: 1 },
+            _ => AgentGroup { text_before: before.to_string(), text_after: after.to_string(), tab, started: now, last: now, open: true, edits: 1 },
         }
     }
 
@@ -254,13 +261,15 @@ impl StudioApp {
         self.doc.console.log(Level::Info, tr!("The agent edited line {}", "L'agent a modifié la ligne {}", described.join(", ")));
         let part = if self.doc.is_circuit() { None } else { enclosing_part(&self.doc.text, &lines) };
         self.doc.agent_highlight = Some(Highlight::new(self.doc.agent_highlight.as_ref(), &before, &self.doc.text, lines.clone(), now));
-        self.doc.agent_group = Some(AgentGroup::record(self.doc.agent_group.take(), self.doc.id, &before, &self.doc.text, now));
+        let turn = self.agent_running;
+        self.doc.agent_group = Some(AgentGroup::record(self.doc.agent_group.take(), self.doc.id, &before, &self.doc.text, now, turn));
         self.doc.agent_marks = lines;
         self.render_now();
         json!({
             "tab_id": self.doc.id,
             "generation": self.doc.sent,
             "changed_lines": live::marks_json(&self.doc.agent_marks),
+            "revision": live::revision(&self.doc.text),
             "part": part,
             "text_before": before,
         })
@@ -273,6 +282,11 @@ impl StudioApp {
             return;
         }
         self.agent_running = running;
+        if !running {
+            // The turn is over (done, failed or stopped): no change of its
+            // waits for the user any more.
+            self.drop_live_questions(ctx, "the agent's turn ended before the user answered: the change was not made");
+        }
         if let Some(group) = &mut self.doc.agent_group {
             group.open = false;
         }
@@ -465,20 +479,34 @@ mod tests {
     #[test]
     fn an_answer_s_edits_undo_together_unless_the_user_edited_since() {
         let now = Instant::now();
-        let group = AgentGroup::record(None, 3, "v0", "v1", now);
-        let group = AgentGroup::record(Some(group), 3, "v1", "v2", now);
+        let group = AgentGroup::record(None, 3, "v0", "v1", now, true);
+        let group = AgentGroup::record(Some(group), 3, "v1", "v2", now, true);
         assert_eq!((group.edits, group.text_before.as_str(), group.text_after.as_str()), (2, "v0", "v2"));
         assert_eq!(group.undo("v2").unwrap(), "v0");
         // The user typed after: undoing would throw their edit away.
         assert!(group.undo("v2 + mine").unwrap_err().contains("Cmd+Z"));
         // An edit after the user's starts a group of its own.
-        let after_user = AgentGroup::record(Some(group.clone()), 3, "v2 + mine", "v3", now);
+        let after_user = AgentGroup::record(Some(group.clone()), 3, "v2 + mine", "v3", now, true);
         assert_eq!((after_user.edits, after_user.text_before.as_str()), (1, "v2 + mine"));
         // So does the next answer's first edit, once the group is closed.
         let mut closed = group;
         closed.open = false;
-        let next = AgentGroup::record(Some(closed), 3, "v2", "v4", now);
+        let next = AgentGroup::record(Some(closed), 3, "v2", "v4", now, true);
         assert_eq!((next.edits, next.text_before.as_str()), (1, "v2"));
+    }
+
+    #[test]
+    fn an_outside_agent_s_group_ends_after_a_pause() {
+        let now = Instant::now();
+        // No turn of the panel's: an agent through `mcp --studio`.
+        let group = AgentGroup::record(None, 3, "v0", "v1", now, false);
+        let group = AgentGroup::record(Some(group), 3, "v1", "v2", now + Duration::from_secs(4), false);
+        assert_eq!(group.edits, 2, "close together: one group");
+        let later = AgentGroup::record(Some(group.clone()), 3, "v2", "v3", now + Duration::from_secs(4) + IDLE, false);
+        assert_eq!((later.edits, later.text_before.as_str()), (1, "v2"), "after a pause: a group of its own");
+        // The panel's turn goes on however long a tool takes.
+        let during = AgentGroup::record(Some(group), 3, "v2", "v3", now + Duration::from_secs(60), true);
+        assert_eq!(during.edits, 3);
     }
 
     #[test]

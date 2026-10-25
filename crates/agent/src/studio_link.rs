@@ -28,7 +28,7 @@ pub const NOT_OPEN: &str = "the Code2Form studio is not open: open it, then try 
 /// for a render up to its own timeout, and for the user's answer when it
 /// asks them before a change.
 #[cfg_attr(not(unix), allow(dead_code))]
-const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(660);
+pub const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(700);
 
 /// The socket the studio serves on: the file `CODE2FORM_STUDIO_SOCKET`
 /// names, else `studio.sock` in the user's own folder of the temporary
