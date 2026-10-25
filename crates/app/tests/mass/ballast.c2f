@@ -1,0 +1,7 @@
+// A 10 mm cube for the mass tests: its sheet gives its mass.
+
+// @description A ballast cube, 10 mm on a side.
+// @spec mass: 10 g
+// @pin GND [5, 5, 10] up ground
+
+cube(10);

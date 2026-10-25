@@ -1,0 +1,13 @@
+// The winder's frame, as the circuit's enclosure: the base and the back
+// plate of watch_winder.c2f, with standoffs under the ULN2003 board. The
+// circuit (winder.c2fc) places the boards on the base's floor, behind and
+// under the tilted plate, and the motor in its pocket.
+//
+// @circuit winder.c2fc
+
+include <watch_winder.c2f>
+show = "none";
+
+frame();
+// Four M3 standoffs from the floor up to the driver board.
+translate([0, 0, 0]) standoffs_for("driver", height = 5, screw = "M3");

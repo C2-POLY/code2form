@@ -1,0 +1,9 @@
+// A small gear motor for the loads tests, its figures in its sheet: the
+// output shaft at the origin along +x, the gearbox's face at x = 0.
+// @description A 12 mm gear motor, 15 rpm at 5 V.
+// @spec torque: 34 mN·m at 5 V
+// @spec stall torque: 0.8 kgf·cm
+// @spec speed: 15 rpm
+// @spec max radial load: 10 N
+// @spec max axial load: 5 N
+rotate([0, -90, 0]) cylinder(d = 12, h = 24);

@@ -92,12 +92,12 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part"]
+        ["render", "parameters", "image", "electrify", "section", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "fit", "check_part", "save_part", "save_brief", "check_brief", "read_brief", "mass_properties", "loads"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
         let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
-        assert_eq!(takes_code, !["library_parts", "electrify"].contains(&tool["name"].as_str().unwrap()), "{tool}");
+        assert_eq!(takes_code, !["library_parts", "electrify", "save_brief", "check_brief", "read_brief", "loads"].contains(&tool["name"].as_str().unwrap()), "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);
@@ -322,7 +322,7 @@ fn prompts_lead_from_an_idea_to_its_electronics() {
     assert!(init["result"]["capabilities"]["prompts"].is_object());
     let list = server.request("prompts/list", json!({}));
     let names: Vec<&str> = list["result"]["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["design_object", "add_electronics"]);
+    assert_eq!(names, ["plan_object", "design_object", "add_electronics"]);
     let got = server.request(
         "prompts/get",
         json!({ "name": "add_electronics", "arguments": { "design": "box.c2f", "components": "https://example.com/sensor" } }),
@@ -333,10 +333,15 @@ fn prompts_lead_from_an_idea_to_its_electronics() {
     let tools = server.request("tools/list", json!({}));
     let tools: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     let design = server.request("prompts/get", json!({ "name": "design_object", "arguments": { "description": "A box" } }));
-    let both = format!("{text}{}", design["result"]["messages"][0]["content"]["text"].as_str().unwrap());
+    let plan = server.request("prompts/get", json!({ "name": "plan_object", "arguments": { "idea": "A watch winder" } }));
+    let both = format!(
+        "{text}{}{}",
+        design["result"]["messages"][0]["content"]["text"].as_str().unwrap(),
+        plan["result"]["messages"][0]["content"]["text"].as_str().unwrap()
+    );
     for tool in [
         "render", "image", "library_parts", "check_part", "save_part", "electrify", "check_circuit", "fit", "circuit_image",
-        "circuit_wires", "circuit_bom", "export",
+        "circuit_wires", "circuit_bom", "export", "save_brief", "read_brief", "check_brief", "mass_properties", "loads",
     ] {
         assert!(both.contains(&format!("`{tool}`")) && tools.contains(&tool), "{tool}");
     }
@@ -595,6 +600,86 @@ fn library_parts_have_a_sheet_and_answer_a_search() {
 }
 
 #[test]
+fn library_parts_lists_the_mechanical_parts_after_the_electronics() {
+    let (mut server, home) = server_at_home("mechanical");
+    let (is_error, report) = server.report("library_parts", json!({}));
+    assert!(!is_error, "{report}");
+    let names = part_names(&report);
+    let first_mechanical = names.iter().position(|n| n.starts_with("mechanical/")).expect("mechanical parts");
+    assert!(names[..first_mechanical].iter().all(|n| n.starts_with("electronics/")), "{names:?}");
+    assert!(names[first_mechanical..].iter().all(|n| n.starts_with("mechanical/")), "{names:?}");
+    let parts = report["parts"].as_array().unwrap();
+    let bearing = parts.iter().find(|p| p["part"] == "mechanical/bearing_608.c2f").expect("the 608");
+    assert_eq!(bearing["folder"], "mechanical");
+    assert_eq!(bearing["specs"]["dynamic load"], "3.45 kN");
+    assert_eq!(bearing["pins"], 0);
+    // Every mechanical part has its sheet, with its mass where it has one
+    // (the helpers have none); `lib/` holds what they `use`.
+    for part in parts.iter().filter(|p| p["folder"] == "mechanical" && !p["part"].as_str().unwrap().contains("/lib/")) {
+        assert!(part["description"].is_string() && part["specs"].as_object().is_some_and(|s| !s.is_empty()), "{part}");
+        assert!(part["sources"].as_array().is_some_and(|s| !s.is_empty()), "{part}");
+    }
+    for (query, first) in [
+        ("roulement 8 mm", "mechanical/bearing_608.c2f"),
+        ("vis M3", "mechanical/socket_screw.c2f"),
+        ("écrou", "mechanical/hex_nut.c2f"),
+        ("insert", "mechanical/heat_set_insert.c2f"),
+        ("accouplement", "mechanical/rigid_coupling.c2f"),
+        ("axe", "mechanical/shaft.c2f"),
+        ("moteur pas à pas", "electronics/stepper_28byj48.c2f"),
+    ] {
+        let (_, report) = server.report("library_parts", json!({ "query": query }));
+        assert_eq!(part_names(&report).first().map(String::as_str), Some(first), "{query}: {report}");
+    }
+    for query in ["pignon", "engrenage"] {
+        let (_, report) = server.report("library_parts", json!({ "query": query }));
+        let mut two = part_names(&report)[..2].to_vec();
+        two.sort();
+        assert_eq!(two, ["mechanical/gear_pair.c2f", "mechanical/spur_gear.c2f"], "{query}: {report}");
+    }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn gear_pair_meshes_at_the_center_distance() {
+    let mut server = Server::start();
+    // A 3:1 reduction of module 1: 17 and 51 teeth, 34 mm apart.
+    let code = "use <mechanical/gear_pair.c2f>\ngear_pair(ratio = 3, mod = 1, teeth = 17, thickness = 4);\n";
+    let (is_error, report) = server.report("render", json!({ "code": code }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["echo"], json!(["ECHO: \"gear_pair: 17 and 51 teeth, ratio 3, center distance 34 mm\""]));
+    // Halfway between the axes at the origin: the pinion's teeth reach
+    // 17 + 9.5 mm to the left, the wheel's 17 + 26.5 mm to the right.
+    let close = |value: &Value, expected: f64| (value.as_f64().unwrap() - expected).abs() < 0.2;
+    let bounds = &report["bounding_box"];
+    assert!(close(&bounds["min"][0], -26.5) && close(&bounds["max"][0], 43.5), "{report}");
+    assert!(close(&bounds["min"][1], -26.5) && close(&bounds["max"][1], 26.5), "{report}");
+    assert!(close(&bounds["size"][2], 4.0), "{report}");
+    // Not centered, the pinion's axis is at the origin.
+    let code = "use <mechanical/gear_pair.c2f>\ngear_pair(ratio = 2.5, mod = 2, teeth = 12, center = false);\n";
+    let (_, report) = server.report("render", json!({ "code": code }));
+    assert_eq!(report["echo"], json!(["ECHO: \"gear_pair: 12 and 30 teeth, ratio 2.5, center distance 42 mm\""]));
+    assert!(close(&report["bounding_box"]["max"][0], 42.0 + 32.0), "{report}");
+}
+
+#[test]
+fn bearing_seat_cuts_the_pocket_of_its_fit() {
+    let mut server = Server::start();
+    // A 608 slid into a 30 mm block: a 22.3 mm pocket 7 mm deep, then
+    // the shaft's hole, 15 mm across, through the 3 mm left under it.
+    let code = "use <mechanical/bearing_seat.c2f>\nbearing_seat(\"608\", \"slide\") translate([-15, -15, -10]) cube([30, 30, 10]);\n";
+    let (is_error, report) = server.report("render", json!({ "code": code }));
+    assert!(!is_error, "{report}");
+    assert_eq!(report["echo"], json!(["ECHO: \"bearing_seat: 608, slide fit, a pocket 22.3 mm across and 7 mm deep\""]));
+    let volume = report["volume"].as_f64().unwrap();
+    let pocket = std::f64::consts::PI / 4.0 * (22.3f64.powi(2) * 7.0 + 15f64.powi(2) * 3.0);
+    // The chamfer at the opening takes a little more.
+    assert!(volume < 9000.0 - pocket && volume > 9000.0 - pocket - 20.0, "{volume}: {report}");
+    let (is_error, report) = server.report("render", json!({ "code": "use <mechanical/bearing_seat.c2f>\nbearing_seat(\"609\");\n" }));
+    assert!(is_error && report.to_string().contains("unknown bearing"), "{report}");
+}
+
+#[test]
 fn check_part_finds_what_does_not_hold_together() {
     let (mut server, home) = server_at_home("check");
     // The library's parts are clean.
@@ -607,6 +692,17 @@ fn check_part_finds_what_does_not_hold_together() {
         let (is_error, report) = server.report("check_part", json!({ "path": format!("electronics/{name}") }));
         assert!(!is_error && report["errors"] == json!([]) && report["warnings"] == json!([]), "{name}: {report}");
         assert!(report["bounding_box"]["size"].is_array(), "{name}: {report}");
+    }
+    // And so are the mechanical ones, which have no pins.
+    let library = library.join("../mechanical");
+    let mut files: Vec<_> = std::fs::read_dir(&library).unwrap().map(|e| e.unwrap().path()).collect();
+    files.retain(|p| p.extension().is_some_and(|e| e == "c2f"));
+    assert!(files.len() >= 12);
+    for file in files {
+        let name = file.file_name().unwrap().to_string_lossy().into_owned();
+        let (is_error, report) = server.report("check_part", json!({ "path": format!("mechanical/{name}") }));
+        assert!(!is_error && report["errors"] == json!([]) && report["warnings"] == json!([]), "{name}: {report}");
+        assert!(report["bounding_box"]["size"].is_array() && report["pins"] == 0, "{name}: {report}");
     }
 
     let part = "\
@@ -767,4 +863,238 @@ fn save_part_refuses_what_check_part_finds_wrong_and_fit_a_clearance_it_cannot_m
     let (is_error, _) = server.report("fit", json!({ "path": circuit, "clearance": 20 }));
     assert!(is_error);
     let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn a_brief_is_saved_with_requirements_a_tool_measures_and_read_back() {
+    let mut server = Server::start();
+    let dir = temp_dir("brief");
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("winder/brief.md");
+    // Without a requirement a tool measures, it is refused.
+    let vague = "# Winder\n\n## Requirements\n\n- turns the watch gently\n";
+    let (is_error, report) = server.report("save_brief", json!({ "path": path, "text": vague }));
+    assert!(is_error && report["saved"] == false, "{report}");
+    assert!(!path.exists());
+    let brief = "# Winder\n\nA 608 bearing carries the watch; the motor only turns it.\n\n## Requirements\n\n- mass < 400 g\n- torque margin >= 2\n- part \"Cradle\"\n- turns the watch gently\n\n```json loads\n{ \"axis\": { \"at\": [0, 0, 0], \"direction\": [1, 0, 0] }, \"supports\": [{ \"name\": \"motor\", \"at_mm\": 0, \"kind\": \"motor\" }], \"ratio\": 1 }\n```\n";
+    let (is_error, report) = server.report("save_brief", json!({ "path": path, "text": brief }));
+    assert!(!is_error, "{report}");
+    let kinds: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["mass", "torque margin", "part", "other"]);
+    // Not replaced unless asked.
+    let (is_error, _) = server.report("save_brief", json!({ "path": path, "text": brief }));
+    assert!(is_error);
+    let (is_error, content) = server.call("read_brief", json!({ "path": path }));
+    assert!(!is_error, "{content:?}");
+    assert_eq!(content[0]["text"], brief);
+    let report: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((&report["title"], &report["loads"]["ratio"], &report["requirements"][1]["value"]), (&json!("Winder"), &json!(1), &json!(2.0)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_brief_measures_the_pieces_components_and_size() {
+    let mut server = Server::start();
+    let dir = temp_dir("check-brief");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nightlight");
+    let brief = dir.join("brief.md");
+    let text = "# Night light\n\n## Requirements\n\n- part \"Base\"\n- part \"Dome\"\n- component \"electronics/neopixel_ring_12.c2f\"\n- size <= 220 x 220 x 250 mm\n- glows softly\n";
+    std::fs::write(&brief, text).unwrap();
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": example.join("nightlight.c2f") }));
+    assert!(!is_error, "{report}");
+    let statuses: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["status"].as_str().unwrap()).collect();
+    assert_eq!(statuses, ["holds", "holds", "holds", "holds", "unmeasured"], "{report}");
+    // A piece the design lacks, a component the circuit lacks, a printer too small.
+    let text = "# Night light\n\n## Requirements\n\n- part \"Lid\"\n- component \"electronics/drv8833.c2f\"\n- size <= 60 x 60 x 60 mm\n";
+    std::fs::write(&brief, text).unwrap();
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": example.join("nightlight.c2f") }));
+    assert!(is_error && report["fails"] == 3, "{report}");
+    assert!(report["requirements"][2]["why"].as_str().unwrap().contains("Base"), "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn mass_properties_weighs_designs_and_circuits() {
+    let mut server = Server::start();
+    // Two parts in their own materials, solid, and a watch of 150 g on
+    // top: a 20 mm PLA cube (9.92 g at [10, 10, 10]) and an ABS one beside
+    // it (8.32 g at [30, 10, 10]); the watch at [20, 10, 40]. The total is
+    // 168.24 g, its center at x = (9.92 × 10 + 8.32 × 30 + 150 × 20) /
+    // 168.24 = 3348.8 / 168.24 = 19.905, z = (18.24 × 10 + 150 × 40) /
+    // 168.24 = 36.748.
+    let code = "part(\"a\") cube(20); translate([20, 0, 0]) part(\"b\") cube(20);";
+    let args = json!({
+        "code": code,
+        "infill": 100,
+        "parts": { "b": { "material": "abs" } },
+        "extra": [{ "name": "watch", "mass_g": 150, "at": [20, 10, 40] }],
+    });
+    let (is_error, report) = server.report("mass_properties", args);
+    assert!(!is_error, "{report}");
+    let parts = report["parts"].as_array().unwrap();
+    assert_eq!((parts[0]["name"].as_str(), parts[0]["material"].as_str()), (Some("a"), Some("PLA")));
+    assert_eq!((parts[1]["name"].as_str(), parts[1]["material"].as_str(), parts[1]["mass_g"].as_f64()), (Some("b"), Some("ABS"), Some(8.32)));
+    assert_eq!(parts[1]["volume_mm3"].as_f64(), Some(8000.0));
+    assert_eq!(report["extra"][0], json!({ "name": "watch", "mass_g": 150.0, "at": [20.0, 10.0, 40.0] }));
+    assert_eq!(report["total"]["mass_g"].as_f64(), Some(168.24));
+    let center: Vec<f64> = report["total"]["center"].as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect();
+    assert!((center[0] - 19.905).abs() < 1e-3 && (center[2] - 36.748).abs() < 1e-3, "{center:?}");
+    // On the 40 × 20 base, 10 mm from the edges y = 0 and y = 20:
+    // atan(10 / 36.748) = 15.22°.
+    let stability = &report["stability"];
+    assert_eq!(stability["inside"], true, "{stability}");
+    assert!((stability["min_tipping_deg"].as_f64().unwrap() - 15.222).abs() < 1e-2, "{stability}");
+    assert_eq!(stability["direction"][0].as_f64(), Some(0.0), "{stability}");
+    assert_eq!(stability["base"].as_array().unwrap().len(), 4, "{stability}");
+    assert!(report.get("components").is_none());
+
+    // A circuit: the nightlight's parts weigh what their sheets say.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (is_error, report) = server.report("mass_properties", json!({ "path": dir.join("../../examples/nightlight/nightlight.c2fc") }));
+    assert!(!is_error, "{report}");
+    let names: Vec<&str> = report["parts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Base", "Top", "Dome"]);
+    let components = report["components"].as_array().unwrap();
+    assert_eq!(components.len(), 3);
+    let masses: Vec<Option<f64>> = components.iter().map(|c| c["mass_g"].as_f64()).collect();
+    assert_eq!(masses, [Some(3.0), Some(3.3), Some(1.1)], "{report}");
+    assert_eq!(components[0]["part"], "electronics/xiao_esp32s3.c2f");
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(!warnings.iter().any(|w| w.as_str().unwrap().contains("has no mass on its sheet")), "{report}");
+    let enclosure: f64 = report["parts"].as_array().unwrap().iter().map(|p| p["mass_g"].as_f64().unwrap()).sum();
+    assert!((report["total"]["mass_g"].as_f64().unwrap() - enclosure - 7.4).abs() < 1e-2, "{report}");
+    // A part whose sheet gives its mass: 10 g.
+    let (_, report) = server.report("mass_properties", json!({ "path": dir.join("tests/mass/ballast.c2fc") }));
+    assert_eq!(report["components"][0], json!({ "name": "weight", "part": "ballast.c2f", "mass_g": 10.0, "center": [35.0, 35.0, 10.0] }));
+
+    // Clear errors for what cannot be weighed.
+    for (args, message) in [
+        (json!({ "code": "cube(1);", "material": "wood" }), "unknown material `wood`"),
+        (json!({ "code": "cube(1);", "infill": -5 }), "infill is a percentage"),
+        (json!({ "code": "cube(1);", "wall": 0 }), "wall is a positive thickness"),
+        (json!({ "code": "cube(1);", "parts": { "lid": {} } }), "no part named `lid`"),
+        (json!({ "code": "cube(1);", "parts": { "root": { "colour": "red" } } }), "`parts.root.colour`"),
+        (json!({ "code": "cube(1);", "extra": [{ "mass_g": 5 }] }), "`extra[0]`.at"),
+        (json!({ "code": "echo(1);" }), "nothing to weigh"),
+    ] {
+        let (is_error, report) = server.report("mass_properties", args);
+        assert!(is_error && report.as_str().unwrap_or_default().contains(message), "{message}: {report}");
+    }
+}
+
+#[test]
+fn loads_weighs_a_shaft_and_its_motor_from_the_motor_sheet() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/loads");
+    let mut scenario: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("winder.json")).unwrap()).unwrap();
+    scenario["working_dir"] = json!(dir);
+    let mut server = Server::start();
+    let (is_error, report) = server.report("loads", scenario.clone());
+    assert!(!is_error, "{report}");
+    // 150 g, 20 mm off the axis: 29.4 mN·m, then friction.
+    let static_torque = report["torque"]["static_mNm"].as_f64().unwrap();
+    assert!((static_torque - 29.42).abs() < 0.01, "{report}");
+    // The motor's 34 mN·m and 10 N come from its sheet.
+    assert_eq!(report["motor"]["torque_mNm"], 34.0, "{report}");
+    assert_eq!(report["motor"]["max_radial_load_N"], 10.0, "{report}");
+    let alone = report["supports"][0]["bearing_load_N"].as_f64().unwrap();
+    assert!(report["supports"][0]["moment_Nmm"].as_f64().unwrap() > 50.0, "{report}");
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| w.as_str().unwrap().contains("overhung")), "{report}");
+    assert!(report["suggested_ratio"].as_f64().is_some_and(|r| r > 1.0), "{report}");
+    assert!(!report["summary"].as_array().unwrap().is_empty());
+
+    // A bearing 5 mm behind the watch takes the load off the motor.
+    scenario["supports"].as_array_mut().unwrap().insert(0, json!({ "name": "front", "at_mm": 30, "kind": "bearing", "static_load_N": 340 }));
+    let (_, report) = server.report("loads", scenario.clone());
+    let motor = report["supports"][1]["bearing_load_N"].as_f64().unwrap();
+    assert!(motor < alone / 20.0, "{report}");
+    scenario["supports"][1]["coupling"] = json!(true);
+    let (_, report) = server.report("loads", scenario.clone());
+    assert_eq!(report["supports"][1]["radial_N"], 0.0, "{report}");
+
+    // The same scenario on the command line, its parts found beside it.
+    let output = Command::new(env!("CARGO_BIN_EXE_c2f")).args(["loads", "--json"]).arg(dir.join("winder.json")).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(cli["torque"]["static_mNm"], json!(static_torque));
+
+    let bad = json!({ "axis": { "at": [0, 0, 0], "direction": [1, 0, 0] }, "supports": [], "shaft": { "d_mm": 5, "material": "wood" } });
+    let (is_error, _) = server.report("loads", bad);
+    assert!(is_error);
+}
+
+#[test]
+fn check_brief_weighs_the_design_and_measures_the_motor_margins() {
+    let mut server = Server::start();
+    let dir = temp_dir("check-brief-measures");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The motor's sheet, found beside the brief.
+    std::fs::copy(app.join("tests/loads/gear_motor.c2f"), dir.join("gear_motor.c2f")).unwrap();
+    let scenario = std::fs::read_to_string(app.join("tests/loads/winder.json")).unwrap();
+    let brief = dir.join("brief.md");
+    let text = format!(
+        "# Night light\n\n## Requirements\n\n- mass < 100 g\n- tipping > 15°\n- mass < 30 g\n- torque margin >= 2\n\n```json mass\n{{ \"material\": \"PLA\", \"infill\": 20 }}\n```\n\n```json loads\n{scenario}```\n"
+    );
+    std::fs::write(&brief, text).unwrap();
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": app.join("../../examples/nightlight/nightlight.c2f") }));
+    assert!(is_error, "{report}");
+    let statuses: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["status"].as_str().unwrap()).collect();
+    // About 38 g printed and tipping past 60°; the winder's motor alone falls short of a margin of 2.
+    assert_eq!(statuses, ["holds", "holds", "fails", "fails"], "{report}");
+    let mass = report["requirements"][0]["measured"].as_f64().unwrap();
+    assert!((30.0..100.0).contains(&mass), "{report}");
+    assert!(report["requirements"][3]["measured"].as_f64().unwrap() < 1.0, "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The winder of docs/plan-mode.md: its brief holds, and the motor alone
+/// it replaced falls short.
+#[test]
+fn the_winder_holds_to_its_brief() {
+    let mut server = Server::start();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/winder");
+    let (is_error, report) = server.report(
+        "check_brief",
+        json!({ "brief": dir.join("brief.md"), "design": dir.join("watch_winder.c2f"), "circuit": dir.join("winder.c2fc") }),
+    );
+    assert!(!is_error, "{report}");
+    assert_eq!((&report["holds"], &report["fails"], &report["unmeasured"]), (&json!(9), &json!(0), &json!(2)), "{report}");
+    let scenario: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("motor_alone.json")).unwrap()).unwrap();
+    let (_, report) = server.report("loads", scenario.clone());
+    assert!(report["margins"]["torque"].as_f64().unwrap() < 1.0, "{report}");
+    // Figures that cannot be: no stage for a reduction, a negative torque.
+    let mut wrong = scenario.clone();
+    wrong["ratio"] = json!(5);
+    wrong["stages"] = json!(0);
+    assert!(server.report("loads", wrong).0);
+    let mut wrong = scenario;
+    wrong["motor"]["torque_mNm"] = json!(-29.4);
+    assert!(server.report("loads", wrong).0);
+    let (is_error, _) = server.report("check_circuit", json!({ "path": dir.join("winder.c2fc") }));
+    assert!(!is_error);
+}
+
+#[test]
+fn a_brief_whose_blocks_cannot_be_measured_from_is_refused_and_fails() {
+    let mut server = Server::start();
+    let dir = temp_dir("brief-blocks");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let brief = dir.join("brief.md");
+    let text = "# A\n\n## Requirements\n\n- mass < 1 g\n- torque margin >= 2\n- mass < 400\n\n```json mass\n{ \"material\": \"PLAA\" }\n```\n\n```json loads\n{ \"motr\": {} }\n```\n";
+    let (is_error, report) = server.report("save_brief", json!({ "path": brief, "text": text }));
+    assert!(is_error && report["why"].as_array().unwrap().len() == 2, "{report}");
+    // Written by hand, it is checked all the same: what its blocks are for fails.
+    std::fs::write(&brief, text).unwrap();
+    let design = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nightlight/nightlight.c2f");
+    let (is_error, report) = server.report("check_brief", json!({ "brief": brief, "design": design }));
+    assert!(is_error && report["ok"] == false, "{report}");
+    let statuses: Vec<&str> = report["requirements"].as_array().unwrap().iter().map(|r| r["status"].as_str().unwrap()).collect();
+    assert_eq!(statuses, ["fails", "fails", "unmeasured"], "{report}");
+    assert!(report["requirements"][2]["why"].as_str().unwrap().contains("`mass < 400 g`"), "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

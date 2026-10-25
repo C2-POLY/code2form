@@ -1,0 +1,33 @@
+// Deep groove ball bearing 6800, 10 x 19 x 5 mm, shielded on both faces:
+// the outer and inner steel rings and the shields between them. Its axis
+// along z, a face at z = 0, centered on the origin.
+// https://www.nsk.com/engineering/6800-apn.html
+//
+// From NSK's page for the 6800: 10 x 19 x 5 mm, dynamic load rating 1890 N,
+// static 840 N, about 5 g. SKF sells the same size as the 61800, rated
+// 1720 N and 830 N, 4.7 g: the sheet gives NSK's.
+// The bore, outside diameter and width are ISO 15's for the designation,
+// so any maker's 6800 has them. The rings' section and the shields are
+// drawn, not measured. To hold it in a printed part, `bearing_seat.c2f`
+// cuts its pocket.
+
+// @description Deep groove ball bearing 6800, 10 mm bore, 19 mm outside, 5 mm
+// @description wide: a thin-section bearing for a 10 mm shaft where there is
+// @description little room around it.
+// @spec bearing: deep groove ball bearing, single row, 6800 (NSK 6800)
+// @spec bore: 10 mm
+// @spec outside diameter: 19 mm
+// @spec width: 5 mm
+// @spec dynamic load: 1.89 kN
+// @spec static load: 0.84 kN
+// @spec mass: 5 g
+// @source https://www.nsk.com/engineering/6800-apn.html NSK 6800 (dimensions, load ratings, mass)
+// @source https://kramp.com/shop-de/en/p/deep-groove-ball-bearing-10x19x5mm-skf--61800SKF SKF 61800, the same size, at Kramp
+
+use <lib/ball_bearing.c2f>
+
+module bearing_6800() {
+    ball_bearing(10, 19, 5);
+}
+
+bearing_6800();

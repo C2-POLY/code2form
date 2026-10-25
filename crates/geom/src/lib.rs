@@ -4,7 +4,7 @@
 //! glTF (for game engines), and 2D models as SVG and DXF; and it draws
 //! pictures of a model as PNG, without a window. It also finds where
 //! placed solids collide, and how the parts of a circuit fit in their
-//! enclosure.
+//! enclosure, and what a model weighs and how it stands.
 
 mod build;
 mod collide;
@@ -15,6 +15,7 @@ mod gltf;
 mod image;
 mod import;
 mod inventory;
+mod mass;
 mod mesh;
 mod offset;
 mod parts;
@@ -34,6 +35,10 @@ pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
 pub use image::{VIEWS, sheet_png};
 pub use import::objects as mesh_objects;
 pub use inventory::{PartsOptions, parts_json};
+pub use mass::{
+    BASE_TOLERANCE, Component, DEFAULT_INFILL, DEFAULT_WALL, Extra, MATERIALS, MassOptions, MassReport, Material, PartMass, Print,
+    Stability, mass_properties,
+};
 pub use mesh::{Rendered, RenderMesh, Stats};
 pub use primitives::fragments;
 pub use section::{Axis, Section};

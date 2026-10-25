@@ -1,0 +1,100 @@
+# The watch winder's electronics: a XIAO ESP32-S3, powered by its USB-C,
+# drives the 28BYJ-48 through the ULN2003 board. Everything runs on the
+# USB's 5 V: the motor is the 5 V version.
+#
+# Coordinates are those of watch_winder.c2f: the floor's top at z = 4,
+# the back plate leaning over the back of the base (+y).
+
+version = 1
+
+enclosure = "winder_frame.c2f"
+
+# On the floor, at the open back, its USB-C facing out (+y).
+[parts.xiao]
+part = "electronics/xiao_esp32s3.c2f"
+at = [14, 12, 4]
+
+# On four 5 mm standoffs, beside the XIAO.
+[parts.driver]
+part = "parts/uln2003.c2f"
+at = [-40, 4, 9]
+
+# In its pocket behind the back plate, as the winder places it: the
+# plate's frame tilted by 60° about x, 58.5 mm below the drum's axis,
+# its flange 1.5 mm into the pocket (0.05 mm off its floor, which it rests
+# on: a shared face reads as a collision).
+[parts.motor]
+part = "parts/stepper_28byj48.c2f"
+at = [0, -27.907, 26.565]
+rotate = [60, 0, 0]
+
+# Power: the USB's 5 V to the driver, which passes it to the motor.
+
+[[wires]]
+from = "xiao.5V"
+to = "driver.VCC"
+color = "red"
+label = "5 V"
+
+[[wires]]
+from = "xiao.GND"
+to = "driver.GND"
+color = "black"
+
+# The four coils, one GPIO each, kept off D2 (a strapping pin) and D6, D7
+# (the serial port).
+
+[[wires]]
+from = "xiao.D0"
+to = "driver.IN1"
+color = "orange"
+
+[[wires]]
+from = "xiao.D1"
+to = "driver.IN2"
+color = "yellow"
+
+[[wires]]
+from = "xiao.D3"
+to = "driver.IN3"
+color = "pink"
+
+[[wires]]
+from = "xiao.D4"
+to = "driver.IN4"
+color = "blue"
+
+# The motor's cable into the driver's socket: its plug is keyed, blue
+# wire on pin 1 (A), red on pin 5.
+
+[[wires]]
+from = "driver.A"
+to = "motor.blue"
+# Around the plate's underside, which the straight run would cross.
+via = [[-10, 0, 25]]
+color = "blue"
+label = "motor cable"
+
+[[wires]]
+from = "driver.B"
+to = "motor.pink"
+color = "pink"
+label = "motor cable"
+
+[[wires]]
+from = "driver.C"
+to = "motor.yellow"
+color = "yellow"
+label = "motor cable"
+
+[[wires]]
+from = "driver.D"
+to = "motor.orange"
+color = "orange"
+label = "motor cable"
+
+[[wires]]
+from = "driver.M+"
+to = "motor.red"
+color = "red"
+label = "motor cable"

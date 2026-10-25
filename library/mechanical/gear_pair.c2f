@@ -1,0 +1,65 @@
+// Two meshing spur gears for a reduction: a pinion of `teeth` teeth and a
+// wheel of round(ratio x teeth), placed at the center distance
+// m·(z1 + z2)/2 and turned so that a tooth of each sits in the other's
+// gap. It echoes the teeth, the actual ratio (the wheel's teeth over the
+// pinion's, which rounding may move off the one asked for) and the center
+// distance. A design uses it with
+//
+//     use <mechanical/gear_pair.c2f>
+//     gear_pair(ratio = 3, mod = 1, thickness = 6);
+//
+// `mod` is the module (the language keeps the word `module` for itself).
+// With `center` true, the point halfway between the axes is at the
+// origin, the pinion on -x and the wheel on +x; else the pinion's axis is
+// at the origin and the wheel's on +x. The gears are those of
+// `spur_gear.c2f`, each tooth thinned by `backlash` (0.15 mm by default,
+// for FDM printing) so that they turn freely at the exact distance.
+
+// @description Helper to model a gear reduction: gear_pair(ratio, mod,
+// @description teeth, thickness) places a pinion and a wheel of involute spur
+// @description gears at the right center distance, m·(z1 + z2)/2, meshing,
+// @description and echoes the actual ratio.
+// @spec center distance: module x (pinion teeth + wheel teeth) / 2
+// @spec ratio: the wheel's teeth over the pinion's, rounded to whole teeth
+// @spec pressure angle: 20°
+// @spec backlash: 0.15 mm per tooth by default, for FDM printing
+// @source https://www.iso.org/standard/22643.html ISO 53, the basic rack tooth profile
+// @source https://khkgears.net/new/gear_knowledge/gear_technical_reference/calculation_gear_dimensions.html KHK, the calculation of gear dimensions (center distance)
+
+use <spur_gear.c2f>
+
+/* [Gears] */
+// The reduction: the wheel turns this many times slower than the pinion.
+ratio = 3; // [1:0.1:10]
+// The module, in millimeters.
+mod = 1; // [0.5:0.25:5]
+// The pinion's teeth.
+teeth = 17; // [8:1:60]
+// The gears' thickness.
+thickness = 5; // [1:0.5:50]
+
+// The wheel's teeth for `ratio` with a pinion of `teeth` teeth.
+function gear_pair_teeth(ratio, teeth) = round(ratio * teeth);
+
+// The distance between the axes of two gears of module `mod`, `z1` and
+// `z2` teeth.
+function gear_center_distance(mod, z1, z2) = mod * (z1 + z2) / 2;
+
+// A pinion of `teeth` teeth and a wheel `ratio` times bigger, of module
+// `mod`, `thickness` thick, meshing: see the file's opening comment.
+module gear_pair(ratio = 3, mod = 1, teeth = 17, thickness = 5, center = true, bore = 0,
+                 wheel_bore = 0, pressure_angle = 20, backlash = 0.15) {
+    assert(ratio >= 1, "gear_pair: the ratio is 1 or more: the wheel is the bigger gear");
+    z1 = teeth;
+    z2 = gear_pair_teeth(ratio, teeth);
+    a = gear_center_distance(mod, z1, z2);
+    echo(str("gear_pair: ", z1, " and ", z2, " teeth, ratio ", z2 / z1, ", center distance ", a, " mm"));
+    translate([center ? -a / 2 : 0, 0, 0]) {
+        spur_gear(mod, z1, thickness, bore, pressure_angle, backlash);
+        // The wheel's gap faces the pinion's tooth on +x.
+        translate([a, 0, 0]) rotate(180 + 180 / z2)
+            spur_gear(mod, z2, thickness, wheel_bore, pressure_angle, backlash);
+    }
+}
+
+gear_pair(ratio, mod, teeth, thickness);

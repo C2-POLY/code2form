@@ -23,7 +23,7 @@ const SAME_PLACE: f64 = 0.01;
 ///
 /// Errors: a pin or a mount hole outside the bounding box, two pins at the
 /// same place, a port facing into the part, a power pin without its
-/// voltage. Warnings: no `@description`, no `@source`, nothing drawn.
+/// voltage, a mechanical figure (`mass`, `torque`…) without its unit. Warnings: no `@description`, no `@source`, nothing drawn.
 pub fn check(annotations: &Annotations, bounds: Option<([f64; 3], [f64; 3])>) -> Vec<Finding> {
     let mut findings = Vec::new();
     let error = |rule, message: String, span| Finding { severity: Severity::Error, rule, message, span };
@@ -85,6 +85,12 @@ pub fn check(annotations: &Annotations, bounds: Option<([f64; 3], [f64; 3])>) ->
                 pin.name
             );
             findings.push(error("power_voltage", message, pin.span));
+        }
+    }
+    // The figures the mechanical checks compute with read as quantities.
+    for spec in &annotations.specs {
+        if let Some(Err(message)) = crate::quantity::figure(spec) {
+            findings.push(error("spec_quantity", message, spec.span));
         }
     }
     findings.sort_by_key(|finding| finding.span.start);

@@ -1,0 +1,32 @@
+// Deep groove ball bearing 6001, 12 x 28 x 8 mm, shielded on both faces:
+// the outer and inner steel rings and the shields between them. Its axis
+// along z, a face at z = 0, centered on the origin.
+// https://www.qualitybearingsonline.ca/6001-skf-deep-groove-bearing-12-x-28-x-8mm
+//
+// From SKF's figures for the 6001, as Quality Bearings Online lists them:
+// 12 x 28 x 8 mm, dynamic load rating 5.4 kN, static 2.36 kN, 0.02 kg (other
+// sellers give 21 to 22 g, the figure here).
+// The bore, outside diameter and width are ISO 15's for the designation,
+// so any maker's 6001 has them. The rings' section and the shields are
+// drawn, not measured. To hold it in a printed part, `bearing_seat.c2f`
+// cuts its pocket.
+
+// @description Deep groove ball bearing 6001, 12 mm bore, 28 mm outside, 8 mm
+// @description wide: for a 12 mm shaft that carries a real load: a wheel's
+// @description axle, a turntable's spindle.
+// @spec bearing: deep groove ball bearing, single row, 6001 (SKF 6001)
+// @spec bore: 12 mm
+// @spec outside diameter: 28 mm
+// @spec width: 8 mm
+// @spec dynamic load: 5.4 kN
+// @spec static load: 2.36 kN
+// @spec mass: 21 g
+// @source https://www.qualitybearingsonline.ca/6001-skf-deep-groove-bearing-12-x-28-x-8mm SKF 6001 at Quality Bearings Online (dimensions, load ratings, mass)
+
+use <lib/ball_bearing.c2f>
+
+module bearing_6001() {
+    ball_bearing(12, 28, 8);
+}
+
+bearing_6001();

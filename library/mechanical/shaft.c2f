@@ -1,0 +1,54 @@
+// Plain round shaft, a length of ground rod: its diameter, length and
+// material as parameters, both ends chamfered. Its axis along z, one end
+// at z = 0.
+// https://www.engineeringtoolbox.com/metal-alloys-densities-d_50.html
+//
+// The mass is the shaft's volume times its material's density, from the
+// Engineering ToolBox's table: steel 7.85 g/cm³, stainless steel 7.9
+// (7.48 to 8), aluminium 2.7, brass 8.5 (8.4 to 8.7). The sheet gives it
+// for the default 8 x 100 mm steel shaft; the file echoes it for the
+// parameters set. Stock rods come in whole millimeters (3 to 12 mm here),
+// ground to h6 or h8 for linear and ball bearings.
+
+// @description Plain round shaft, steel, stainless steel, aluminium or
+// @description brass, its diameter and length as parameters: an axle for a
+// @description wheel or a gear, the spindle that turns in two bearings.
+// @spec shaft: round rod, 3 to 12 mm across, 10 to 500 mm long
+// @spec diameter: 8 mm by default
+// @spec length: 100 mm by default
+// @spec material: steel by default; stainless steel, aluminium, brass
+// @spec mass: 39.5 g for 8 x 100 mm in steel
+// @source https://www.engineeringtoolbox.com/metal-alloys-densities-d_50.html Engineering ToolBox, the densities of metals
+
+/* [Shaft] */
+// The diameter, in millimeters.
+diameter = 8; // [3:1:12]
+// The length, in millimeters.
+length = 100; // [10:1:500]
+// What it is made of.
+material = "steel"; // [steel, stainless, aluminium, brass]
+
+// The density of `material`, in grams per cubic centimeter.
+function shaft_density(material) =
+    material == "stainless" ? 7.9 : material == "aluminium" ? 2.7 : material == "brass" ? 8.5 : 7.85;
+
+// The mass of a shaft, in grams.
+function shaft_mass(diameter, length, material = "steel") =
+    PI * diameter * diameter / 4 * length / 1000 * shaft_density(material);
+
+// A shaft `diameter` across and `length` long, of `material`, along z
+// from z = 0.
+module shaft(diameter = 8, length = 100, material = "steel") {
+    assert(material == "steel" || material == "stainless" || material == "aluminium" || material == "brass",
+           str("shaft: the material is steel, stainless, aluminium or brass, not \"", material, "\""));
+    echo(str("shaft: ", diameter, " x ", length, " mm, ", material, ", ", round(shaft_mass(diameter, length, material) * 10) / 10, " g"));
+    c = min(0.5, diameter / 10);
+    tint = material == "brass" ? [0.85, 0.68, 0.38]
+        : material == "aluminium" ? [0.85, 0.86, 0.88]
+        : material == "stainless" ? [0.76, 0.77, 0.79]
+        : [0.62, 0.63, 0.66];
+    color(tint) rotate_extrude($fn = 48)
+        polygon([[0, 0], [diameter / 2 - c, 0], [diameter / 2, c], [diameter / 2, length - c], [diameter / 2 - c, length], [0, length]]);
+}
+
+shaft(diameter, length, material);

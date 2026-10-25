@@ -17,6 +17,9 @@
 // Annotations are plain numbers: the pins are the pads on top of the
 // board, wherever the headers point. The board's bottom is 0.04 mm up,
 // on its pads and print.
+//
+// Its mass is estimated, about 3 g without headers: Seeed's pages do not
+// give it.
 
 // @description Thumb-sized ESP32-S3 board from Seeed Studio: Wi-Fi and
 // @description Bluetooth LE, a USB-C port and 11 GPIOs on castellated pads,
@@ -29,6 +32,7 @@
 // @spec interfaces: UART, I2C, SPI, I2S, ADC, capacitive touch
 // @spec pins: 2 x 7 at 2.54 mm pitch, rows 15.24 mm apart
 // @spec size: 21 x 17.8 mm
+// @spec mass: 3 g without headers (estimated)
 // @source https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/ getting started (Seeed Studio wiki)
 // @source https://www.seeedstudio.com/XIAO-ESP32S3-p-5627.html product page
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf ESP32-S3 datasheet

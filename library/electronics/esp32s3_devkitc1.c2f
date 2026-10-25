@@ -23,6 +23,9 @@
 // Annotations are plain numbers: the pins are the pads on top of the
 // board, wherever the headers point. The board's bottom is 0.04 mm up,
 // on its pads.
+//
+// Its mass is estimated, about 10 g without headers (the board, the module
+// and the two USB-C connectors): Espressif's pages do not give it.
 
 // @description Espressif's development board for the ESP32-S3-WROOM-1
 // @description module: Wi-Fi and Bluetooth LE, two USB-C ports (USB-to-UART
@@ -35,6 +38,7 @@
 // @spec interfaces: UART, I2C, SPI, I2S, ADC, capacitive touch, USB
 // @spec pins: 2 x 22 at 2.54 mm pitch, rows 22.86 mm apart
 // @spec size: 62.7 x 25.4 mm
+// @spec mass: 10 g without headers (estimated)
 // @source https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/index.html user guide
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf ESP32-S3-WROOM-1 datasheet
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf ESP32-S3 datasheet
