@@ -53,6 +53,8 @@ pub fn edited(circuit: &Circuit, edit: Edit) -> Circuit {
             allow: Vec::new(),
             span: Default::default(),
             to_span: Default::default(),
+            color_span: None,
+            via_span: None,
         }),
         Edit::Remove { wire } => {
             circuit.wires.remove(wire);
@@ -64,11 +66,17 @@ pub fn edited(circuit: &Circuit, edit: Edit) -> Circuit {
 /// The first error of the wiring checks that `edit` would bring, if any:
 /// errors the circuit has already are not its doing.
 pub fn new_error(circuit: &Circuit, edit: Edit) -> Option<String> {
+    new_errors(circuit, &edited(circuit, edit)).into_iter().next()
+}
+
+/// The errors of the wiring checks that `after` has and `before` has not,
+/// in the order of the circuit file.
+pub fn new_errors(before: &Circuit, after: &Circuit) -> Vec<String> {
     let errors = |c: &Circuit| -> Vec<String> {
         check::check(c).into_iter().filter(|f| f.severity == Severity::Error).map(|f| f.message).collect()
     };
-    let before: HashSet<String> = errors(circuit).into_iter().collect();
-    errors(&edited(circuit, edit)).into_iter().find(|message| !before.contains(message))
+    let before: HashSet<String> = errors(before).into_iter().collect();
+    errors(after).into_iter().filter(|message| !before.contains(message)).collect()
 }
 
 /// `"part.pin"`, as a circuit file writes an end.
@@ -103,18 +111,7 @@ pub fn apply(src: &str, circuit: &Circuit, edit: Edit) -> Result<(String, usize)
             let cursor = src[..range.start].chars().count() + new.chars().count();
             Ok((format!("{}{new}{}", &src[..range.start], &src[range.end..]), cursor))
         }
-        Edit::Add { from, to } => {
-            let mut out = src.to_string();
-            if !out.is_empty() && !out.ends_with('\n') {
-                out.push('\n');
-            }
-            if !out.is_empty() && !out.ends_with("\n\n") {
-                out.push('\n');
-            }
-            out.push_str(&format!("[[wires]]\nfrom = {}\nto = {}\n", quoted(circuit, from), quoted(circuit, to)));
-            let cursor = out.chars().count() - 1;
-            Ok((out, cursor))
-        }
+        Edit::Add { from, to } => Ok(append_wire(src, &format!("from = {}\nto = {}\n", quoted(circuit, from), quoted(circuit, to)))),
         Edit::Remove { wire } => {
             let w = circuit.wires.get(wire).ok_or_else(changed)?;
             let range = table(src, w.span.start as usize).ok_or_else(changed)?;
@@ -122,6 +119,23 @@ pub fn apply(src: &str, circuit: &Circuit, edit: Edit) -> Result<(String, usize)
             Ok((format!("{}{}", &src[..range.start], &src[range.end..]), cursor))
         }
     }
+}
+
+/// `src` with a `[[wires]]` table of `keys` (lines, each ending with a
+/// line break) last, after a blank line; and where to put the cursor, as
+/// a char index.
+pub fn append_wire(src: &str, keys: &str) -> (String, usize) {
+    let mut out = src.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.is_empty() && !out.ends_with("\n\n") {
+        out.push('\n');
+    }
+    out.push_str("[[wires]]\n");
+    out.push_str(keys);
+    let cursor = out.chars().count() - 1;
+    (out, cursor)
 }
 
 /// The bytes a `[[wires]]` table takes, from the blank line before its

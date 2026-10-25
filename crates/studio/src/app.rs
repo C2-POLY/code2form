@@ -51,6 +51,8 @@ use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
 /// The agent's live tools: they read and edit the open documents.
 pub mod live;
+/// The agent's live tools on the circuit open in the active tab.
+pub mod live_circuit;
 
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {

@@ -106,6 +106,10 @@ pub struct Wire {
     pub span: Span,
     /// Its `to` in the circuit file: the quoted value.
     pub to_span: Span,
+    /// Its `color` and `via` values when written, in the circuit file: for
+    /// editors that change them in place.
+    pub color_span: Option<Span>,
+    pub via_span: Option<Span>,
 }
 
 /// A pin of a part: indices into [`Circuit::parts`] and that part's pins.
@@ -284,7 +288,7 @@ struct PartEntry {
 struct WireEntry {
     from: Spanned<String>,
     to: Spanned<String>,
-    color: Option<String>,
+    color: Option<Spanned<String>>,
     label: Option<String>,
     via: Option<Spanned<Vec<Vec<f64>>>>,
     #[serde(default)]
@@ -478,8 +482,10 @@ impl Reader<'_> {
         }
         let via = self.points(entry.via.as_ref(), "via");
         let allow = entry.allow.into_iter().map(Spanned::into_inner).collect();
+        let (color_span, via_span) = (entry.color.as_ref().map(span), entry.via.as_ref().map(span));
         let (span, to_span) = (span(&entry.from), span(&entry.to));
-        Some(Wire { from, to, color: entry.color, label: entry.label, via, allow, span, to_span })
+        let color = entry.color.map(Spanned::into_inner);
+        Some(Wire { from, to, color, label: entry.label, via, allow, span, to_span, color_span, via_span })
     }
 
     fn end(&mut self, circuit: &Circuit, end: &Spanned<String>) -> Option<End> {
