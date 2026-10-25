@@ -16,6 +16,8 @@ use serde_json::{Value, json};
 
 pub mod circuit;
 pub mod conversation;
+pub mod engine;
+pub mod keys;
 pub mod loads;
 pub mod mass;
 mod mcp;
