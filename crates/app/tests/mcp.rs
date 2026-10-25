@@ -19,8 +19,13 @@ impl Server {
 
     /// The server with these environment variables set.
     fn start_with(env: &[(&str, &std::ffi::OsStr)]) -> Server {
+        Server::start_args(&["mcp"], env)
+    }
+
+    /// `c2f` with these arguments and environment variables.
+    fn start_args(args: &[&str], env: &[(&str, &std::ffi::OsStr)]) -> Server {
         let mut child = Command::new(env!("CARGO_BIN_EXE_c2f"))
-            .arg("mcp")
+            .args(args)
             .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1097,4 +1102,59 @@ fn a_brief_whose_blocks_cannot_be_measured_from_is_refused_and_fails() {
     assert_eq!(statuses, ["fails", "fails", "unmeasured"], "{report}");
     assert!(report["requirements"][2]["why"].as_str().unwrap().contains("`mass < 400 g`"), "{report}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The tool names of `tools/list`.
+fn tool_names(server: &mut Server) -> Vec<String> {
+    let list = server.request("tools/list", json!({}));
+    list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn with_no_studio_open_the_studio_s_tools_are_not_listed_and_say_so() {
+    let socket = temp_dir("no-studio").join("studio.sock");
+    let plain = tool_names(&mut Server::start_args(&["mcp"], &[("CODE2FORM_STUDIO_SOCKET", socket.as_os_str())]));
+    let mut server = Server::start_args(&["mcp", "--studio"], &[("CODE2FORM_STUDIO_SOCKET", socket.as_os_str())]);
+    assert_eq!(tool_names(&mut server), plain);
+    let (is_error, content) = server.call("edit_code", json!({ "edits": [] }));
+    assert!(is_error);
+    let why = if cfg!(unix) { "studio is not open" } else { "not supported" };
+    assert!(content[0]["text"].as_str().unwrap().contains(why), "{content:?}");
+    // The built-in tools work as ever.
+    let (is_error, report) = server.report("render", json!({ "code": "cube(2);" }));
+    assert!(!is_error);
+    assert_eq!(report["volume"], 8.0);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_studio_s_tools_come_after_the_built_in_ones() {
+    use std::sync::Arc;
+
+    use c2f_agent::Tools;
+
+    /// A studio with one tool, `studio_echo`.
+    struct Studio;
+
+    impl Tools for Studio {
+        fn list(&self) -> Vec<Value> {
+            vec![json!({ "name": "studio_echo", "description": "Says its `text` back.", "inputSchema": { "type": "object" } })]
+        }
+
+        fn call(&self, name: &str, args: &Value) -> Option<Result<Vec<Value>, String>> {
+            (name == "studio_echo").then(|| Ok(vec![json!({ "type": "text", "text": args["text"] })]))
+        }
+    }
+
+    let socket = std::env::temp_dir().join(format!("c2f-st-{}", std::process::id())).join("s.sock");
+    c2f_agent::studio_link::serve_at(&socket, Arc::new(Studio)).unwrap();
+    let plain = tool_names(&mut Server::start());
+    let mut server = Server::start_args(&["mcp", "--studio"], &[("CODE2FORM_STUDIO_SOCKET", socket.as_os_str())]);
+    let names = tool_names(&mut server);
+    assert_eq!(names[..plain.len()], plain[..]);
+    assert_eq!(names[plain.len()..], ["studio_echo".to_string()]);
+    let (is_error, content) = server.call("studio_echo", json!({ "text": "live" }));
+    assert!(!is_error);
+    assert_eq!(content, vec![json!({ "type": "text", "text": "live" })]);
+    let _ = std::fs::remove_dir_all(socket.parent().unwrap());
 }

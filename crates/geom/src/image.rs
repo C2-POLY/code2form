@@ -316,7 +316,7 @@ fn shade(camera: &Camera, normal: [f32; 3], color: [f32; 4]) -> [f32; 3] {
 }
 
 /// An 8-bit RGB PNG of `rgb`, rows of `width` pixels from the top.
-fn encode_png(width: usize, height: usize, rgb: &[u8]) -> Vec<u8> {
+pub fn encode_png(width: usize, height: usize, rgb: &[u8]) -> Vec<u8> {
     let mut raw = Vec::with_capacity((width * 3 + 1) * height);
     for row in rgb.chunks_exact(width * 3) {
         raw.push(0); // filter: none

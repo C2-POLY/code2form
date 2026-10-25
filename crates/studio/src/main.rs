@@ -63,6 +63,13 @@ default, in the language CODE2FORM_LANGUAGE names (en or fr), English by
 default.";
 
 fn main() -> ExitCode {
+    // An agent run by the studio (or by anyone, with the app's executable
+    // and no c2f installed) serves the tools there, the live ones too, on
+    // stdin and stdout, without a window.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["mcp", "--studio"] {
+        return mcp();
+    }
     // Old macOS versions add a process serial number to apps the Finder starts.
     let paths: Vec<PathBuf> =
         std::env::args_os().skip(1).filter(|a| !a.to_string_lossy().starts_with("-psn_")).map(PathBuf::from).collect();
@@ -143,6 +150,25 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     if ERRORS.failed.load(Ordering::Relaxed) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+}
+
+/// `code2form mcp --studio`: `c2f mcp --studio`, from the app itself.
+fn mcp() -> ExitCode {
+    eprintln!("code2form mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
+    let tools = match c2f_agent::Registry::builtin().with(Box::new(c2f_agent::studio_link::StudioProxy::new())) {
+        Ok(tools) => tools,
+        Err(err) => {
+            eprintln!("code2form mcp: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match c2f_agent::Server::new(tools).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("code2form mcp: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Prints eframe's errors, such as a window it could not open.

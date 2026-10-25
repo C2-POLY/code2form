@@ -112,6 +112,27 @@ impl Customizer {
         values
     }
 
+    /// The parameters shown, each with the value it renders with.
+    pub fn shown(&self) -> impl Iterator<Item = (&Parameter, &Literal)> {
+        self.parameters.iter().filter(|p| p.group != HIDDEN_GROUP).map(|p| (p, self.value(p)))
+    }
+
+    /// Sets the parameter `name` from `raw`, read as a value of the type
+    /// it has in the file, as the panel's fields read what is typed; the
+    /// error says why it cannot be.
+    pub fn set_typed(&mut self, name: &str, raw: &str) -> Result<(), String> {
+        let parameter = self.parameters.iter().find(|p| p.name == name).ok_or_else(|| format!("no parameter `{name}`"))?;
+        match parse_typed(&parameter.default, raw) {
+            Ok(Some(value)) => {
+                self.drafts.remove(name);
+                self.set(name, value);
+                Ok(())
+            }
+            Ok(None) => Err(format!("`{name}`: {raw} does not have the type of its default, {}", parameter.default.to_source())),
+            Err(why) => Err(format!("`{name}`: {why}")),
+        }
+    }
+
     fn value<'a>(&'a self, parameter: &'a Parameter) -> &'a Literal {
         self.values.get(&parameter.name).unwrap_or(&parameter.default)
     }
