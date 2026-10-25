@@ -534,6 +534,7 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "libc",
  "serde",
  "serde_json",
 ]

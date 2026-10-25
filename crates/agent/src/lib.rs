@@ -8,7 +8,9 @@
 //! host adds (the studio's live tools). A [`Server`] serves a registry over
 //! JSON-RPC; an in-process engine calls the registry itself, with the
 //! [`instructions`] and the [`prompts`]. [`conversation`] holds what the
-//! studio's chat panel and its engines exchange.
+//! studio's chat panel and its engines exchange; [`studio_link`] lets
+//! another process, such as `c2f mcp --studio`, call the tools of the
+//! studio that is open.
 
 use std::path::Path;
 
@@ -19,6 +21,7 @@ pub mod conversation;
 pub mod loads;
 pub mod mass;
 mod mcp;
+pub mod studio_link;
 mod tools;
 
 pub use mcp::{Builtin, Server};
@@ -28,6 +31,12 @@ pub use tools::{Registry, Tools};
 /// through them.
 pub fn instructions() -> &'static str {
     mcp::INSTRUCTIONS
+}
+
+/// A PNG picture as an MCP content item, as the `image` tool gives it:
+/// `{"type": "image", "data", "mimeType"}`, its bytes in base64.
+pub fn image_content(png: &[u8]) -> Value {
+    json!({ "type": "image", "data": mcp::base64(png), "mimeType": "image/png" })
 }
 
 /// The prompts, as `prompts/list` gives them: `{"prompts": [{name, title,

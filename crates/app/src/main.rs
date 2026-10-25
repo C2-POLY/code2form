@@ -13,7 +13,7 @@ usage: c2f <command> [options] <file.c2f>
        c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>
        c2f mass [--material <name>] [--infill <%>] [--wall <mm>] [-D name=value]... <file>
        c2f loads [--json] <scenario.json>
-       c2f mcp
+       c2f mcp [--studio]
 
 commands:
   ast     print the parsed program as an AST dump (`-o x.ast` layout)
@@ -57,7 +57,9 @@ commands:
           torque needed, each support's reaction, the shaft's deflection,
           the margins against the motor's and bearings' figures and a
           reduction when the torque falls short (--json: as JSON)
-  mcp     serve AI agents (Model Context Protocol) on stdin and stdout
+  mcp     serve AI agents (Model Context Protocol) on stdin and stdout;
+          --studio adds the live tools of the studio that is open, to
+          read and edit the document on screen
 
 circuit commands, on a `.c2fc` circuit:
   check   read the circuit, evaluate its parts and check its wiring:
@@ -256,8 +258,8 @@ fn parse_view(text: &str) -> Option<(f64, f64)> {
 
 fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args == ["mcp"] {
-        return mcp();
+    if args == ["mcp"] || args == ["mcp", "--studio"] {
+        return mcp(args.len() == 2);
     }
     if args.first().is_some_and(|arg| arg == "circuit") {
         return circuit::run(&args[1..]);
@@ -347,10 +349,21 @@ fn run() -> ExitCode {
 }
 
 /// `c2f mcp`: serves the agent's tools, the ones the studio's agent calls,
-/// on stdin and stdout; logs go to stderr.
-fn mcp() -> ExitCode {
+/// on stdin and stdout; logs go to stderr. With `studio`, the live tools
+/// of the studio that is open come after them.
+fn mcp(studio: bool) -> ExitCode {
     eprintln!("c2f mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
-    match Server::new(Registry::builtin()).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
+    let mut tools = Registry::builtin();
+    if studio {
+        tools = match tools.with(Box::new(c2f_agent::studio_link::StudioProxy::new())) {
+            Ok(tools) => tools,
+            Err(err) => {
+                eprintln!("c2f mcp: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+    }
+    match Server::new(tools).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("c2f mcp: {err}");

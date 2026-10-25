@@ -82,6 +82,12 @@ impl Console {
         self.rows.iter().filter(|row| row.first && row.level == level).count()
     }
 
+    /// Each row, oldest first: its level, its text, and whether the last
+    /// render printed it.
+    pub fn rows(&self) -> impl DoubleEndedIterator<Item = (Level, &str, bool)> {
+        self.rows.iter().map(|row| (row.level, row.text.as_str(), row.from_render))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }

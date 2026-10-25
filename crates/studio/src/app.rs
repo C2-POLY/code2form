@@ -48,6 +48,9 @@ use crate::window;
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
+/// The agent's live tools: they read and edit the open documents.
+pub mod live;
+
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {
     (tr("Code2Form design", "Fichier Code2Form"), "c2f")
@@ -228,6 +231,8 @@ struct ModelInfo {
     empty: bool,
     /// The parts of a circuit; 0 for a design.
     parts: usize,
+    /// The corners of the box around what is drawn.
+    bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 /// An open file and everything that goes with it: its text and undo
@@ -300,6 +305,8 @@ struct Tab {
     explode_shown: f32,
     /// Radially, or along each part's axis.
     explode_how: c2f_geom::Explode,
+    /// The lines (from 0, the end excluded) the agent's last edit changed.
+    agent_marks: Vec<std::ops::Range<usize>>,
 }
 
 impl Tab {
@@ -342,6 +349,7 @@ impl Tab {
             explode_amount: EXPLODE_START,
             explode_shown: 0.0,
             explode_how: c2f_geom::Explode::default(),
+            agent_marks: Vec::new(),
         }
     }
 
@@ -455,6 +463,8 @@ pub struct StudioApp {
     /// switch, as last drawn.
     header_right: f32,
     header_switch: f32,
+    /// The requests of the agent's live tools.
+    live: live::Live,
 }
 
 impl StudioApp {
@@ -473,6 +483,14 @@ impl StudioApp {
         let icon = app.settings.icon;
         if let Err(err) = icon_setting::restore(icon) {
             app.doc.console.log(Level::Warning, tr!("Cannot give the app its {} icon: {err}", "Impossible de donner à l'app l'icône {} : {err}", icon.name()));
+        }
+        // Agents reach the open documents through `c2f mcp --studio`;
+        // not from a screenshot run, which is no one's studio, nor yet on
+        // Windows.
+        if app.screenshot.is_none() && cfg!(unix) {
+            if let Err(err) = c2f_agent::studio_link::serve(Arc::new(app.live_tools())) {
+                app.doc.console.log(Level::Info, tr!("Agents cannot reach this window: {err}", "Les agents ne peuvent pas joindre cette fenêtre : {err}"));
+            }
         }
         app
     }
@@ -524,6 +542,7 @@ impl StudioApp {
             arrangement: Arrangement::Split,
             header_right: 0.0,
             header_switch: 0.0,
+            live: live::Live::new(ctx),
         };
         app.apply_settings(ctx);
         // A screenshot of a layout, as `layout:view`.
@@ -817,6 +836,7 @@ impl StudioApp {
                             formats: scene.formats,
                             empty,
                             parts: scene.parts.len(),
+                            bounds: scene.bounds(),
                         });
                         if !self.doc.is_circuit() && current {
                             // A design's @circuit and its parts.
@@ -3583,6 +3603,7 @@ impl eframe::App for StudioApp {
             }
         }
         self.receive();
+        self.serve_live(ctx);
         self.animate(ctx);
         self.explode(ctx);
         self.shortcuts(ctx);
