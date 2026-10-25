@@ -6,11 +6,13 @@ pub mod ast;
 pub mod customizer;
 pub mod diagnostic;
 pub mod dump;
+pub mod file_scope;
 pub mod lexer;
 pub mod parser;
 pub mod scope;
 pub mod span;
 
 pub use diagnostic::Diagnostic;
+pub use file_scope::FileScope;
 pub use parser::{Includes, parse, parse_with_includes};
 pub use span::Span;

@@ -45,7 +45,7 @@ pub fn enclosure(circuit: &Circuit) -> Result<Option<c2f_geom::Rendered>, String
     let library_paths = c2f_eval::default_library_paths();
     let program = c2f_eval::read_source(enclosure)
         .ok()
-        .and_then(|src| c2f_eval::Program::load(&src, enclosure, &library_paths).ok())
+        .and_then(|src| c2f_eval::Program::load_in(&src, enclosure, &library_paths, circuit.scope.as_ref()).ok())
         .ok_or_else(|| format!("cannot load the enclosure {}", enclosure.display()))?;
     let output = c2f_eval::evaluate(&program);
     // `%` copies of the parts, there to be seen through, are not the
@@ -142,7 +142,7 @@ pub fn assemble(circuit: &Circuit, src: &str, path: &Path) -> Assembly {
         let index = match evaluated.iter().position(|(k, _)| *k == key) {
             Some(index) => index,
             None => {
-                let nodes = evaluate(instance, &library_paths, src, path, &mut assembly);
+                let nodes = evaluate(instance, (&library_paths, circuit.scope.as_ref()), src, path, &mut assembly);
                 evaluated.push((key, nodes));
                 evaluated.len() - 1
             }
@@ -163,13 +163,13 @@ pub fn assemble(circuit: &Circuit, src: &str, path: &Path) -> Assembly {
 /// folder; `None` when it does not load or its evaluation stops.
 fn evaluate(
     instance: &Instance,
-    library_paths: &[PathBuf],
+    (library_paths, scope): (&[PathBuf], Option<&c2f_lang::FileScope>),
     src: &str,
     path: &Path,
     assembly: &mut Assembly,
 ) -> Option<Vec<Node>> {
     let what = format!("`{}` ({})", instance.name, instance.part);
-    let program = match c2f_eval::Program::load(&instance.source_with_params(), &instance.path, library_paths) {
+    let program = match c2f_eval::Program::load_in(&instance.source_with_params(), &instance.path, library_paths, scope) {
         Ok(program) => program,
         Err(err) => {
             assembly.errors.push(Error { path: err.path, src: err.src, diagnostic: err.diagnostic });

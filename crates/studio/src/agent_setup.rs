@@ -168,6 +168,7 @@ impl AgentSettings {
             export: self.allow_export,
             save_part: self.allow_save_part,
             electrify: self.allow_electrify,
+            ask_first: self.ask_first,
             scope: folder.map(|folder| Scope { folder: folder.to_path_buf(), read_only }),
         }
     }
@@ -312,6 +313,7 @@ pub fn choose(agent: &AgentSettings, probe: &Probe) -> Result<Pick, String> {
                 "Claude Code n'est pas connecté : lancez `claude` puis /login dans un terminal.",
             )
             .into()),
+            (ClaudeCodeStatus::TooOld { .. }, _) => Err(probe.status.message()),
             _ => Err(tr("Claude Code is not found: install it, or give its path in the settings.", "Claude Code est introuvable : installez-le, ou indiquez son chemin dans les réglages.").into()),
         }
     };
@@ -470,6 +472,7 @@ fn claude_state(probe: Option<&Probe>, checking: bool) -> String {
             "Claude Code {version} — non connecté (lancez `claude` puis /login dans un terminal)"
         ),
         ClaudeCodeStatus::Missing => tr("Claude Code — not found", "Claude Code — introuvable").into(),
+        ClaudeCodeStatus::TooOld { .. } => probe.status.message(),
     };
     if checking { tr!("{state} (checking…)", "{state} (vérification…)") } else { state }
 }

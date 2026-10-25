@@ -109,17 +109,56 @@ fn search_path(claude: &Path) -> OsString {
     std::env::join_paths(dirs).unwrap_or(inherited)
 }
 
+/// The oldest Claude Code with the flags this engine passes
+/// (`--restricted`, `--permission-prompts`). 2.1.310 has them; no
+/// changelog was at hand to tell the first release that did, so this is a
+/// floor below it, which a newer finding may raise.
+pub const MIN_VERSION: &str = "2.1.300";
+
 /// What the studio can tell the user about their Claude Code.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClaudeCodeStatus {
     /// No `claude` there, or it does not run.
     Missing,
+    /// It runs, but is older than [`MIN_VERSION`]: it would refuse the
+    /// command line.
+    TooOld { version: String, needed: String },
     /// It runs, but says nothing of its login: a turn tells.
     Found { version: String },
     /// It runs and is logged out: `claude` then `/login` in a terminal.
     NotLoggedIn { version: String },
     /// It runs and is logged in.
     Ready { version: String },
+}
+
+impl ClaudeCodeStatus {
+    /// What to tell the user, in a sentence.
+    pub fn message(&self) -> String {
+        match self {
+            ClaudeCodeStatus::Missing => "Claude Code — not found".into(),
+            ClaudeCodeStatus::TooOld { version, needed } => {
+                format!("Claude Code {version} — too old: {needed} or newer is needed (run `claude update`)")
+            }
+            ClaudeCodeStatus::Found { version } => format!("Claude Code {version} — found"),
+            ClaudeCodeStatus::NotLoggedIn { version } => {
+                format!("Claude Code {version} — not logged in: run `claude`, then /login")
+            }
+            ClaudeCodeStatus::Ready { version } => format!("Claude Code {version} — ready"),
+        }
+    }
+}
+
+impl std::fmt::Display for ClaudeCodeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+/// Whether the version `version` ("2.1.310") is older than `needed`;
+/// `None` when either does not read as numbers.
+fn older(version: &str, needed: &str) -> Option<bool> {
+    let numbers = |v: &str| v.split('.').map(|n| n.parse::<u64>().ok()).collect::<Option<Vec<u64>>>();
+    Some(numbers(version)? < numbers(needed)?)
 }
 
 /// The state of the Claude Code at `path`, from `claude --version` and
@@ -141,6 +180,9 @@ pub fn status(path: &Path) -> ClaudeCodeStatus {
     // "2.1.310 (Claude Code)"
     let text = String::from_utf8_lossy(&output.stdout);
     let version = text.split_whitespace().next().unwrap_or("").to_string();
+    if older(&version, MIN_VERSION) == Some(true) {
+        return ClaudeCodeStatus::TooOld { version, needed: MIN_VERSION.into() };
+    }
     // `auth status` exits 1 when logged out, with the JSON all the same.
     let logged_in = run(&["auth", "status", "--json"])
         .and_then(|output| serde_json::from_slice::<Value>(&output.stdout).ok())
@@ -424,8 +466,9 @@ struct Shared {
     /// How many turns were sent, to tell the turn under way from the
     /// next one.
     turns: AtomicU64,
-    /// The user asked to stop the turn under way.
-    stopping: AtomicBool,
+    /// The turn the user asked to stop (its number in `turns`), 0 for none:
+    /// a stop that comes as a turn ends never stops the next one.
+    stopping: AtomicU64,
     /// The process has ended.
     ended: AtomicBool,
     /// The last of what the process wrote on its standard error.
@@ -438,10 +481,35 @@ impl Shared {
         self.turn.load(Ordering::SeqCst) && self.turns.load(Ordering::SeqCst) == turns
     }
 
+    /// Whether the user asked to stop the turn under way.
+    fn stopping(&self) -> bool {
+        let stopping = self.stopping.load(Ordering::SeqCst);
+        stopping != 0 && stopping == self.turns.load(Ordering::SeqCst)
+    }
+
+    /// Starts the next turn: its number.
+    fn begin(&self) -> u64 {
+        self.stopping.store(0, Ordering::SeqCst);
+        let turn = self.turns.fetch_add(1, Ordering::SeqCst) + 1;
+        self.turn.store(true, Ordering::SeqCst);
+        turn
+    }
+
+    /// Marks the turn under way as stopped: the turn it is, or `None`
+    /// when none is under way.
+    fn request_stop(&self) -> Option<u64> {
+        let turn = self.turns.load(Ordering::SeqCst);
+        if !self.open(turn) {
+            return None;
+        }
+        self.stopping.store(turn, Ordering::SeqCst);
+        Some(turn)
+    }
+
     fn send(&self, event: Event) {
         if matches!(event, Event::Done { .. } | Event::Error { .. }) {
             self.turn.store(false, Ordering::SeqCst);
-            self.stopping.store(false, Ordering::SeqCst);
+            self.stopping.store(0, Ordering::SeqCst);
         }
         if let Some(events) = self.events.lock().unwrap().as_ref() {
             // A listener gone stops nothing.
@@ -465,6 +533,9 @@ pub struct ClaudeCodeEngine {
     session: Arc<Mutex<Option<String>>>,
     process: Option<Process>,
     requests: AtomicU64,
+    /// Let Claude Code use `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`)
+    /// from the environment; off, it uses the user's subscription.
+    use_api_key_env: bool,
 }
 
 impl ClaudeCodeEngine {
@@ -472,7 +543,27 @@ impl ClaudeCodeEngine {
     /// message.
     pub fn new(options: ClaudeCodeOptions) -> ClaudeCodeEngine {
         let session = Arc::new(Mutex::new(options.resume.clone()));
-        ClaudeCodeEngine { options, session, process: None, requests: AtomicU64::new(0) }
+        ClaudeCodeEngine { options, session, process: None, requests: AtomicU64::new(0), use_api_key_env: false }
+    }
+
+    /// Whether Claude Code may bill an API key the environment gives
+    /// (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`) rather than the user's
+    /// subscription: off by default, as an inherited key would otherwise
+    /// win without the user knowing.
+    pub fn use_api_key_env(mut self, use_it: bool) -> ClaudeCodeEngine {
+        self.use_api_key_env = use_it;
+        self
+    }
+
+    /// The command that starts Claude Code, without its arguments.
+    fn command(&self) -> Command {
+        let claude = &self.options.claude;
+        let mut command = Command::new(claude);
+        command.current_dir(&self.options.cwd).env("PATH", search_path(claude));
+        if !self.use_api_key_env {
+            command.env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN");
+        }
+        command
     }
 
     /// The session to resume this conversation with, once a turn named it.
@@ -483,10 +574,9 @@ impl ClaudeCodeEngine {
     fn start(&mut self) -> Result<Process, String> {
         let claude = &self.options.claude;
         let resume = self.session_id();
-        let mut child = Command::new(claude)
+        let mut child = self
+            .command()
             .args(arguments(&self.options, resume.as_deref()))
-            .current_dir(&self.options.cwd)
-            .env("PATH", search_path(claude))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -499,7 +589,7 @@ impl ClaudeCodeEngine {
             events: Mutex::new(None),
             turn: AtomicBool::new(false),
             turns: AtomicU64::new(0),
-            stopping: AtomicBool::new(false),
+            stopping: AtomicU64::new(0),
             ended: AtomicBool::new(false),
             stderr: Mutex::new(String::new()),
         });
@@ -536,7 +626,7 @@ impl ClaudeCodeEngine {
                 }
                 for mut event in events {
                     // A stopped turn ends as done, whatever the CLI says.
-                    if matches!(event, Event::Error { .. }) && reader.stopping.load(Ordering::SeqCst) {
+                    if matches!(event, Event::Error { .. }) && reader.stopping() {
                         event = Event::Done { usage: None, cost_usd: None, session_id: translator.session.clone() };
                     }
                     reader.send(event);
@@ -547,7 +637,7 @@ impl ClaudeCodeEngine {
             if !reader.turn.load(Ordering::SeqCst) {
                 return;
             }
-            if reader.stopping.load(Ordering::SeqCst) {
+            if reader.stopping() {
                 reader.send(Event::Done { usage: None, cost_usd: None, session_id: translator.session.clone() });
                 return;
             }
@@ -572,8 +662,7 @@ impl ClaudeCodeEngine {
         }
         let process = self.process.as_mut().expect("a process");
         *process.shared.events.lock().unwrap() = Some(events.clone());
-        process.shared.turns.fetch_add(1, Ordering::SeqCst);
-        process.shared.turn.store(true, Ordering::SeqCst);
+        process.shared.begin();
         let written = writeln!(process.stdin, "{line}").and_then(|()| process.stdin.flush());
         written.map_err(|err| {
             process.shared.turn.store(false, Ordering::SeqCst);
@@ -619,16 +708,14 @@ impl Engine for ClaudeCodeEngine {
 
     fn stop(&mut self) {
         let Some(process) = self.process.as_mut() else { return };
-        if !process.shared.turn.load(Ordering::SeqCst) {
-            return;
-        }
-        process.shared.stopping.store(true, Ordering::SeqCst);
+        // Idle, nothing to interrupt: an interrupt now would reach the CLI
+        // between turns.
+        let Some(turn) = process.shared.request_stop() else { return };
         let id = self.requests.fetch_add(1, Ordering::SeqCst);
         let request = json!({ "type": "control_request", "request_id": format!("stop-{id}"), "request": { "subtype": "interrupt" } });
         let asked = writeln!(process.stdin, "{request}").and_then(|()| process.stdin.flush()).is_ok();
-        let (shared, child, session) = (process.shared.clone(), process.child.clone(), self.session.clone());
         // The next turn may start before the deadline: it is left alone.
-        let turn = shared.turns.load(Ordering::SeqCst);
+        let (shared, child, session) = (process.shared.clone(), process.child.clone(), self.session.clone());
         thread::spawn(move || {
             let deadline = Instant::now() + if asked { STOP_GRACE } else { Duration::ZERO };
             while Instant::now() < deadline {
@@ -805,6 +892,50 @@ mod tests {
     }
 
     #[test]
+    fn versions_compare_by_their_numbers() {
+        assert_eq!(older("2.1.299", "2.1.300"), Some(true));
+        assert_eq!(older("2.1.310", "2.1.300"), Some(false));
+        assert_eq!(older("2.10.0", "2.9.9"), Some(false));
+        assert_eq!(older("2.1.300", "2.1.300"), Some(false));
+        assert_eq!(older("dev", "2.1.300"), None);
+    }
+
+    #[test]
+    fn the_subscription_is_used_unless_asked_otherwise() {
+        let removed = |engine: &ClaudeCodeEngine| -> Vec<String> {
+            let command = engine.command();
+            command.get_envs().filter(|(_, value)| value.is_none()).map(|(key, _)| key.to_string_lossy().into_owned()).collect()
+        };
+        let engine = ClaudeCodeEngine::new(options("claude".into(), Permission::ApplyDirectly));
+        let gone = removed(&engine);
+        assert!(gone.iter().any(|k| k == "ANTHROPIC_API_KEY") && gone.iter().any(|k| k == "ANTHROPIC_AUTH_TOKEN"), "{gone:?}");
+        let engine = ClaudeCodeEngine::new(options("claude".into(), Permission::ApplyDirectly)).use_api_key_env(true);
+        assert!(removed(&engine).is_empty());
+    }
+
+    #[test]
+    fn a_stop_that_comes_as_a_turn_ends_never_stops_the_next() {
+        let shared = Shared {
+            events: Mutex::new(None),
+            turn: AtomicBool::new(false),
+            turns: AtomicU64::new(0),
+            stopping: AtomicU64::new(0),
+            ended: AtomicBool::new(false),
+            stderr: Mutex::new(String::new()),
+        };
+        assert_eq!(shared.request_stop(), None, "idle: nothing to stop");
+        let first = shared.begin();
+        // The stop sees the turn under way...
+        assert_eq!(shared.request_stop(), Some(first));
+        // ...which ends meanwhile; the stop's mark lands after.
+        shared.send(Event::Done { usage: None, cost_usd: None, session_id: None });
+        shared.stopping.store(first, Ordering::SeqCst);
+        assert!(shared.stopping(), "still the stopped turn's");
+        shared.begin();
+        assert!(!shared.stopping(), "the next turn is not stopped");
+    }
+
+    #[test]
     fn a_configured_path_that_is_not_there_is_not_found() {
         assert_eq!(find_claude(Some(Path::new("/no/such/claude"))), None);
         assert_eq!(status(Path::new("/no/such/claude")), ClaudeCodeStatus::Missing);
@@ -862,9 +993,29 @@ done
             assert_eq!(status(&ready), ClaudeCodeStatus::Ready { version: "2.1.310".into() });
             let out = script("case \"$1\" in --version) echo '2.1.310 (Claude Code)';; auth) echo '{\"loggedIn\": false}'; exit 1;; esac\n");
             assert_eq!(status(&out), ClaudeCodeStatus::NotLoggedIn { version: "2.1.310".into() });
-            let old = script("case \"$1\" in --version) echo '1.0.0 (Claude Code)';; *) exit 2;; esac\n");
-            assert_eq!(status(&old), ClaudeCodeStatus::Found { version: "1.0.0".into() });
-            assert_eq!(find_claude(Some(&old)), Some(old.clone()));
+            let found = script("case \"$1\" in --version) echo '2.1.310 (Claude Code)';; *) exit 2;; esac\n");
+            assert_eq!(status(&found), ClaudeCodeStatus::Found { version: "2.1.310".into() });
+            assert_eq!(find_claude(Some(&found)), Some(found.clone()));
+            // Older than the flags it is given: said so, not run.
+            let old = script("case \"$1\" in --version) echo '1.0.0 (Claude Code)';; auth) echo '{\"loggedIn\": true}';; esac\n");
+            let too_old = status(&old);
+            assert_eq!(too_old, ClaudeCodeStatus::TooOld { version: "1.0.0".into(), needed: MIN_VERSION.into() });
+            assert!(too_old.to_string().contains("too old") && too_old.message().contains(MIN_VERSION), "{too_old}");
+        }
+
+        #[test]
+        fn a_stop_when_idle_sends_no_interrupt() {
+            let claude = script(PLAYER);
+            let dir = claude.parent().unwrap().to_path_buf();
+            let mut engine = ClaudeCodeEngine::new(options(claude, Permission::ApplyDirectly));
+            let (sender, receiver) = mpsc::channel();
+            engine.send(UserMessage::text("a cube"), sender.clone()).unwrap();
+            turn(&receiver);
+            engine.stop();
+            engine.send(UserMessage::text("again"), sender).unwrap();
+            assert!(matches!(turn(&receiver).last(), Some(Event::Done { .. })));
+            let stdin = std::fs::read_to_string(dir.join("stdin.txt")).unwrap();
+            assert!(!stdin.contains("interrupt"), "{stdin}");
         }
 
         #[test]

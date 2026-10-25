@@ -229,7 +229,7 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
     let mut circuit_mass: Option<Result<c2f_geom::MassReport, String>> = None;
     let mut circuit_path = string("circuit").map(PathBuf::from);
     if let Some(design) = string("design") {
-        let mut design_args = json!({ "path": design });
+        let mut design_args = super::scoped(json!({ "path": design }), args);
         if let Some(parameters) = args.get("parameters") {
             design_args["parameters"] = parameters.clone();
         }
@@ -259,9 +259,13 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
     } else {
         notes.push("no `design` given: its pieces and sizes are not measured".into());
     }
+    let scope = crate::guard::file_scope(args);
     if let Some(path) = &circuit_path {
+        if scope.as_ref().is_some_and(|scope| !scope.allows(path)) {
+            return Err(c2f_lang::FileScope::refusal(&path.display().to_string()));
+        }
         let src = std::fs::read_to_string(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
-        let circuit = c2f_circuit::parse(&src, path, &c2f_eval::default_library_paths())
+        let circuit = c2f_circuit::parse_in(&src, path, &c2f_eval::default_library_paths(), scope.as_ref())
             .map_err(|_| format!("{} does not read: check it with `check_circuit`", path.display()))?;
         measured.components = Some(circuit.parts.iter().map(|p| p.part.clone()).collect());
         // The circuit gives its components' masses, where it places them.
@@ -283,7 +287,7 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
     }
     if let Some(scenario) = &brief.loads {
         let dir = brief_path.parent().filter(|p| !p.as_os_str().is_empty());
-        measured.margins = crate::loads::evaluate(scenario, dir)
+        measured.margins = crate::loads::evaluate_in(scenario, dir, scope.as_ref())
             .map(|report| (report.margins.torque, report.margins.motor_radial))
             .map_err(|err| format!("the brief's ```json loads``` block cannot be measured: {err}"));
         measured.loads_broken = measured.margins.is_err();

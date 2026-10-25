@@ -461,7 +461,7 @@ fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
     if circuit_path.exists() {
         return Err(format!("{} exists already: name another with `circuit`", circuit_path.display()));
     }
-    let before = render(&json!({ "path": path }))?.1;
+    let before = render(&scoped(json!({ "path": path }), args))?.1;
     let piece = args.get("piece").and_then(Value::as_str);
     let done = c2f_circuit::electrify::electrify(&src, &design_file, &circuit_file, piece)?;
     std::fs::write(&circuit_path, &done.circuit).map_err(|err| format!("cannot write {}: {err}", circuit_path.display()))?;
@@ -472,7 +472,7 @@ fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
         why
     };
     std::fs::write(&path, &done.design).map_err(|err| undo(format!("cannot write {}: {err}", path.display())))?;
-    let after = render(&json!({ "path": path })).map_err(undo)?.1;
+    let after = render(&scoped(json!({ "path": path }), args)).map_err(undo)?.1;
     let report = json!({
         "ok": true,
         "design": path.display().to_string(),
@@ -656,23 +656,38 @@ fn load(args: &Value) -> Result<(c2f_eval::Program, String), String> {
         }
         _ => return Err("give either `code` (the program's text) or `path` (a file)".into()),
     };
-    let mut program = c2f_eval::Program::load(&src, &path, &c2f_eval::default_library_paths()).map_err(|err| {
+    let scope = crate::guard::file_scope(args);
+    let libraries = c2f_eval::default_library_paths();
+    let mut program = c2f_eval::Program::load_in(&src, &path, &libraries, scope.as_ref()).map_err(|err| {
         let file_src = &err.src;
         let offset = (err.diagnostic.span.start as usize).min(file_src.len());
         let (line, column) = c2f_lang::span::LineIndex::new(file_src).line_col(file_src, offset);
-        pretty(&json!({
+        let mut report = json!({
             "ok": false,
             "error": err.diagnostic.message,
             "file": err.path.display().to_string(),
             "line": line + 1,
             "column": column + 1,
-            "diagnostic": err.render(),
-        }))
+        });
+        // The diagnostic quotes the file: never one outside the scope.
+        if scope.as_ref().is_none_or(|scope| scope.allows(&err.path)) {
+            report["diagnostic"] = json!(err.render());
+        }
+        pretty(&report)
     })?;
     if let Some(values) = args.get("parameters") {
         set_parameters(&mut program, &src, values)?;
     }
     Ok((program, src))
+}
+
+/// `args` with the scope `from` carries ([`crate::guard::SCOPE_KEY`]), for
+/// a tool that loads another model than the one it was given.
+pub(crate) fn scoped(mut args: Value, from: &Value) -> Value {
+    if let (Some(object), Some(scope)) = (args.as_object_mut(), from.get(crate::guard::SCOPE_KEY)) {
+        object.insert(crate::guard::SCOPE_KEY.into(), scope.clone());
+    }
+    args
 }
 
 /// Sets customizer parameters from JSON values, read as a parameter set

@@ -65,11 +65,8 @@ fn check_part(args: &Value) -> Result<Vec<Value>, String> {
     let (src, file) = match (string("code"), string("path")) {
         (Some(code), None) => (code.to_string(), None),
         (None, Some(path)) => {
-            let dirs = string("working_dir").map(PathBuf::from).into_iter().chain(c2f_eval::default_library_paths());
-            let file = std::iter::once(PathBuf::from(path))
-                .chain(dirs.map(|dir| dir.join(path)))
-                .find(|file| file.is_file())
-                .ok_or_else(|| format!("cannot find `{path}`, as is, in `working_dir` or in the library folders"))?;
+            let dirs: Vec<PathBuf> = string("working_dir").map(PathBuf::from).into_iter().chain(c2f_eval::default_library_paths()).collect();
+            let file = c2f_circuit::loads::find_part_in(path, &dirs, crate::guard::file_scope(args).as_ref())?;
             let src = c2f_eval::read_source(&file).map_err(|err| format!("cannot read {}: {err}", file.display()))?;
             (src, Some(file))
         }
