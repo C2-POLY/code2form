@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use c2f_agent::Tools;
+use c2f_agent::guard::{self, FileScope};
 use c2f_circuit::check::{self, Severity};
 use c2f_circuit::{Circuit, End};
 use c2f_lang::Span;
@@ -49,7 +50,8 @@ pub enum CircuitEdit {
 
 /// What the UI thread is asked to do for these tools.
 pub enum CircuitOp {
-    Edit(CircuitEdit),
+    /// The edit, its parts found in the agent's scope when it has one.
+    Edit(Box<CircuitEdit>, Option<FileScope>),
     /// Renders the circuit if its text changed since: the text, for the
     /// checks, and the render to wait for.
     Refresh,
@@ -69,10 +71,11 @@ pub struct Edited {
     pub circuit: Circuit,
 }
 
-/// The circuit's text `src`, the file at `path`, with `edit` made; or why
-/// it is refused, and then nothing is changed.
-pub fn edit_circuit(src: &str, path: &Path, libraries: &[PathBuf], edit: &CircuitEdit) -> Result<Edited, String> {
-    let before = read(src, path, libraries)
+/// The circuit's text `src`, the file at `path`, with `edit` made, its
+/// parts found in `scope` alone when there is one; or why it is refused,
+/// and then nothing is changed.
+pub fn edit_circuit(src: &str, path: &Path, libraries: &[PathBuf], scope: Option<&FileScope>, edit: &CircuitEdit) -> Result<Edited, String> {
+    let before = read(src, path, libraries, scope)
         .map_err(|why| format!("the circuit does not read as it is, fix it first (edit_code): {why}"))?;
     let (text, cursor, done) = match edit {
         CircuitEdit::Place { name, part, at, rotate, params, color } => {
@@ -83,7 +86,7 @@ pub fn edit_circuit(src: &str, path: &Path, libraries: &[PathBuf], edit: &Circui
         }
         CircuitEdit::Disconnect { index, ends } => disconnect(src, &before, *index, ends.as_ref())?,
     };
-    let after = read(&text, path, libraries).map_err(|why| format!("refused, nothing was changed: {why}"))?;
+    let after = read(&text, path, libraries, scope).map_err(|why| format!("refused, nothing was changed: {why}"))?;
     let errors = rewire::new_errors(&before, &after);
     if !errors.is_empty() {
         return Err(format!(
@@ -95,8 +98,8 @@ pub fn edit_circuit(src: &str, path: &Path, libraries: &[PathBuf], edit: &Circui
 }
 
 /// The circuit `src` reads as, or its problems with their lines.
-fn read(src: &str, path: &Path, libraries: &[PathBuf]) -> Result<Circuit, String> {
-    c2f_circuit::parse(src, path, libraries).map_err(|errors| {
+fn read(src: &str, path: &Path, libraries: &[PathBuf], scope: Option<&FileScope>) -> Result<Circuit, String> {
+    c2f_circuit::parse_in(src, path, libraries, scope).map_err(|errors| {
         let problems: Vec<String> = errors
             .iter()
             .map(|e| {
@@ -360,10 +363,11 @@ fn first_focus(findings: &[Value]) -> Option<String> {
 }
 
 /// The findings of check_live, each with what it is about: the wiring
-/// checks of the circuit `src` reads as, then the warnings of `fit`.
-fn findings(src: &str, path: &Path, libraries: &[PathBuf], fit: &Value) -> Vec<Value> {
+/// checks of the circuit `src` reads as (its parts found in `scope` when
+/// there is one), then the warnings of `fit`.
+fn findings(src: &str, path: &Path, libraries: &[PathBuf], scope: Option<&FileScope>, fit: &Value) -> Vec<Value> {
     let mut found = Vec::new();
-    if let Ok(circuit) = c2f_circuit::parse(src, path, libraries) {
+    if let Ok(circuit) = c2f_circuit::parse_in(src, path, libraries, scope) {
         for finding in check::check(&circuit) {
             found.push(json!({
                 "severity": finding.severity.name(),
@@ -512,10 +516,10 @@ pub fn tools() -> Vec<Value> {
 /// Calls the circuit tool `name`, if it is one.
 pub fn call(tools: &LiveTools, name: &str, args: &Value) -> Option<Result<Vec<Value>, String>> {
     Some(match name {
-        "place_component" => parse_place(args).and_then(|edit| modify(tools, edit)),
-        "connect" => parse_connect(args).and_then(|edit| modify(tools, edit)),
-        "disconnect" => parse_disconnect(args).and_then(|edit| modify(tools, edit)),
-        "check_live" => check_live(tools),
+        "place_component" => parse_place(args).and_then(|edit| modify(tools, edit, args)),
+        "connect" => parse_connect(args).and_then(|edit| modify(tools, edit, args)),
+        "disconnect" => parse_disconnect(args).and_then(|edit| modify(tools, edit, args)),
+        "check_live" => check_live(tools, args),
         "assembly" => match args.get("action").and_then(Value::as_str) {
             Some(action) => tools.ask_circuit(CircuitOp::Assembly(action.into())).map(|done| vec![text(pretty(&done))]),
             None => Err("`action` is `start`, `next` or `stop`".into()),
@@ -565,17 +569,18 @@ fn parse_disconnect(args: &Value) -> Result<CircuitEdit, String> {
     Ok(CircuitEdit::Disconnect { index: index(args)?, ends })
 }
 
-/// Makes `edit` in the studio and waits for its render.
-fn modify(tools: &LiveTools, edit: CircuitEdit) -> Result<Vec<Value>, String> {
-    let done = tools.ask_circuit(CircuitOp::Edit(edit))?;
-    let report = tools.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0), Instant::now() + RENDER_WAIT);
+/// Makes `edit` in the studio and waits for its render; in the scope of
+/// the agent called with `args`, if any.
+fn modify(tools: &LiveTools, edit: CircuitEdit, args: &Value) -> Result<Vec<Value>, String> {
+    let done = tools.ask_circuit(CircuitOp::Edit(Box::new(edit), guard::file_scope(args)))?;
+    let report = tools.render_report(&done, Instant::now() + RENDER_WAIT, args);
     Ok(vec![text(pretty(&json!({ "done": done["done"], "check": done["check"], "render": report })))])
 }
 
-fn check_live(tools: &LiveTools) -> Result<Vec<Value>, String> {
+fn check_live(tools: &LiveTools, args: &Value) -> Result<Vec<Value>, String> {
     let shown = tools.ask_circuit(CircuitOp::Refresh)?;
-    let render = tools.wait_render(shown["tab_id"].as_u64().unwrap_or(0), shown["generation"].as_u64().unwrap_or(0), Instant::now() + RENDER_WAIT);
-    let call = json!({ "code": shown["text"], "working_dir": shown["dir"] });
+    let render = tools.render_report(&shown, Instant::now() + RENDER_WAIT, args);
+    let call = guard::scoped(json!({ "code": shown["text"], "working_dir": shown["dir"] }), args);
     // A report, whether the tool succeeds or finds errors.
     let report = |tool: &str| -> Value {
         let result = c2f_agent::Builtin.call(tool, &call).unwrap_or_else(|| Err(format!("no built-in `{tool}` tool")));
@@ -589,7 +594,8 @@ fn check_live(tools: &LiveTools) -> Result<Vec<Value>, String> {
     let src = shown["text"].as_str().unwrap_or_default();
     let libraries: Vec<PathBuf> =
         shown["libraries"].as_array().into_iter().flatten().filter_map(Value::as_str).map(PathBuf::from).collect();
-    let found = findings(src, Path::new(shown["path"].as_str().unwrap_or_default()), &libraries, &fit);
+    let scope = guard::file_scope(args);
+    let found = findings(src, Path::new(shown["path"].as_str().unwrap_or_default()), &libraries, scope.as_ref(), &fit);
     let selected = match first_focus(&found) {
         Some(name) => tools.ask_circuit(CircuitOp::Highlight(name)).ok().map(|done| done["selected"].clone()),
         None => None,
@@ -618,9 +624,9 @@ impl StudioApp {
             return Err("the active tab is not a circuit (.c2fc): open one with open_file, or show its tab".into());
         }
         match op {
-            CircuitOp::Edit(edit) => {
-                let edited = edit_circuit(&self.doc.text, &self.doc.source_path(), &self.circuit_libraries(), &edit)?;
-                if matches!(edit, CircuitEdit::Disconnect { .. }) {
+            CircuitOp::Edit(edit, scope) => {
+                let edited = edit_circuit(&self.doc.text, &self.doc.source_path(), &self.circuit_libraries(), scope.as_ref(), &edit)?;
+                if matches!(*edit, CircuitEdit::Disconnect { .. }) {
                     self.doc.selection = None;
                 }
                 let check = summary(&edited.circuit, &edited.text);
@@ -717,7 +723,7 @@ mod tests {
     }
 
     fn edit(src: &str, path: &Path, edit: CircuitEdit) -> Result<Edited, String> {
-        edit_circuit(src, path, &libraries(), &edit)
+        edit_circuit(src, path, &libraries(), None, &edit)
     }
 
     fn place(name: &str, part: Option<&str>, at: Option<[f64; 3]>, rotate: Option<[f64; 3]>) -> CircuitEdit {
@@ -738,6 +744,20 @@ mod tests {
     /// The library has no button or switch: the ceramic capacitor, a
     /// plain two-pin part, stands in for one.
     const BUTTON: &str = "electronics/capacitor_ceramic.c2f";
+
+    #[test]
+    fn under_a_scope_the_parts_outside_it_are_refused() {
+        let (src, path) = winder();
+        let empty = std::env::temp_dir().join(format!("c2f-live-circuit-scope-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).unwrap();
+        let place = place("button", Some(BUTTON), Some([30.0, 0.0, 4.0]), None);
+        let err = edit_circuit(&src, &path, &libraries(), Some(&FileScope::new([empty.clone()])), &place).unwrap_err();
+        assert!(err.contains("outside the folders"), "{err}");
+        let folder = path.parent().unwrap().to_path_buf();
+        let scope = FileScope::new(std::iter::once(folder).chain(libraries()));
+        assert!(edit_circuit(&src, &path, &libraries(), Some(&scope), &place).is_ok(), "its folder and the libraries");
+        let _ = std::fs::remove_dir_all(&empty);
+    }
 
     #[test]
     fn a_part_is_added_then_moved_and_turned_in_place() {

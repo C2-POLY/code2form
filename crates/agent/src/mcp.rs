@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use c2f_eval::customizer::{HIDDEN_GROUP, Literal, Widget, parse_typed};
 use serde_json::{Map, Value, json};
 
+use crate::guard::scoped;
 use crate::{Export, Registry, Tools};
 
 mod brief;
@@ -679,15 +680,6 @@ fn load(args: &Value) -> Result<(c2f_eval::Program, String), String> {
         set_parameters(&mut program, &src, values)?;
     }
     Ok((program, src))
-}
-
-/// `args` with the scope `from` carries ([`crate::guard::SCOPE_KEY`]), for
-/// a tool that loads another model than the one it was given.
-pub(crate) fn scoped(mut args: Value, from: &Value) -> Value {
-    if let (Some(object), Some(scope)) = (args.as_object_mut(), from.get(crate::guard::SCOPE_KEY)) {
-        object.insert(crate::guard::SCOPE_KEY.into(), scope.clone());
-    }
-    args
 }
 
 /// Sets customizer parameters from JSON values, read as a parameter set

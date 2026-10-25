@@ -452,24 +452,23 @@ pub fn scratch_folder(name: &str) -> PathBuf {
     settings.join("agent-scratch").join(name)
 }
 
-/// The files open in the studio with unsaved edits, kept up to date by
-/// the app: the tools that write a file refuse to write onto them.
-pub type UnsavedFiles = Arc<Mutex<Vec<PathBuf>>>;
+/// The files open in the studio, each with whether it has unsaved edits,
+/// kept up to date by the app: `electrify` leaves alone an open file
+/// ([`Guarded::open_files`]), the other tools that write a file one with
+/// unsaved edits ([`KeepUnsaved`]).
+pub type TabFiles = Arc<Mutex<Vec<(PathBuf, bool)>>>;
+
+/// Whether `a` and `b` are the same file, which may not exist yet.
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b || c2f_lang::file_scope::resolve(a) == c2f_lang::file_scope::resolve(b)
+}
 
 /// The files the tool `name` called with `args` writes, its paths made
-/// absolute already.
+/// absolute already; `electrify`'s are the guard's.
 fn written_files(name: &str, args: &serde_json::Value) -> Vec<PathBuf> {
     let path = |key: &str| args.get(key).and_then(serde_json::Value::as_str).map(PathBuf::from);
     match name {
         "export" => path("output").into_iter().collect(),
-        "electrify" => {
-            let Some(design) = path("path") else { return Vec::new() };
-            let circuit = match args.get("circuit").and_then(serde_json::Value::as_str) {
-                Some(circuit) => design.with_file_name(circuit),
-                None => design.with_extension("c2fc"),
-            };
-            vec![design, circuit]
-        }
         "save_part" => {
             let Some(part) = args.get("name").and_then(serde_json::Value::as_str) else { return Vec::new() };
             let part = part.strip_suffix(".c2f").unwrap_or(part);
@@ -483,7 +482,7 @@ fn written_files(name: &str, args: &serde_json::Value) -> Vec<PathBuf> {
 /// edits, which the write would lose or the tab would overwrite.
 struct KeepUnsaved {
     tools: Registry,
-    unsaved: UnsavedFiles,
+    tabs: TabFiles,
 }
 
 impl Tools for KeepUnsaved {
@@ -492,9 +491,9 @@ impl Tools for KeepUnsaved {
     }
 
     fn call(&self, name: &str, args: &serde_json::Value) -> Option<Result<Vec<serde_json::Value>, String>> {
-        let open = self.unsaved.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let same = |a: &Path, b: &Path| a == b || a.canonicalize().ok().is_some_and(|a| b.canonicalize().is_ok_and(|b| a == b));
-        if let Some(file) = written_files(name, args).into_iter().find(|file| open.iter().any(|o| same(o, file))) {
+        let tabs = self.tabs.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let unsaved = |file: &Path| tabs.iter().any(|(open, dirty)| *dirty && same_file(open, file));
+        if let Some(file) = written_files(name, args).into_iter().find(|file| unsaved(file)) {
             return Some(Err(format!(
                 "`{name}` would write {}, which is open in the studio with unsaved edits: ask the user to save or close \
                  it first (or change it with edit_code)",
@@ -534,14 +533,30 @@ fn claude_code_options(request: &EngineRequest, claude: PathBuf, mcp_command: (P
     }
 }
 
+/// The API engine's tools: the built-in ones and the studio's `live` ones,
+/// behind `policy`, leaving alone the files open in the studio (`tabs`).
+fn api_tools(live: Option<Box<dyn Tools>>, tabs: Option<&TabFiles>, policy: Policy) -> Result<Registry, String> {
+    let mut tools = Registry::builtin();
+    if let Some(live) = live {
+        tools = tools.with(live)?;
+    }
+    let Some(tabs) = tabs else { return Ok(Guarded::registry(tools, policy)) };
+    let kept = KeepUnsaved { tools, tabs: tabs.clone() };
+    let tools = Registry::new().with(Box::new(kept)).expect("a single provider");
+    let open = tabs.clone();
+    let is_open = move |file: &Path| open.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|(tab, _)| same_file(tab, file));
+    Ok(Guarded::new(tools, policy).open_files(Arc::new(is_open)).into_registry())
+}
+
 /// The engine `request` asks for, the studio's `live` tools among its
 /// tools; `mcp_command` starts the server Claude Code reaches them by. The
-/// tools of the API engine leave alone the `unsaved` files.
+/// tools of the API engine leave alone the files open in the studio
+/// (`tabs`).
 pub fn engine_for(
     request: &EngineRequest,
     live: Option<Box<dyn Tools>>,
     mcp_command: (PathBuf, Vec<String>),
-    unsaved: Option<&UnsavedFiles>,
+    tabs: Option<&TabFiles>,
 ) -> Built {
     let Some(probe) = request.probe else {
         return Built::unavailable(tr("Checking the engines…", "Vérification des moteurs…"));
@@ -563,18 +578,10 @@ pub fn engine_for(
             Built { notice, ..Built::ready(Box::new(ClaudeCodeEngine::new(options)), format!("Claude Code · {model}")) }
         }
         Ok(Pick::Api(key)) => {
-            let mut tools = Registry::builtin();
-            if let Some(live) = live {
-                tools = match tools.with(live) {
-                    Ok(tools) => tools,
-                    Err(err) => return Built::unavailable(err),
-                };
-            }
-            if let Some(unsaved) = unsaved {
-                let kept = KeepUnsaved { tools, unsaved: unsaved.clone() };
-                tools = Registry::new().with(Box::new(kept)).expect("a single provider");
-            }
-            let registry = Guarded::registry(tools, agent.policy(&folder, request.libraries));
+            let registry = match api_tools(live, tabs, agent.policy(&folder, request.libraries)) {
+                Ok(registry) => registry,
+                Err(err) => return Built::unavailable(err),
+            };
             let mut options = ApiOptions::new(key, Arc::new(registry));
             options.model = agent.api_model.clone();
             options.max_tool_rounds = agent.max_tool_rounds;
@@ -823,18 +830,36 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let open = dir.join("box.c2f");
         std::fs::write(&open, "cube(1);").unwrap();
-        let unsaved: UnsavedFiles = Arc::new(Mutex::new(vec![open.clone()]));
-        let tools = KeepUnsaved { tools: Registry::builtin(), unsaved: unsaved.clone() };
+        let tabs: TabFiles = Arc::new(Mutex::new(vec![(open.clone(), true)]));
+        let tools = api_tools(None, Some(&tabs), Policy::default()).unwrap();
         let export = serde_json::json!({ "code": "cube(1);", "output": open });
         let err = tools.call("export", &export).unwrap().unwrap_err();
         assert!(err.contains("unsaved edits"), "{err}");
-        let electrify = serde_json::json!({ "path": open, "brief": "x" });
-        assert!(tools.call("electrify", &electrify).unwrap().unwrap_err().contains("unsaved edits"));
         // Another file, or the tab saved: the tool runs.
         let elsewhere = serde_json::json!({ "code": "cube(1);", "output": dir.join("box.stl") });
         assert!(tools.call("export", &elsewhere).unwrap().is_ok());
-        unsaved.lock().unwrap().clear();
+        tabs.lock().unwrap()[0].1 = false;
         assert!(!matches!(tools.call("export", &export), Some(Err(e)) if e.contains("unsaved")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_api_engine_s_tools_do_not_electrify_an_open_tab() {
+        let dir = std::env::temp_dir().join(format!("c2f-open-tab-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let design = dir.join("box.c2f");
+        std::fs::write(&design, "cube(1);").unwrap();
+        // Open, saved: the guard knows it from the studio's tabs.
+        let tabs: TabFiles = Arc::new(Mutex::new(vec![(design.clone(), false)]));
+        let policy = AgentSettings::default().policy(&dir, &[]);
+        let tools = api_tools(None, Some(&tabs), policy).unwrap();
+        let err = tools.call("electrify", &serde_json::json!({ "path": "box.c2f" })).unwrap().unwrap_err();
+        assert!(err.contains("open in the studio") && err.contains("close its tab"), "{err}");
+        assert_eq!(std::fs::read_to_string(&design).unwrap(), "cube(1);", "left alone");
+        // Its circuit open instead.
+        *tabs.lock().unwrap() = vec![(dir.join("box.c2fc"), true)];
+        let err = tools.call("electrify", &serde_json::json!({ "path": "box.c2f" })).unwrap().unwrap_err();
+        assert!(err.contains("box.c2fc is open in the studio"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

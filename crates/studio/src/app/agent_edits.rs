@@ -422,7 +422,7 @@ impl StudioApp {
                 "path": self.doc.source_path().display().to_string(),
                 "values": {},
             });
-            if let Some((_, lo, hi)) = live::design_parts(&snapshot).ok().and_then(|parts| parts.into_iter().find(|p| p.0 == name)) {
+            if let Some((_, lo, hi)) = live::design_parts(&snapshot, None).ok().and_then(|parts| parts.into_iter().find(|p| p.0 == name)) {
                 self.doc.agent_flash = Some(Flash::new(lo, hi, Instant::now() + Duration::from_millis(1200)));
             }
         }

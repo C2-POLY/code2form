@@ -229,7 +229,7 @@ fn check_brief(args: &Value) -> Result<Vec<Value>, String> {
     let mut circuit_mass: Option<Result<c2f_geom::MassReport, String>> = None;
     let mut circuit_path = string("circuit").map(PathBuf::from);
     if let Some(design) = string("design") {
-        let mut design_args = super::scoped(json!({ "path": design }), args);
+        let mut design_args = crate::guard::scoped(json!({ "path": design }), args);
         if let Some(parameters) = args.get("parameters") {
             design_args["parameters"] = parameters.clone();
         }

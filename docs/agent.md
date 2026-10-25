@@ -22,6 +22,8 @@ you install or log in.
 
 The studio runs the `claude` command you installed and logged in with
 your own subscription. It needs:
+- Claude Code 2.1.300 or newer; an older one, the settings say it is too
+  old (run `claude update`).
 - Claude Code installed. The studio looks in the `PATH`, then where its
   installers put it (`~/.local/bin`, `~/.claude/local`, Homebrew,
   `/usr/local/bin`, npm, nvm, Volta, Bun), since an app started from the
@@ -31,10 +33,13 @@ your own subscription. It needs:
   `claude` in a terminal, then `/login`.
 
 The studio never sees a password or a token: your Claude Code logs in.
-It runs it with `--restricted`, without your own settings, and with
+It runs it without `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so
+that a key your environment holds does not win over your subscription
+without you knowing. It runs it with `--restricted`, without your own settings, and with
 Code2Form's MCP server alone (`--strict-mcp-config`), served by the app's
 own executable as `code2form mcp --studio`. Claude Code starts in the
-active file's folder, its file tools reach nothing outside it, and the
+active file's folder (an untitled tab's scratch folder, see
+[Limits](#limits)), its file tools reach nothing outside it, and the
 Code2Form tools are held to the same folder (see
 [Guard rails](#guard-rails)). The Model field takes an alias (`opus`,
 `sonnet`) or a model id; empty is Claude Code's default.
@@ -205,12 +210,21 @@ With Claude Code, this mode also takes away its own Edit and Write
 tools: it reads the folder, and changes things only through the studio's
 tools, which ask you.
 
+The tools that write a file, `export`, `save_brief`, `save_part` and
+`electrify`, cannot ask you yet: in this mode they are refused, and the
+agent tells you to switch to **Apply changes directly**, or to do it from
+the studio yourself.
+
 ## Guard rails
 
 The settings hold the agent to what you allow:
 - **The folder.** The agent works in the active file's folder and below.
   A path outside it is refused, with the folder it may use. The library
-  folders (yours and the default ones) it may read, never write.
+  folders (yours and the default ones) it may read, never write. The
+  files a program names itself are held there too: an include, a `use`,
+  an imported data file or a circuit's part outside these folders is not
+  read, and the program gets a message that names the file without
+  quoting it.
 - **Allow writing new files** (`save_brief`; with Claude Code, its Write
   tool too).
 - **Allow exporting** (`export`).
@@ -219,6 +233,18 @@ The settings hold the agent to what you allow:
   design and writes its circuit).
 - **Tool rounds per answer, at most**: 25 by default, from 1 to 100. An
   answer that reaches it stops; send a message to let it go on.
+
+The studio renders the open documents as you would, reading any file
+they name. What the agent gets of that render (the report in
+`studio_state` and `edit_code`, the console's lines) leaves out its
+messages when it read files outside the folders, and says which files;
+the view as rendered is refused then, a preset view being drawn in the
+folders. The live tools that read a document themselves (a preset view,
+a part's box, `check_live`, a circuit edit) read it in the folders.
+
+With the API engine, `electrify` refuses a design open in a tab, or one
+whose circuit is (the studio would keep its own copy), and `export` and
+`save_part` refuse to write onto a file open with unsaved edits.
 
 A tool turned off answers that it is turned off in the settings, and the
 agent tells you rather than trying another way. A change in the settings
@@ -243,9 +269,10 @@ settings' guard rails, with the folder it is started in as the folder:
 claude mcp add code2form -- /Applications/Code2Form.app/Contents/MacOS/code2form mcp --studio
 ```
 
-`c2f mcp --studio` does not read the studio's settings: its tools are
-those of `c2f mcp`, unrestricted, and the live tools act on the open
-documents, `open_file` only in the active file's folder.
+`c2f mcp --studio` holds its tools to the settings' guard rails too, as
+`settings.txt` keeps them, with the folder it is started in as the
+folder. Plain `c2f mcp`, without the live tools, reads no settings: its
+tools are allowed, anywhere.
 
 Open the studio before the client starts: the live tools are listed only
 while a studio answers, and a call made with no studio open says "the
@@ -253,15 +280,19 @@ Code2Form studio is not open: open it, then try again". One studio
 serves at a time: a second one says in its console that agents cannot
 reach it.
 
-The socket is `studio.sock` in a folder of your own in the temporary
-directory, `code2form-<uid>` (on macOS, under `$TMPDIR`). The folder is
-yours alone (0700), and so is the socket (0600). `CODE2FORM_STUDIO_SOCKET`
-names another path, for the studio and the server alike.
+The socket is `studio.sock` in a folder of your own:
+`$XDG_RUNTIME_DIR/code2form/` when the system sets `XDG_RUNTIME_DIR` (an
+absolute path), else `code2form-<uid>/` in the temporary directory (on
+macOS, under `$TMPDIR`). The folder must be yours, a folder rather than a
+link, open to you alone (0700): otherwise the studio does not serve
+there, and says why. The socket is yours alone too (0600), and each end
+checks that the other runs as you. `CODE2FORM_STUDIO_SOCKET` names
+another path, for the studio and the server alike.
 
 | Tool | What it does |
 |---|---|
 | `studio_state` | The open tabs (each with its `id` and the `revision` of its text), the active tab's code with line numbers, its parameters and values, the selection, the last render, the lines the agent last changed and the console |
-| `edit_code` | Replaces text that occurs exactly once, or a range of lines, in a tab's code as one undo step; renders and gives the report and the new `revision`. A range needs the `revision` it was read at, and is refused once the text changed since |
+| `edit_code` | Replaces text that occurs exactly once, or a range of lines, in a tab's code (the active one, or the `tab` named by its `id`) as one undo step; renders and gives the report and the new `revision`. A range needs the `revision` it was read at, and is refused without it or once the text changed since |
 | `set_parameters` | Sets customizer parameters as the Parameters card does; renders and gives the report |
 | `view_image` | A PNG of the view as you see it, or from a preset view, or the sheet of views |
 | `focus` | Selects a part (a design's `part()`, a circuit's part, pin or wire), frames the view on it, and shows a line of the code |

@@ -41,10 +41,11 @@ mod window;
 mod wiring;
 mod worker;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use c2f_agent::guard::Policy;
 use eframe::egui;
 
 const USAGE: &str = "\
@@ -163,16 +164,16 @@ fn studio_server_args(args: &[std::ffi::OsString]) -> Option<&[std::ffi::OsStrin
     }
 }
 
-/// What the server lets the agent do: the `--policy` JSON the engine
-/// gives (`args`), else `CODE2FORM_AGENT_POLICY`, else the settings as
-/// `settings.txt` keeps them.
-fn server_policy(args: &[std::ffi::OsString]) -> (agent_setup::AgentSettings, Vec<PathBuf>) {
+/// What the server lets the agent do in `folder`: the `--policy` JSON the
+/// engine gives (`args`), else `CODE2FORM_AGENT_POLICY`, else the settings
+/// as `settings.txt` keeps them, as `c2f mcp --studio` reads them.
+fn server_policy(args: &[std::ffi::OsString], folder: &Path) -> Policy {
     let given = args.iter().position(|a| a == "--policy").and_then(|at| args.get(at + 1)?.to_str().map(str::to_string));
     let spec = given.or_else(|| std::env::var("CODE2FORM_AGENT_POLICY").ok());
-    spec.and_then(|spec| agent_setup::AgentSettings::from_policy_json(&spec)).unwrap_or_else(|| {
-        let settings = settings::Settings::load(settings::store().as_deref());
-        (settings.agent, settings.library_folders)
-    })
+    match spec.and_then(|spec| agent_setup::AgentSettings::from_policy_json(&spec)) {
+        Some((agent, libraries)) => agent.policy(folder, &libraries),
+        None => Policy::from_settings_file(c2f_agent::guard::settings_file().as_deref(), Some(folder)),
+    }
 }
 
 /// `code2form mcp --studio`: `c2f mcp --studio`, from the app itself.
@@ -188,14 +189,12 @@ fn mcp(args: &[std::ffi::OsString]) -> ExitCode {
     // What the user lets the agent do: Claude Code starts this server in
     // the active file's folder (a scratch one for an untitled tab), its
     // scope; never "anywhere".
-    let (agent, libraries) = server_policy(args);
     let folder = std::env::current_dir().unwrap_or_else(|_| {
         let scratch = agent_setup::scratch_folder("default");
         let _ = std::fs::create_dir_all(&scratch);
         scratch
     });
-    let policy = agent.policy(&folder, &libraries);
-    let tools = c2f_agent::guard::Guarded::registry(tools, policy);
+    let tools = c2f_agent::guard::Guarded::registry(tools, server_policy(args, &folder));
     match c2f_agent::Server::new(tools).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -254,9 +253,10 @@ mod tests {
         let agent = crate::agent_setup::AgentSettings { allow_export: false, ask_first: true, ..Default::default() };
         let json = agent.policy_json(&[std::path::PathBuf::from("/libs")]);
         let args = [OsString::from("--policy"), OsString::from(json)];
-        let (back, libraries) = super::server_policy(&args);
-        assert!(!back.allow_export && back.ask_first);
-        assert_eq!(libraries, [std::path::PathBuf::from("/libs")]);
+        let policy = super::server_policy(&args, std::path::Path::new("/work"));
+        assert!(!policy.export && policy.ask_first);
+        let scope = policy.scope.unwrap();
+        assert_eq!((scope.folder.as_path(), &scope.read_only[0]), (std::path::Path::new("/work"), &std::path::PathBuf::from("/libs")));
     }
 
     /// The studio's agent calls the very tools `c2f mcp` serves.

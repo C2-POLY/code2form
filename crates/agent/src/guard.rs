@@ -38,6 +38,16 @@ pub fn file_scope(args: &Value) -> Option<FileScope> {
     Some(FileScope::new(roots.iter().filter_map(Value::as_str).map(PathBuf::from)))
 }
 
+/// `args` with the scope `from` carries ([`SCOPE_KEY`]), if any: for a
+/// tool that loads another model than the one it was given, or a host's
+/// tool that runs a built-in one.
+pub fn scoped(mut args: Value, from: &Value) -> Value {
+    if let (Some(object), Some(scope)) = (args.as_object_mut(), from.get(SCOPE_KEY)) {
+        object.insert(SCOPE_KEY.into(), scope.clone());
+    }
+    args
+}
+
 /// What the agent may do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
@@ -256,8 +266,8 @@ impl Guarded {
     }
 
     /// Tells which files are open in the studio: `electrify`, which
-    /// rewrites its design, refuses one that is, as the studio would keep
-    /// its own copy.
+    /// rewrites its design and writes its circuit, refuses when either is,
+    /// as the studio would keep its own copy.
     pub fn open_files(mut self, open: OpenFiles) -> Guarded {
         self.open_files = Some(open);
         self
@@ -293,11 +303,16 @@ impl Tools for Guarded {
         if name == "electrify" {
             let design = args.get("path").and_then(Value::as_str).map(|path| resolve(Path::new(path)));
             if let (Some(open), Some(design)) = (&self.open_files, design) {
-                if open(&design) {
+                // The design and its circuit, beside it unless named.
+                let circuit = match args.get("circuit").and_then(Value::as_str) {
+                    Some(circuit) => resolve(&design.with_file_name(circuit)),
+                    None => design.with_extension("c2fc"),
+                };
+                if let Some(file) = [design, circuit].into_iter().find(|file| open(file)) {
                     return Some(Err(format!(
                         "{} is open in the studio: `electrify` rewrites it, and the studio would keep its own copy. \
                          Ask the user to save and close its tab first, then try again.",
-                        design.display()
+                        file.display()
                     )));
                 }
             }
@@ -429,6 +444,22 @@ mod tests {
         let err = tools.call("electrify", &json!({ "path": "box.c2f" })).unwrap().unwrap_err();
         assert!(err.contains("open in the studio") && err.contains("close its tab"), "{err}");
         assert_eq!(std::fs::read_to_string(&design).unwrap(), "cube(10);", "left alone");
+        // Its circuit open, by default beside it or as named.
+        for (circuit, args) in [("box.c2fc", json!({ "path": "box.c2f" })), ("wiring.c2fc", json!({ "path": "box.c2f", "circuit": "wiring.c2fc" }))] {
+            let circuit = resolve(&folders.root.join("project")).join(circuit);
+            let tools = Guarded::new(Registry::builtin(), Policy { scope: Some(folders.scope()), ..Policy::default() })
+                .open_files(Arc::new(move |path: &Path| path == circuit))
+                .into_registry();
+            let err = tools.call("electrify", &args).unwrap().unwrap_err();
+            assert!(err.contains("c2fc is open in the studio"), "{err}");
+        }
+    }
+
+    #[test]
+    fn scoped_passes_the_scope_on() {
+        let from = json!({ "code": "x", SCOPE_KEY: ["/project"] });
+        assert_eq!(scoped(json!({ "path": "a.c2f" }), &from), json!({ "path": "a.c2f", SCOPE_KEY: ["/project"] }));
+        assert_eq!(scoped(json!({ "path": "a.c2f" }), &json!({})), json!({ "path": "a.c2f" }), "none to pass");
     }
 
     #[test]

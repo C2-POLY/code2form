@@ -174,7 +174,8 @@ claude mcp add code2form -- c2f mcp
 
 These tools work on files and code they render, not in the open app;
 `c2f mcp --studio` adds the open app's live tools (see
-[below](#the-agent-in-the-app)). Each tool takes the program's text as `code` (its includes resolving from
+[below](#the-agent-in-the-app)), and holds all its tools to the app's
+settings (Settings › Agent), in the folder it is started in. Each tool takes the program's text as `code` (its includes resolving from
 `working_dir`, by default the server's current directory) or a file as
 `path` (resolving from its folder), and, but for `parameters`, customizer
 values as `parameters`, such as `{"width": 30, "label": "A"}`.

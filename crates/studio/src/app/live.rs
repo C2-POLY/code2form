@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use c2f_agent::Tools;
+use c2f_agent::guard::{self, FileScope};
 use c2f_eval::customizer::Literal;
 use eframe::egui;
 use serde_json::{Map, Value, json};
@@ -153,7 +154,7 @@ enum Op {
 impl Op {
     /// Whether it changes a document: the user may be asked first.
     fn changes(&self) -> bool {
-        matches!(self, Op::Edit { .. } | Op::SetParameters { .. } | Op::Circuit(super::live_circuit::CircuitOp::Edit(_)))
+        matches!(self, Op::Edit { .. } | Op::SetParameters { .. } | Op::Circuit(super::live_circuit::CircuitOp::Edit(..)))
     }
 }
 
@@ -457,8 +458,34 @@ impl LiveTools {
 
     fn state(&self, args: &Value) -> Result<Vec<Value>, String> {
         let numbered = args.get("line_numbers").and_then(Value::as_bool).unwrap_or(true);
-        let state = self.ask(Op::State { tab: tab_arg(args)?, numbered })?;
+        let tab = tab_arg(args)?;
+        let mut state = self.ask(Op::State { tab, numbered })?;
+        if let Some(why) = self.withheld(tab, args) {
+            withhold(&mut state["render"], &why);
+            state["console"] = json!([{ "level": "info", "text": why }]);
+        }
         Ok(vec![text(pretty(&state))])
+    }
+
+    /// Why the messages of the studio's render of `tab` are not for the
+    /// agent called with `args`: the studio renders as the user would,
+    /// anywhere, so a render that reads files outside the agent's scope
+    /// ([`guard::SCOPE_KEY`]) could quote them. `None` without a scope,
+    /// or when the render reads none.
+    fn withheld(&self, tab: Option<u64>, args: &Value) -> Option<String> {
+        let scope = guard::file_scope(args)?;
+        let Ok(snapshot) = self.ask(Op::Snapshot { tab }) else {
+            return Some("the files this render reads could not be checked: its messages are not shown".into());
+        };
+        let outside = read_outside(&snapshot, &scope);
+        (!outside.is_empty()).then(|| {
+            let names: Vec<String> = outside.iter().map(|file| file.display().to_string()).collect();
+            format!(
+                "this render reads files outside the folders the agent may read ({}): its messages are not shown. \
+                 Leave those files out of the code; the user can render it themselves.",
+                names.join(", ")
+            )
+        })
     }
 
     fn edit(&self, args: &Value) -> Result<Vec<Value>, String> {
@@ -492,22 +519,34 @@ impl LiveTools {
         }
         let done = self.ask(Op::Edit { tab: tab_arg(args)?, edit, revision })?;
         let deadline = Instant::now() + RENDER_WAIT;
-        let report = self.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0), deadline);
+        let report = self.render_report(&done, deadline, args);
         let mut result = json!({ "edited": true, "changed_lines": done["changed_lines"], "revision": done["revision"], "render": report });
         if let Some(part) = done["part"].as_str().filter(|_| report["ok"] == true) {
             result["part"] = json!(part);
-            if let Some(changed) = self.touched_parts(&done, part, deadline) {
+            if let Some(changed) = self.touched_parts(&done, part, deadline, guard::file_scope(args)) {
                 result["parts_changed"] = changed;
             }
         }
         Ok(vec![text(pretty(&result))])
     }
 
+    /// The render report of the change `done` (`{tab_id, generation}`),
+    /// waited for until `deadline`, its messages withheld when they are
+    /// not for the agent called with `args`.
+    pub(super) fn render_report(&self, done: &Value, deadline: Instant, args: &Value) -> Value {
+        let id = done["tab_id"].as_u64().unwrap_or(0);
+        let mut report = self.wait_render(id, done["generation"].as_u64().unwrap_or(0), deadline);
+        if let Some(why) = self.withheld(Some(id), args) {
+            withhold(&mut report, &why);
+        }
+        report
+    }
+
     /// Once an edit inside part `part` rendered: flashes the part in the
     /// view, and gives the parts whose box the edit changed, when the
-    /// parts before it are known from the last edit. Skipped past
-    /// `deadline`, the call's budget.
-    fn touched_parts(&self, done: &Value, part: &str, deadline: Instant) -> Option<Value> {
+    /// parts before it are known from the last edit; the design read in
+    /// `scope`, the agent's. Skipped past `deadline`, the call's budget.
+    fn touched_parts(&self, done: &Value, part: &str, deadline: Instant, scope: Option<FileScope>) -> Option<Value> {
         let left = || Some(deadline.saturating_duration_since(Instant::now())).filter(|left| !left.is_zero());
         let snapshot = self.ask_within(Op::Snapshot { tab: done["tab_id"].as_u64() }, left()?.min(ANSWER_WAIT)).ok()?;
         // The design is rendered again for its parts, on a thread of its
@@ -518,7 +557,7 @@ impl LiveTools {
             .name("c2f-live-parts".into())
             .stack_size(crate::worker::STACK)
             .spawn(move || {
-                let _ = sender.send(design_parts(&read));
+                let _ = sender.send(design_parts(&read, scope.as_ref()));
             })
             .ok()?;
         let after = parts.recv_timeout(left()?).ok()?.ok()?;
@@ -538,19 +577,23 @@ impl LiveTools {
     fn set_parameters(&self, args: &Value) -> Result<Vec<Value>, String> {
         let values = args.get("values").and_then(Value::as_object).ok_or("`values` must be an object of names and values")?;
         let done = self.ask(Op::SetParameters { tab: tab_arg(args)?, values: values.clone() })?;
-        let deadline = Instant::now() + RENDER_WAIT;
-        let report = self.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0), deadline);
+        let report = self.render_report(&done, Instant::now() + RENDER_WAIT, args);
         Ok(vec![text(pretty(&json!({ "set": true, "parameters": done["parameters"], "render": report })))])
     }
 
     fn view_image(&self, args: &Value) -> Result<Vec<Value>, String> {
         let Some(view) = args.get("view").and_then(Value::as_str).filter(|v| *v != "current") else {
+            // The view as the studio rendered it, which may show files
+            // outside the agent's scope.
+            if let Some(why) = self.withheld(None, args) {
+                return Err(format!("{why} Ask for a preset `view` (such as `diagonal`) instead."));
+            }
             return Ok(vec![self.ask(Op::Screenshot)?]);
         };
         // A preset view is drawn here, from the document as it is in the
-        // studio, as the built-in tools draw it.
+        // studio, as the built-in tools draw it, in the agent's scope.
         let snapshot = self.ask(Op::Snapshot { tab: None })?;
-        let mut call = json!({ "code": snapshot["text"], "working_dir": snapshot["dir"], "view": view });
+        let mut call = guard::scoped(json!({ "code": snapshot["text"], "working_dir": snapshot["dir"], "view": view }), args);
         for key in ["width", "height", "section"] {
             if let Some(value) = args.get(key) {
                 call[key] = value.clone();
@@ -585,7 +628,7 @@ impl LiveTools {
             let source = snapshot["text"].as_str().unwrap_or_default();
             let at = part_call(source, name);
             line = line.or(at.map(|at| line_of(source, at)));
-            bounds = Some(part_bounds(&snapshot, name)?);
+            bounds = Some(part_bounds(&snapshot, name, guard::file_scope(args).as_ref())?);
         }
         let done = self.ask(Op::Focus { name: None, line, bounds })?;
         Ok(vec![text(pretty(&done))])
@@ -620,9 +663,9 @@ fn changed_parts(before: &[PartBox], after: &[PartBox]) -> Vec<Value> {
 }
 
 /// The box around the part `name` of the design in `snapshot`, rendered
-/// with its parameter values.
-fn part_bounds(snapshot: &Value, name: &str) -> Result<([f32; 3], [f32; 3]), String> {
-    let parts = design_parts(snapshot)?;
+/// with its parameter values, its files read in `scope` when there is one.
+fn part_bounds(snapshot: &Value, name: &str, scope: Option<&FileScope>) -> Result<([f32; 3], [f32; 3]), String> {
+    let parts = design_parts(snapshot, scope)?;
     let Some((_, lo, hi)) = parts.iter().find(|p| p.0 == name) else {
         let names: Vec<&str> = parts.iter().map(|p| p.0.as_str()).collect();
         return Err(format!("no part(\"{name}\") in the design; its parts: {}", if names.is_empty() { "none".into() } else { names.join(", ") }));
@@ -631,11 +674,12 @@ fn part_bounds(snapshot: &Value, name: &str) -> Result<([f32; 3], [f32; 3]), Str
 }
 
 /// The parts of the design in `snapshot`, rendered with its parameter
-/// values, with their boxes: those with nothing in them left out.
-pub(super) fn design_parts(snapshot: &Value) -> Result<Vec<PartBox>, String> {
+/// values, with their boxes: those with nothing in them left out. With a
+/// `scope`, the agent's, the files the design names are read there only.
+pub(super) fn design_parts(snapshot: &Value, scope: Option<&FileScope>) -> Result<Vec<PartBox>, String> {
     let source = snapshot["text"].as_str().unwrap_or_default();
     let path = PathBuf::from(snapshot["path"].as_str().unwrap_or_default());
-    let mut program = c2f_eval::Program::load(source, &path, &c2f_eval::default_library_paths())
+    let mut program = c2f_eval::Program::load_in(source, &path, &c2f_eval::default_library_paths(), scope)
         .map_err(|err| format!("the design does not read: {}", err.diagnostic.message))?;
     let parameters = program.parameters(source);
     for (key, value) in snapshot["values"].as_object().into_iter().flatten() {
@@ -662,6 +706,64 @@ pub(super) fn design_parts(snapshot: &Value) -> Result<Vec<PartBox>, String> {
         Some((part["name"].as_str()?.to_string(), corner("min")?, corner("max")?))
     });
     Ok(boxes.collect())
+}
+
+/// The files the studio's own render of the document in `snapshot` reads
+/// (its includes and `use`s, its circuit, the circuit's parts and
+/// enclosure and theirs) that `scope` leaves out; the document's own file
+/// is the agent's to read.
+pub(super) fn read_outside(snapshot: &Value, scope: &FileScope) -> Vec<PathBuf> {
+    let source = snapshot["text"].as_str().unwrap_or_default();
+    let path = PathBuf::from(snapshot["path"].as_str().unwrap_or_default());
+    let libraries: Vec<PathBuf> = match snapshot["libraries"].as_array() {
+        Some(list) => list.iter().filter_map(Value::as_str).map(PathBuf::from).collect(),
+        None => c2f_eval::default_library_paths(),
+    };
+    // A design's files, and the circuit it names; on an error, the file
+    // it is in, which its message quotes.
+    let design = |source: &str, path: &Path, files: &mut Vec<PathBuf>| match c2f_eval::Program::load(source, path, &libraries) {
+        Ok(program) => {
+            files.extend(program.files.iter().map(|file| file.path.clone()).chain(program.circuit_path.clone()));
+            program.circuit
+        }
+        Err(err) => {
+            files.push(err.path);
+            None
+        }
+    };
+    let mut files = Vec::new();
+    let circuit = if snapshot["circuit"] == true {
+        match c2f_circuit::parse(source, &path, &libraries) {
+            Ok(circuit) => Some(circuit),
+            Err(errors) => {
+                files.extend(errors.into_iter().map(|err| err.path));
+                None
+            }
+        }
+    } else {
+        design(source, &path, &mut files)
+    };
+    for part in circuit.iter().flat_map(|c| c.parts.iter().map(|p| p.path.clone()).chain(c.enclosure.clone())) {
+        if let Ok(text) = c2f_eval::read_source(&part) {
+            design(&text, &part, &mut files);
+        }
+        files.push(part);
+    }
+    let own = guard::FileScope::new([path]);
+    let mut outside: Vec<PathBuf> = files.into_iter().filter(|file| !scope.allows(file) && !own.allows(file)).collect();
+    outside.sort();
+    outside.dedup();
+    outside
+}
+
+/// A render `report` with its messages (errors, warnings, echo) left out,
+/// `why` in their place.
+fn withhold(report: &mut Value, why: &str) {
+    let Some(report) = report.as_object_mut() else { return };
+    for key in ["errors", "warnings", "echo"] {
+        report.remove(key);
+    }
+    report.insert("withheld".into(), json!(why));
 }
 
 impl Tools for LiveTools {
@@ -992,11 +1094,12 @@ impl StudioApp {
                 })?;
                 proposal
             }
-            Op::Circuit(super::live_circuit::CircuitOp::Edit(edit)) => {
+            Op::Circuit(super::live_circuit::CircuitOp::Edit(edit, scope)) => {
                 if !self.doc.is_circuit() {
                     return Err("the active tab is not a circuit (.c2fc): open one with open_file, or show its tab".into());
                 }
-                let edited = super::live_circuit::edit_circuit(&self.doc.text, &self.doc.source_path(), &self.circuit_libraries(), edit)?;
+                let edited =
+                    super::live_circuit::edit_circuit(&self.doc.text, &self.doc.source_path(), &self.circuit_libraries(), scope.as_ref(), edit)?;
                 let diff = super::review::diff_lines(&self.doc.text, &edited.text);
                 let lines = |change| diff.iter().filter(|l| l.change == change).map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
                 Ok(Proposal {
@@ -1023,6 +1126,7 @@ impl StudioApp {
                     "dir": path.parent().unwrap_or(Path::new("")).display().to_string(),
                     "circuit": doc.is_circuit(),
                     "values": values,
+                    "libraries": app.circuit_libraries(),
                 }))
             }),
             Op::Edit { tab, edit, revision } => self.on_tab(tab, |app, _| {
@@ -1356,9 +1460,89 @@ mod tests {
             "path": std::env::temp_dir().join("live.c2f").display().to_string(),
             "values": { "size": 4 },
         });
-        assert_eq!(part_bounds(&snapshot, "lid").unwrap(), ([0.0, 0.0, 20.0], [4.0, 4.0, 22.0]));
-        let err = part_bounds(&snapshot, "arm").unwrap_err();
+        assert_eq!(part_bounds(&snapshot, "lid", None).unwrap(), ([0.0, 0.0, 20.0], [4.0, 4.0, 22.0]));
+        let err = part_bounds(&snapshot, "arm", None).unwrap_err();
         assert!(err.contains("base") && err.contains("lid"), "{err}");
+    }
+
+    /// A project folder with a design, and a secret file beside it.
+    struct Secret {
+        root: PathBuf,
+    }
+
+    impl Secret {
+        fn new(name: &str) -> Secret {
+            let root = std::env::temp_dir().join(format!("c2f-live-scope-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(root.join("project")).unwrap();
+            std::fs::write(root.join("project/box.c2f"), "cube(10);\n").unwrap();
+            std::fs::write(root.join("secret.txt"), "SECRET LINE: hunter2\n").unwrap();
+            Secret { root }
+        }
+
+        fn project(&self) -> PathBuf {
+            self.root.join("project")
+        }
+
+        fn include(&self) -> String {
+            format!("include <{}>\npart(\"base\") cube(1);\n", self.root.join("secret.txt").display())
+        }
+
+        /// What the guard adds to the agent's calls.
+        fn scope(&self) -> Value {
+            json!([self.project()])
+        }
+    }
+
+    impl Drop for Secret {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn the_files_a_render_reads_outside_the_scope() {
+        let secret = Secret::new("outside");
+        let scope = FileScope::new([secret.project()]);
+        let snapshot = |text: String| json!({ "text": text, "path": secret.project().join("box.c2f"), "values": {} });
+        assert!(read_outside(&snapshot("cube(1);".into()), &scope).is_empty());
+        let outside = read_outside(&snapshot(secret.include()), &scope);
+        assert!(outside.len() == 1 && outside[0].ends_with("secret.txt"), "the file its error quotes: {outside:?}");
+        // The design's parts, read for the agent, never read it.
+        let parts = design_parts(&snapshot(secret.include()), Some(&scope));
+        assert!(matches!(&parts, Ok(parts) if parts.len() == 1), "the include refused, the rest drawn: {parts:?}");
+        let mut report = json!({ "ok": false, "errors": ["SECRET"], "warnings": [], "echo": ["SECRET"], "error_line": 1 });
+        withhold(&mut report, "why");
+        assert_eq!(report, json!({ "ok": false, "error_line": 1, "withheld": "why" }));
+    }
+
+    #[test]
+    fn the_agent_does_not_read_files_outside_its_scope_through_the_studio() {
+        let secret = Secret::new("studio");
+        let file = secret.project().join("box.c2f");
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        let scope = secret.scope();
+        let edit = json!({ "edits": [{ "old": "cube(10);\n", "new": secret.include() }], "_scope": scope });
+        let done = call(&mut app, &ctx, "edit_code", edit).unwrap();
+        let done = report(&done);
+        assert_eq!(done["render"]["ok"], false, "{done}");
+        assert!(!done.to_string().contains("SECRET"), "{done}");
+        assert!(done["render"]["withheld"].as_str().unwrap().contains("secret.txt"), "{done}");
+        // The studio renders as the user would: its own console has it.
+        let unscoped = call(&mut app, &ctx, "studio_state", json!({})).unwrap();
+        assert!(unscoped[0]["text"].as_str().unwrap().contains("SECRET"), "the premise");
+        let state = call(&mut app, &ctx, "studio_state", json!({ "_scope": scope })).unwrap();
+        let state = report(&state);
+        assert!(!state.to_string().contains("SECRET"), "{state}");
+        assert!(state["render"]["withheld"].is_string() && state["console"][0]["text"] == state["render"]["withheld"], "{state}");
+        // Nor through the view as rendered, nor a part's box.
+        let err = call(&mut app, &ctx, "view_image", json!({ "_scope": scope })).unwrap_err();
+        assert!(err.contains("preset `view`") && !err.contains("SECRET"), "{err}");
+        let focus = call(&mut app, &ctx, "focus", json!({ "part": "base", "_scope": scope }));
+        assert!(!format!("{focus:?}").contains("SECRET"), "{focus:?}");
+        // A preset view is drawn in the scope.
+        let image = call(&mut app, &ctx, "view_image", json!({ "view": "top", "_scope": scope }));
+        assert!(!format!("{image:?}").contains("SECRET"), "{image:?}");
     }
 
     /// The app without a window, on `file`.
