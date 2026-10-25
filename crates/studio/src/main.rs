@@ -3,6 +3,7 @@
 
 #[macro_use]
 mod i18n;
+mod agent_panel;
 mod animation;
 mod app;
 mod app_icon;

@@ -29,11 +29,15 @@ pub enum Icon {
     /// A card folded to its title, or unfolded.
     FoldUp,
     FoldDown,
+    /// A row folded to its title, as a tool call in the Agent panel.
+    FoldRight,
     /// The window's layouts: the code alone, the code beside the view, the
     /// view alone.
     CodeOnly,
     SideBySide,
     ViewOnly,
+    /// The Agent panel: a speech bubble.
+    Agent,
 }
 
 /// A button holding `icon`, pressed-looking when `on`.
@@ -194,6 +198,7 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         }
         Icon::FoldUp => line(&[(6.0, 12.0), (10.0, 8.0), (14.0, 12.0)]),
         Icon::FoldDown => line(&[(6.0, 8.0), (10.0, 12.0), (14.0, 8.0)]),
+        Icon::FoldRight => line(&[(8.0, 6.0), (12.0, 10.0), (8.0, 14.0)]),
         Icon::CodeOnly => {
             painter.rect_stroke(
                 Rect::from_min_max(p(2.5, 4.0), p(17.5, 16.0)),
@@ -225,6 +230,19 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             ]);
             line(&[(3.5, 6.25), (10.0, 10.0), (16.5, 6.25)]);
             line(&[(10.0, 10.0), (10.0, 17.5)]);
+        }
+        Icon::Agent => {
+            // The bubble, its tail at the bottom left, and three dots.
+            painter.rect_stroke(
+                Rect::from_min_max(p(2.5, 3.5), p(17.5, 14.0)),
+                CornerRadius::same(3),
+                stroke,
+                StrokeKind::Middle,
+            );
+            line(&[(5.5, 14.0), (5.0, 17.5), (9.5, 14.0)]);
+            for x in [6.5, 10.0, 13.5] {
+                painter.circle_filled(p(x, 8.75), 1.1 * s, color);
+            }
         }
     }
 }

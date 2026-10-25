@@ -16,6 +16,7 @@ use c2f_circuit::End;
 use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
+use crate::agent_panel::{self, AgentPanel};
 use crate::animation::{self, Animation, Step};
 use crate::catalogue::{self, Catalogue};
 use crate::circuit;
@@ -392,6 +393,8 @@ impl Tab {
 struct Stores {
     session: Option<PathBuf>,
     settings: Option<PathBuf>,
+    /// The Agent panel's conversations.
+    conversations: Option<PathBuf>,
 }
 
 pub struct StudioApp {
@@ -455,6 +458,8 @@ pub struct StudioApp {
     /// switch, as last drawn.
     header_right: f32,
     header_switch: f32,
+    /// The conversation with the agent, docked on the right.
+    agent: AgentPanel,
 }
 
 impl StudioApp {
@@ -468,7 +473,7 @@ impl StudioApp {
         // Launched by opening files in the Finder.
         let paths = paths.into_iter().chain(open_events::take()).collect();
         let recent = RecentFiles::load(crate::recent::store());
-        let stores = Stores { session: tabs::store(), settings: settings::store() };
+        let stores = Stores { session: tabs::store(), settings: settings::store(), conversations: agent_panel::store() };
         let mut app = StudioApp::with(&cc.egui_ctx, cc.gl.clone(), stores, recent, settings, paths);
         let icon = app.settings.icon;
         if let Err(err) = icon_setting::restore(icon) {
@@ -487,6 +492,8 @@ impl StudioApp {
         paths: Vec<PathBuf>,
     ) -> Self {
         let session_store = stores.session;
+        let engine_settings = settings.clone();
+        let agent = AgentPanel::new(move || agent_panel::engine_for(&engine_settings), stores.conversations);
         let mut app = StudioApp {
             doc: Tab::new(0, gl.as_ref()),
             shelf: Shelf::default(),
@@ -524,12 +531,18 @@ impl StudioApp {
             arrangement: Arrangement::Split,
             header_right: 0.0,
             header_switch: 0.0,
+            agent,
         };
         app.apply_settings(ctx);
         // A screenshot of a layout, as `layout:view`.
         let layout = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("layout:"));
         if let Some(arrangement) = layout.and_then(Arrangement::from_id) {
             app.arrangement = arrangement;
+        }
+        // A screenshot of the Agent panel, a message sent.
+        if app.screenshot.as_ref().is_some_and(|s| s.select.as_deref() == Some("agent")) {
+            app.agent.open = true;
+            app.agent.send("Make the box 40 mm wide, with a **lid**.");
         }
         // A screenshot of a settings page, as `settings:shortcuts`.
         let page = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("settings:"));
@@ -1278,6 +1291,21 @@ impl StudioApp {
             self.doc.editor.go_to(ctx, &self.doc.text, offset);
         }
         self.update_overlay();
+    }
+
+    // ---- Agent ----
+
+    /// The Agent panel, on the right of the window, following the active
+    /// tab; an edit's link shows its line in the code.
+    fn agent_panel(&mut self, ctx: &egui::Context) {
+        self.agent.set_tab(self.doc.path.as_deref(), self.doc.directory());
+        if let Some(line) = self.agent.show(ctx) {
+            if self.arrangement == Arrangement::View {
+                self.arrangement = Arrangement::Split;
+            }
+            let offset = agent_panel::line_offset(&self.doc.text, line);
+            self.doc.editor.go_to(ctx, &self.doc.text, offset);
+        }
     }
 
     // ---- Catalogue ----
@@ -2187,6 +2215,7 @@ impl StudioApp {
                 Action::ZoomIn => zoom_steps += 1,
                 Action::ZoomOut => zoom_steps -= 1,
                 Action::ZoomReset => zoom_reset = true,
+                Action::Agent => self.agent.toggle(),
                 Action::Settings => self.settings_open = true,
             }
         }
@@ -2337,6 +2366,11 @@ impl StudioApp {
                     let shortcut = shortcuts::describe(ctx, &keys.get(Action::Settings));
                     if icons::button(ui, Icon::Settings, self.settings_open, &tr!("Settings ({shortcut})", "Réglages ({shortcut})")).clicked() {
                         self.settings_open = true;
+                    }
+                    let shortcut = shortcuts::describe(ctx, &keys.get(Action::Agent));
+                    let hint = tr!("Talk to the agent ({shortcut})", "Parler à l'agent ({shortcut})");
+                    if icons::button(ui, Icon::Agent, self.agent.open, &hint).clicked() {
+                        self.agent.toggle();
                     }
                     self.export_menu(ui, ctx, &keys);
                     let render = Button::new(RichText::new(tr("Render", "Rendu")).color(palette.on_accent).strong())
@@ -3590,6 +3624,7 @@ impl eframe::App for StudioApp {
 
         self.header(ctx);
         self.status_bar(ctx);
+        self.agent_panel(ctx);
         self.catalogue_panel(ctx);
         self.code_panel(ctx);
         self.view_panel(ctx);
@@ -4502,7 +4537,7 @@ mod tests {
 
     /// The app without a window, nor the user's Open Recent list.
     fn studio(ctx: &egui::Context, store: Option<PathBuf>, paths: Vec<PathBuf>) -> StudioApp {
-        let stores = Stores { session: store, settings: None };
+        let stores = Stores { session: store, settings: None, conversations: None };
         StudioApp::with(ctx, None, stores, RecentFiles::default(), Settings::load(None), paths)
     }
 
@@ -4700,7 +4735,7 @@ mod tests {
         let mut app = studio(&ctx, Some(store.clone()), vec![dir.join("a.c2f")]);
         app.save_session();
         drop(app);
-        let stores = Stores { session: Some(store), settings: None };
+        let stores = Stores { session: Some(store), settings: None, conversations: None };
         let settings = Settings { reopen_tabs: false, ..Settings::default() };
         let app = StudioApp::with(&ctx, None, stores, RecentFiles::default(), settings, vec![dir.join("b.c2f")]);
         assert_eq!(open_files(&app), (files(&["b.c2f"]), 0), "only the file given");

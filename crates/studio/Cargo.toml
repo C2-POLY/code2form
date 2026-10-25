@@ -29,9 +29,8 @@ rfd = "0.15"
 winit = "0.30"
 # Already used by eframe: its errors, printed.
 log = "0.4"
-
-[dev-dependencies]
-# Writes the icon's pictures for the bundle (examples/app-icon.rs).
+# The pictures the agent's tools give back, shown in the Agent panel;
+# also writes the icon's pictures for the bundle (examples/app-icon.rs).
 png = "0.18"
 
 [target.'cfg(target_os = "macos")'.dependencies]
