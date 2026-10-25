@@ -17,6 +17,7 @@ use c2f_eval::customizer::Literal;
 use c2f_geom::Stats;
 
 use crate::agent_panel::{self, AgentPanel};
+use crate::agent_setup;
 use crate::animation::{self, Animation, Step};
 use crate::catalogue::{self, Catalogue};
 use crate::circuit;
@@ -125,17 +126,19 @@ enum Section {
     Model,
     Export,
     Libraries,
+    Agent,
     Shortcuts,
 }
 
 impl Section {
-    const ALL: [Section; 7] = [
+    const ALL: [Section; 8] = [
         Section::General,
         Section::Appearance,
         Section::Editor,
         Section::Model,
         Section::Export,
         Section::Libraries,
+        Section::Agent,
         Section::Shortcuts,
     ];
 
@@ -148,6 +151,7 @@ impl Section {
             Section::Model => "model",
             Section::Export => "export",
             Section::Libraries => "libraries",
+            Section::Agent => "agent",
             Section::Shortcuts => "shortcuts",
         }
     }
@@ -160,8 +164,25 @@ impl Section {
             Section::Model => tr("Model", "Modèle"),
             Section::Export => tr("Export", "Export"),
             Section::Libraries => tr("Libraries", "Bibliothèques"),
+            Section::Agent => tr("Agent", "Agent"),
             Section::Shortcuts => tr("Shortcuts", "Raccourcis"),
         }
+    }
+}
+
+/// Makes the Agent panel's engines, the studio's `live` tools among their
+/// tools; a screenshot run, which is no one's studio, gets a stand-in.
+fn agent_factory(live: live::LiveTools) -> impl FnMut(&agent_setup::EngineRequest) -> agent_setup::Built {
+    let screenshot = std::env::var_os("CODE2FORM_SCREENSHOT").is_some();
+    move |request| {
+        if screenshot {
+            return agent_setup::Built::ready(Box::new(agent_panel::EchoEngine), "echo");
+        }
+        // From a .app bundle, the studio's own executable: its hidden
+        // `mcp --studio` mode serves the tools, the live ones through the
+        // studio's socket.
+        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("code2form"));
+        agent_setup::engine_for(request, Some(Box::new(live.clone())), (exe, vec!["mcp".into(), "--studio".into()]))
     }
 }
 
@@ -528,8 +549,8 @@ impl StudioApp {
         paths: Vec<PathBuf>,
     ) -> Self {
         let session_store = stores.session;
-        let engine_settings = settings.clone();
-        let agent = AgentPanel::new(move || agent_panel::engine_for(&engine_settings), stores.conversations);
+        let live = live::Live::new(ctx);
+        let agent = AgentPanel::new(agent_factory(live.tools()), stores.conversations);
         let mut app = StudioApp {
             doc: Tab::new(0, gl.as_ref()),
             shelf: Shelf::default(),
@@ -568,7 +589,7 @@ impl StudioApp {
             header_right: 0.0,
             header_switch: 0.0,
             agent,
-            live: live::Live::new(ctx),
+            live,
             agent_running: false,
         };
         app.apply_settings(ctx);
@@ -1338,6 +1359,11 @@ impl StudioApp {
     /// The Agent panel, on the right of the window, following the active
     /// tab; an edit's link shows its line in the code.
     fn agent_panel(&mut self, ctx: &egui::Context) {
+        self.agent.configure(ctx, &self.settings.agent, &self.settings.library_folders);
+        if std::mem::take(&mut self.agent.open_settings) {
+            self.settings_open = true;
+            self.settings_section = Section::Agent;
+        }
         self.agent.set_tab(self.doc.path.as_deref(), self.doc.directory());
         self.suggest_selection();
         self.agent_view_shot(ctx);
@@ -3401,6 +3427,7 @@ impl StudioApp {
                         Section::Model => model_page(ui, ctx, &mut self.settings),
                         Section::Export => export_folder = export_page(ui, ctx, &mut self.settings),
                         Section::Libraries => (libraries, fonts) = libraries_page(ui, &self.settings),
+                        Section::Agent => self.agent.settings_page(ui, ctx, &mut self.settings.agent),
                         Section::Shortcuts => {}
                     });
                 });

@@ -1,7 +1,8 @@
 //! The review of an agent's change before it applies, when the settings
-//! ask for it: the code's diff, old lines and new, and in the view the
-//! new model with the current one as a translucent ghost; Accept applies
-//! the change as the agent's edits apply, Decline tells the agent no.
+//! say "Ask before each change": the code's diff, old lines and new, and
+//! in the view the new model with the current one as a translucent ghost;
+//! Accept applies the change as the agent's edits apply, Decline tells
+//! the agent no.
 //!
 //! [`review`] reads a change into a [`ReviewState`], plain data apart from
 //! egui; [`StudioApp::review_agent_edit`] is the entry point the live
@@ -206,11 +207,6 @@ fn preview(ctx: &egui::Context, current: String, proposed: String, path: PathBuf
 }
 
 impl StudioApp {
-    /// Whether the settings ask to review each of the agent's changes.
-    pub(super) fn reviews_agent_edits(&self) -> bool {
-        self.settings.review_agent_edits
-    }
-
     /// Shows the user the change `edit` makes to the active tab, and keeps
     /// `reply` until they accept or decline it: the entry point of the
     /// live `edit_code` handler. An edit that cannot be made, or a second

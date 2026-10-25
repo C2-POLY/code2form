@@ -182,6 +182,12 @@ pub struct ClaudeCodeOptions {
     /// The session to continue, as a turn's [`Event::Done`] gave it.
     pub resume: Option<String>,
     pub permission: Permission,
+    /// With [`Permission::ApplyDirectly`], Claude Code may write new
+    /// files in the project folder (its `Write` tool), not only edit them.
+    pub write_files: bool,
+    /// The most agentic turns an answer may take (`--max-turns`); the
+    /// CLI's own limit when `None`.
+    pub max_turns: Option<u32>,
 }
 
 /// The command line, after the executable: print mode with stream-json in
@@ -191,7 +197,8 @@ fn arguments(options: &ClaudeCodeOptions, resume: Option<&str>) -> Vec<String> {
     let (program, args) = &options.mcp_command;
     let mcp = json!({ "mcpServers": { SERVER: { "type": "stdio", "command": program, "args": args } } });
     let (tools, mode) = match options.permission {
-        Permission::ApplyDirectly => ("Read,Glob,Grep,Edit,Write", "acceptEdits"),
+        Permission::ApplyDirectly if options.write_files => ("Read,Glob,Grep,Edit,Write", "acceptEdits"),
+        Permission::ApplyDirectly => ("Read,Glob,Grep,Edit", "acceptEdits"),
         Permission::AskFirst => ("Read,Glob,Grep", "dontAsk"),
     };
     let mut arguments: Vec<String> = [
@@ -222,6 +229,9 @@ fn arguments(options: &ClaudeCodeOptions, resume: Option<&str>) -> Vec<String> {
     .collect();
     if let Some(model) = &options.model {
         arguments.extend(["--model".into(), model.clone()]);
+    }
+    if let Some(turns) = options.max_turns {
+        arguments.extend(["--max-turns".into(), turns.to_string()]);
     }
     if let Some(session) = resume {
         arguments.extend(["--resume".into(), session.to_string()]);
@@ -765,6 +775,8 @@ mod tests {
             model: Some("sonnet".into()),
             resume: None,
             permission,
+            write_files: true,
+            max_turns: None,
         }
     }
 
@@ -784,6 +796,12 @@ mod tests {
         let asking = arguments(&options("claude".into(), Permission::AskFirst), None);
         assert!(asking.contains(&"Read,Glob,Grep".to_string()) && asking.contains(&"dontAsk".to_string()));
         assert!(!asking.iter().any(|arg| arg == "--resume"));
+        assert!(!asking.iter().any(|arg| arg == "--max-turns"));
+        let limited = ClaudeCodeOptions { write_files: false, max_turns: Some(7), ..options("claude".into(), Permission::ApplyDirectly) };
+        let limited = arguments(&limited, None);
+        let after = |flag: &str| limited[limited.iter().position(|arg| arg == flag).unwrap() + 1].clone();
+        assert_eq!(after("--tools"), "Read,Glob,Grep,Edit", "no Write");
+        assert_eq!(after("--max-turns"), "7");
     }
 
     #[test]

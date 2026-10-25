@@ -607,7 +607,7 @@ fn check_live(tools: &LiveTools) -> Result<Vec<Value>, String> {
 impl StudioApp {
     /// The library folders a circuit's parts are found in, as the worker
     /// reads them: the user's folders, then the defaults.
-    fn circuit_libraries(&self) -> Vec<PathBuf> {
+    pub(super) fn circuit_libraries(&self) -> Vec<PathBuf> {
         self.settings.library_folders.iter().cloned().chain(c2f_eval::default_library_paths()).collect()
     }
 

@@ -143,6 +143,31 @@ impl ApiEngine {
         }
     }
 
+    /// This engine with an earlier conversation as its context: `turns`,
+    /// the user's (`true`) and the assistant's texts in order. Consecutive
+    /// turns of one side join, and the assistant's before the first of
+    /// the user's are left out, so that the roles alternate from the user.
+    pub fn with_history(self, turns: impl IntoIterator<Item = (bool, String)>) -> ApiEngine {
+        {
+            let mut history = self.history.lock().unwrap_or_else(PoisonError::into_inner);
+            for (user, text) in turns {
+                let role = if user { "user" } else { "assistant" };
+                if text.trim().is_empty() || (history.is_empty() && !user) {
+                    continue;
+                }
+                match history.last_mut() {
+                    Some(last) if last["role"] == role => {
+                        if let Some(blocks) = last["content"].as_array_mut() {
+                            blocks.push(json!({ "type": "text", "text": text }));
+                        }
+                    }
+                    _ => history.push(json!({ "role": role, "content": [{ "type": "text", "text": text }] })),
+                }
+            }
+        }
+        self
+    }
+
     /// Whether a turn is under way.
     fn busy(&self) -> bool {
         self.turn.as_ref().is_some_and(|turn| !turn.is_finished())
@@ -958,6 +983,22 @@ mod tests {
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[1], json!({ "role": "assistant", "content": [{ "type": "text", "text": "Hello" }] }));
         assert_eq!(messages[2]["content"][0]["text"], "and again");
+    }
+
+    #[test]
+    fn an_earlier_conversation_seeds_the_history() {
+        let server = mock(vec![reply(10, vec![text(0, &["Yes"])], "end_turn", 2)]);
+        let (engine, _) = engine(&server.url);
+        let turns = [(false, "stray"), (true, "a box"), (true, "40 mm"), (false, "Done."), (true, " ")];
+        let mut engine = engine.with_history(turns.map(|(user, text)| (user, text.to_string())));
+        turn(&mut engine, UserMessage::text("wider?"));
+        let requests = server.requests.lock().unwrap();
+        let messages = requests[0].1["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"].as_array().unwrap().len(), 2, "the user's two texts joined");
+        assert_eq!(messages[1], json!({ "role": "assistant", "content": [{ "type": "text", "text": "Done." }] }));
+        assert_eq!(messages[2]["content"][0]["text"], "wider?");
     }
 
     #[test]

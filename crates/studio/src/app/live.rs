@@ -23,13 +23,15 @@ use eframe::egui;
 use serde_json::{Map, Value, json};
 
 use super::{StudioApp, Tab, find_hit};
+use crate::agent_confirm::{Proposal, confirm_agent_change};
 use crate::console::Level;
 use crate::pick::Hit;
 
 /// How long a call waits for the UI thread to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
-/// How long an edit waits for its answer: the user may review it first.
-const REVIEW_WAIT: Duration = Duration::from_secs(15 * 60);
+/// How long a change waits for the user's answer, when they are asked:
+/// time to read an edit's diff and look at its model.
+const CONFIRM_WAIT: Duration = Duration::from_secs(600);
 /// How long an edit waits for its render.
 const RENDER_WAIT: Duration = Duration::from_secs(30);
 /// The longest side of a picture of the view, in pixels.
@@ -89,14 +91,24 @@ enum Op {
     Flash { id: u64, lo: [f32; 3], hi: [f32; 3] },
 }
 
+impl Op {
+    /// Whether it changes a document: the user may be asked first.
+    fn changes(&self) -> bool {
+        matches!(self, Op::Edit { .. } | Op::SetParameters { .. } | Op::Circuit(super::live_circuit::CircuitOp::Edit(_)))
+    }
+}
+
 /// The studio's side of the live tools: the requests to answer, and the
 /// picture of the view asked for.
 pub struct Live {
     tools: LiveTools,
     requests: Receiver<Request>,
     shot: Option<Sender<Result<Value, String>>>,
-    /// The agent's change waiting for the user's review.
+    /// The agent's edit waiting for the user's review.
     pub(super) review: Option<super::review::Pending>,
+    /// The other changes waiting for the user's answer, in "Ask before
+    /// each change" mode, the first shown.
+    asking: Vec<(Request, Proposal)>,
 }
 
 /// The mark of the screenshots the live tools ask for.
@@ -107,7 +119,7 @@ impl Live {
     pub fn new(ctx: &egui::Context) -> Live {
         let (requests, received) = mpsc::channel();
         let tools = LiveTools { requests, ctx: ctx.clone(), parts: Arc::default() };
-        Live { tools, requests: received, shot: None, review: None }
+        Live { tools, requests: received, shot: None, review: None, asking: Vec::new() }
     }
 
     /// The tools, to give an agent.
@@ -307,16 +319,17 @@ fn tab_schema() -> Value {
 }
 
 impl LiveTools {
-    /// Sends `op` to the UI thread and waits for its answer.
+    /// Sends `op` to the UI thread and waits for its answer; a change
+    /// waits longer, for the user may be asked.
     fn ask(&self, op: Op) -> Result<Value, String> {
-        let wait = if matches!(op, Op::Edit { .. }) { REVIEW_WAIT } else { ANSWER_WAIT };
+        let wait = if op.changes() { CONFIRM_WAIT } else { ANSWER_WAIT };
         let (reply, answer) = mpsc::channel();
         self.requests.send(Request { op, reply }).map_err(|_| "the studio is closing".to_string())?;
         self.ctx.request_repaint();
         match answer.recv_timeout(wait) {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
-                Err("the studio did not answer within 30 s (busy, or a dialog is open): try again".into())
+                Err(format!("the studio did not answer within {} s (busy, or a dialog is open): try again", wait.as_secs()))
             }
             Err(RecvTimeoutError::Disconnected) => Err("the studio dropped the request: try again".into()),
         }
@@ -729,23 +742,94 @@ impl StudioApp {
                 }
                 continue;
             }
-            // Reviewed first, when the settings ask: the answer waits for
-            // the user's.
-            let op = match op {
-                Op::Edit { tab, edit } if self.reviews_agent_edits() => {
-                    let index = tab.unwrap_or(self.shelf.active());
-                    if index < self.shelf.len() {
-                        self.in_tab(index, |app| app.review_agent_edit(ctx, edit, Some(reply)));
-                    } else {
-                        let _ = reply.send(Err(format!("no tab {index}: there are {} (studio_state lists them)", self.shelf.len())));
+            // In "Ask before each change" mode the answer waits for the
+            // user's: an edit through its review, its diff and its model,
+            // the other changes through a dialog.
+            if op.changes() && self.settings.agent.ask_first {
+                match op {
+                    Op::Edit { tab, edit } => {
+                        let index = tab.unwrap_or(self.shelf.active());
+                        if index < self.shelf.len() {
+                            self.in_tab(index, |app| app.review_agent_edit(ctx, edit, Some(reply)));
+                        } else {
+                            let _ = reply.send(Err(format!("no tab {index}: there are {} (studio_state lists them)", self.shelf.len())));
+                        }
                     }
-                    continue;
+                    op => match self.propose(&op) {
+                        Ok(proposal) => self.live.asking.push((Request { op, reply }, proposal)),
+                        Err(why) => {
+                            let _ = reply.send(Err(why));
+                        }
+                    },
                 }
-                op => op,
-            };
+                continue;
+            }
             let answer = self.answer_live(ctx, op);
             // A caller that gave up waiting is gone.
             let _ = reply.send(answer);
+        }
+        self.confirm_live(ctx);
+    }
+
+    /// Asks the user about the first change waiting, and makes it or
+    /// refuses it once they answer.
+    fn confirm_live(&mut self, ctx: &egui::Context) {
+        // One question at a time: a review shown first is answered first.
+        if self.live.review.is_some() {
+            return;
+        }
+        if let Some(accept) = self.live.asking.first().and_then(|(_, proposal)| confirm_agent_change(ctx, proposal)) {
+            self.answer_asked(ctx, accept);
+        }
+    }
+
+    /// Makes the first change waiting, or refuses it.
+    fn answer_asked(&mut self, ctx: &egui::Context, accept: bool) {
+        if self.live.asking.is_empty() {
+            return;
+        }
+        let (Request { op, reply }, _) = self.live.asking.remove(0);
+        let result = if accept {
+            self.answer_live(ctx, op)
+        } else {
+            Err("declined by the user: the change was not made. Ask them what they want instead.".into())
+        };
+        let _ = reply.send(result);
+    }
+
+    /// The change `op` makes, to show the user in a dialog before it is
+    /// made (an edit has its review instead); the error says why it
+    /// cannot be.
+    fn propose(&mut self, op: &Op) -> Result<Proposal, String> {
+        match op {
+            Op::SetParameters { tab, values } => {
+                let mut proposal = Err(String::new());
+                self.on_tab(*tab, |app, _| {
+                    let current: Map<String, Value> = app.doc.customizer.shown().map(|(p, v)| (p.name.clone(), literal(v))).collect();
+                    let line = |name: &String, value: Option<&Value>| format!("{name} = {}", value.map_or("?".into(), Value::to_string));
+                    proposal = Ok(Proposal {
+                        title: tr!("Set parameters of {}", "Régler les paramètres de {}", app.doc.file_name()),
+                        before: values.keys().map(|n| line(n, current.get(n))).collect::<Vec<_>>().join("\n"),
+                        after: values.iter().map(|(n, v)| line(n, Some(v))).collect::<Vec<_>>().join("\n"),
+                    });
+                    Ok(Value::Null)
+                })?;
+                proposal
+            }
+            Op::Circuit(super::live_circuit::CircuitOp::Edit(edit)) => {
+                if !self.doc.is_circuit() {
+                    return Err("the active tab is not a circuit (.c2fc): open one with open_file, or show its tab".into());
+                }
+                let edited = super::live_circuit::edit_circuit(&self.doc.text, &self.doc.source_path(), &self.circuit_libraries(), edit)?;
+                let diff = super::review::diff_lines(&self.doc.text, &edited.text);
+                let lines = |change| diff.iter().filter(|l| l.change == change).map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+                Ok(Proposal {
+                    title: tr!("{} in {}", "{} dans {}", edited.done, self.doc.file_name()),
+                    before: lines(super::review::Change::Removed),
+                    after: lines(super::review::Change::Added),
+                })
+            }
+            _ => Err("not a change".into()),
         }
     }
 
@@ -1176,6 +1260,106 @@ mod tests {
     }
 
     #[test]
+    fn asked_first_the_user_accepts_or_declines_each_change() {
+        let dir = std::env::temp_dir().join(format!("c2f-live-ask-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("box.c2f");
+        std::fs::write(&file, "width = 20; // [1:100]\ncube([width, 10, 5]);\n").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        app.settings.agent.ask_first = true;
+        // The dialog is drawn in a frame.
+        let serve = |app: &mut StudioApp, ctx: &egui::Context| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.serve_live(ctx));
+        };
+        let asked = |app: &mut StudioApp, name: &str, args: Value, accept: bool| {
+            let tools = app.live_tools();
+            let name = name.to_string();
+            let caller = std::thread::spawn(move || tools.call(&name, &args).expect("a live tool"));
+            let start = Instant::now();
+            while app.live.asking.is_empty() && !caller.is_finished() {
+                assert!(start.elapsed() < Duration::from_secs(60), "not asked");
+                app.receive();
+                serve(app, &ctx);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let proposal = app.live.asking.first().map(|(_, p)| p.clone());
+            app.answer_asked(&ctx, accept);
+            while !caller.is_finished() {
+                app.receive();
+                serve(app, &ctx);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            (proposal, caller.join().unwrap())
+        };
+        // The parameters are known once the model renders.
+        let start = Instant::now();
+        while app.doc.customizer.shown().next().is_none() {
+            assert!(start.elapsed() < Duration::from_secs(60), "not rendered");
+            app.receive();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let set = json!({ "values": { "width": 2 } });
+        let (proposal, declined) = asked(&mut app, "set_parameters", set.clone(), false);
+        let proposal = proposal.expect("asked");
+        assert_eq!((proposal.before.as_str(), proposal.after.as_str()), ("width = 20.0", "width = 2"));
+        assert!(declined.unwrap_err().contains("declined by the user"));
+        assert_eq!(app.doc.customizer.shown().find(|(p, _)| p.name == "width").map(|(_, v)| literal(v)), Some(json!(20.0)), "not set");
+        let (_, accepted) = asked(&mut app, "set_parameters", set, true);
+        assert!(accepted.is_ok());
+        // An edit is not asked in the dialog: it waits for its review.
+        let tools = app.live_tools();
+        let edit = json!({ "edits": [{ "old": "10, 5", "new": "30, 5" }] });
+        let caller = std::thread::spawn(move || tools.call("edit_code", &edit).expect("a live tool"));
+        let start = Instant::now();
+        while app.live.review.is_none() {
+            assert!(start.elapsed() < Duration::from_secs(60), "not reviewed");
+            app.receive();
+            serve(&mut app, &ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.live.asking.is_empty());
+        app.answer_review(&ctx, false);
+        assert!(caller.join().unwrap().unwrap_err().contains("declined"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn asked_first_a_circuit_edit_shows_the_lines_it_adds() {
+        let dir = std::env::temp_dir().join(format!("c2f-live-ask-circuit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("lamp.c2fc");
+        std::fs::write(&file, "[parts.xiao]\npart = \"electronics/xiao_esp32s3.c2f\"\n").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        call(&mut app, &ctx, "check_live", json!({})).unwrap();
+        app.settings.agent.ask_first = true;
+        let place = json!({ "name": "cap", "part": "electronics/capacitor_ceramic.c2f", "at": [30, 0, 0] });
+        for accept in [false, true] {
+            let tools = app.live_tools();
+            let args = place.clone();
+            let caller = std::thread::spawn(move || tools.call("place_component", &args).expect("a live tool"));
+            let start = Instant::now();
+            while app.live.asking.is_empty() {
+                assert!(start.elapsed() < Duration::from_secs(60), "not asked");
+                app.receive();
+                let _ = ctx.run(egui::RawInput::default(), |ctx| app.serve_live(ctx));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(app.live.asking[0].1.after.contains("[parts.cap]"), "{:?}", app.live.asking[0].1);
+            app.answer_asked(&ctx, accept);
+            while !caller.is_finished() {
+                app.receive();
+                let _ = ctx.run(egui::RawInput::default(), |ctx| app.serve_live(ctx));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(caller.join().unwrap().is_ok(), accept);
+            assert_eq!(app.doc.text.contains("[parts.cap]"), accept, "{}", app.doc.text);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_tools_are_named_apart_from_the_built_in_ones() {
         let ctx = egui::Context::default();
         let tools = Live::new(&ctx).tools();
@@ -1298,7 +1482,7 @@ mod tests {
         let (dir, file) = scratch("review", PARTS);
         let ctx = egui::Context::default();
         let mut app = studio(&ctx, &file);
-        app.settings.review_agent_edits = true;
+        app.settings.agent.ask_first = true;
         let original = app.doc.text.clone();
         // Calls `edit_code`, answering the review with `accept`.
         let reviewed = |app: &mut StudioApp, old: &str, new: &str, accept: bool| {
@@ -1331,6 +1515,17 @@ mod tests {
         assert_eq!(done["render"]["ok"], true, "{done}");
         assert!(app.doc.text.contains("[20, 10, 4]"));
         assert!(app.live.review.is_none());
+
+        let tools = app.live_tools();
+        let args = json!({ "edits": [{ "old": "nothing", "new": "x" }] });
+        let caller = std::thread::spawn(move || tools.call("edit_code", &args).expect("a live tool"));
+        while !caller.is_finished() {
+            app.receive();
+            app.serve_live(&ctx);
+            assert!(app.live.review.is_none(), "an edit that cannot be made is not reviewed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(caller.join().unwrap().is_err(), "it is refused at once");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
