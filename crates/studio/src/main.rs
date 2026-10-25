@@ -3,7 +3,9 @@
 
 #[macro_use]
 mod i18n;
+mod agent_confirm;
 mod agent_panel;
+mod agent_setup;
 mod animation;
 mod app;
 mod app_icon;
@@ -162,6 +164,12 @@ fn mcp() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // What the user lets the agent do, from the studio's settings: Claude
+    // Code starts this server in the active file's folder, its scope.
+    let settings = settings::Settings::load(settings::store().as_deref());
+    let folder = std::env::current_dir().ok();
+    let policy = settings.agent.policy(folder.as_deref(), &settings.library_folders);
+    let tools = c2f_agent::guard::Guarded::registry(tools, policy);
     match c2f_agent::Server::new(tools).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

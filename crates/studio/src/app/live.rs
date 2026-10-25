@@ -22,11 +22,14 @@ use eframe::egui;
 use serde_json::{Map, Value, json};
 
 use super::{StudioApp, Tab, find_hit};
+use crate::agent_confirm::{Proposal, confirm_agent_change};
 use crate::console::Level;
 use crate::pick::Hit;
 
 /// How long a call waits for the UI thread to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
+/// How long a change waits for the user's answer, when they are asked.
+const CONFIRM_WAIT: Duration = Duration::from_secs(600);
 /// How long an edit waits for its render.
 const RENDER_WAIT: Duration = Duration::from_secs(30);
 /// The longest side of a picture of the view, in pixels.
@@ -72,12 +75,22 @@ enum Op {
     Open { path: String },
 }
 
+impl Op {
+    /// Whether it changes a document: the user may be asked first.
+    fn changes(&self) -> bool {
+        matches!(self, Op::Edit { .. } | Op::SetParameters { .. })
+    }
+}
+
 /// The studio's side of the live tools: the requests to answer, and the
 /// picture of the view asked for.
 pub struct Live {
     tools: LiveTools,
     requests: Receiver<Request>,
     shot: Option<Sender<Result<Value, String>>>,
+    /// The changes waiting for the user's answer, in "Ask before each
+    /// change" mode, the first shown.
+    asking: Vec<(Request, Proposal)>,
 }
 
 /// The mark of the screenshots the live tools ask for.
@@ -87,7 +100,7 @@ impl Live {
     /// The live tools of the app drawn in `ctx`, and their requests.
     pub fn new(ctx: &egui::Context) -> Live {
         let (requests, received) = mpsc::channel();
-        Live { tools: LiveTools { requests, ctx: ctx.clone() }, requests: received, shot: None }
+        Live { tools: LiveTools { requests, ctx: ctx.clone() }, requests: received, shot: None, asking: Vec::new() }
     }
 
     /// The tools, to give an agent.
@@ -272,15 +285,17 @@ fn tab_schema() -> Value {
 }
 
 impl LiveTools {
-    /// Sends `op` to the UI thread and waits for its answer.
+    /// Sends `op` to the UI thread and waits for its answer; a change
+    /// waits longer, for the user may be asked.
     fn ask(&self, op: Op) -> Result<Value, String> {
+        let wait = if op.changes() { CONFIRM_WAIT } else { ANSWER_WAIT };
         let (reply, answer) = mpsc::channel();
         self.requests.send(Request { op, reply }).map_err(|_| "the studio is closing".to_string())?;
         self.ctx.request_repaint();
-        match answer.recv_timeout(ANSWER_WAIT) {
+        match answer.recv_timeout(wait) {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
-                Err("the studio did not answer within 30 s (busy, or a dialog is open): try again".into())
+                Err(format!("the studio did not answer within {} s (busy, or a dialog is open): try again", wait.as_secs()))
             }
             Err(RecvTimeoutError::Disconnected) => Err("the studio dropped the request: try again".into()),
         }
@@ -630,9 +645,84 @@ impl StudioApp {
                 }
                 continue;
             }
+            if op.changes() && self.settings.agent.ask_first {
+                match self.propose(&op) {
+                    Ok(proposal) => self.live.asking.push((Request { op, reply }, proposal)),
+                    Err(why) => {
+                        let _ = reply.send(Err(why));
+                    }
+                }
+                continue;
+            }
             let answer = self.answer_live(ctx, op);
             // A caller that gave up waiting is gone.
             let _ = reply.send(answer);
+        }
+        self.confirm_live(ctx);
+    }
+
+    /// Asks the user about the first change waiting, and makes it or
+    /// refuses it once they answer.
+    fn confirm_live(&mut self, ctx: &egui::Context) {
+        if let Some(accept) = self.live.asking.first().and_then(|(_, proposal)| confirm_agent_change(ctx, proposal)) {
+            self.answer_asked(ctx, accept);
+        }
+    }
+
+    /// Makes the first change waiting, or refuses it.
+    fn answer_asked(&mut self, ctx: &egui::Context, accept: bool) {
+        if self.live.asking.is_empty() {
+            return;
+        }
+        let (Request { op, reply }, _) = self.live.asking.remove(0);
+        let result = if accept {
+            self.answer_live(ctx, op)
+        } else {
+            Err("declined by the user: the change was not made. Ask them what they want instead.".into())
+        };
+        let _ = reply.send(result);
+    }
+
+    /// The change `op` makes, to show the user before it is made; the
+    /// error says why it cannot be.
+    fn propose(&mut self, op: &Op) -> Result<Proposal, String> {
+        match op {
+            Op::Edit { tab, edit } => {
+                let edit = edit.clone();
+                let mut proposal = Err(String::new());
+                self.on_tab(*tab, |app, _| {
+                    apply(&app.doc.text, &edit)?;
+                    let name = app.doc.file_name();
+                    proposal = Ok(match &edit {
+                        CodeEdit::Replace(pairs) => {
+                            let join = |pick: fn(&(String, String)) -> &String| pairs.iter().map(pick).cloned().collect::<Vec<_>>().join("\n⋯\n");
+                            Proposal { title: tr!("Edit {}", "Modifier {}", name), before: join(|p| &p.0), after: join(|p| &p.1) }
+                        }
+                        CodeEdit::Lines { start, end, new } => {
+                            let before: Vec<&str> = app.doc.text.lines().skip(start.saturating_sub(1)).take((end + 1).saturating_sub(*start)).collect();
+                            let title = tr!("Edit lines {}–{} of {}", "Modifier les lignes {} à {} de {}", start, end, name);
+                            Proposal { title, before: before.join("\n"), after: new.clone() }
+                        }
+                    });
+                    Ok(Value::Null)
+                })?;
+                proposal
+            }
+            Op::SetParameters { tab, values } => {
+                let mut proposal = Err(String::new());
+                self.on_tab(*tab, |app, _| {
+                    let current: Map<String, Value> = app.doc.customizer.shown().map(|(p, v)| (p.name.clone(), literal(v))).collect();
+                    let line = |name: &String, value: Option<&Value>| format!("{name} = {}", value.map_or("?".into(), Value::to_string));
+                    proposal = Ok(Proposal {
+                        title: tr!("Set parameters of {}", "Régler les paramètres de {}", app.doc.file_name()),
+                        before: values.keys().map(|n| line(n, current.get(n))).collect::<Vec<_>>().join("\n"),
+                        after: values.iter().map(|(n, v)| line(n, Some(v))).collect::<Vec<_>>().join("\n"),
+                    });
+                    Ok(Value::Null)
+                })?;
+                proposal
+            }
+            _ => Err("not a change".into()),
         }
     }
 
@@ -1054,6 +1144,56 @@ mod tests {
         let opened = report(&call(&mut app, &ctx, "open_file", json!({ "path": "other.c2f" })).unwrap());
         assert_eq!(opened["tab"], 1);
         assert!(call(&mut app, &ctx, "open_file", json!({ "path": "/etc/hosts" })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn asked_first_the_user_accepts_or_declines_each_change() {
+        let dir = std::env::temp_dir().join(format!("c2f-live-ask-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("box.c2f");
+        std::fs::write(&file, "width = 20; // [1:100]\ncube([width, 10, 5]);\n").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        app.settings.agent.ask_first = true;
+        // The dialog is drawn in a frame.
+        let serve = |app: &mut StudioApp, ctx: &egui::Context| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.serve_live(ctx));
+        };
+        let asked = |app: &mut StudioApp, name: &str, args: Value, accept: bool| {
+            let tools = app.live_tools();
+            let name = name.to_string();
+            let caller = std::thread::spawn(move || tools.call(&name, &args).expect("a live tool"));
+            let start = Instant::now();
+            while app.live.asking.is_empty() && !caller.is_finished() {
+                assert!(start.elapsed() < Duration::from_secs(60), "not asked");
+                app.receive();
+                serve(app, &ctx);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let proposal = app.live.asking.first().map(|(_, p)| p.clone());
+            app.answer_asked(&ctx, accept);
+            while !caller.is_finished() {
+                app.receive();
+                serve(app, &ctx);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            (proposal, caller.join().unwrap())
+        };
+        let edit = json!({ "edits": [{ "old": "10, 5", "new": "30, 5" }] });
+        let (proposal, declined) = asked(&mut app, "edit_code", edit.clone(), false);
+        let proposal = proposal.expect("asked");
+        assert_eq!((proposal.before.as_str(), proposal.after.as_str()), ("10, 5", "30, 5"));
+        assert!(declined.unwrap_err().contains("declined by the user"));
+        assert!(app.doc.text.contains("10, 5"), "not made");
+        let (_, accepted) = asked(&mut app, "edit_code", edit, true);
+        assert!(accepted.is_ok());
+        assert!(app.doc.text.contains("30, 5"));
+        let (proposal, set) = asked(&mut app, "set_parameters", json!({ "values": { "width": 2 } }), true);
+        assert_eq!(proposal.unwrap().after, "width = 2");
+        assert!(set.is_ok());
+        let (proposal, refused) = asked(&mut app, "edit_code", json!({ "edits": [{ "old": "nothing", "new": "x" }] }), true);
+        assert!(proposal.is_none() && refused.is_err(), "an edit that cannot be made is refused at once");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

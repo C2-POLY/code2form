@@ -25,9 +25,9 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::agent_setup::{self, AgentSettings, Built, EngineRequest, KeyChange, Prober};
 use crate::i18n::tr;
 use crate::icons::{self, Icon};
-use crate::settings::Settings;
 use crate::theme;
 
 /// What the conversation shows, in order, and what its turns took.
@@ -292,14 +292,8 @@ pub fn prompt_text(shortcut: Shortcut, answer: &str, file: Option<&Path>, folder
 
 // ---- Engines ----
 
-/// The engine the settings pick. None can be picked yet: the panel talks
-/// to an [`EchoEngine`] until the real engines are wired here.
-pub fn engine_for(_settings: &Settings) -> Box<dyn Engine> {
-    Box::new(EchoEngine)
-}
-
-/// Stands in for an engine until one is configured: it says so, and gives
-/// the message back.
+/// Stands in for an engine in screenshot runs and tests: it says no
+/// engine is configured, and gives the message back.
 pub struct EchoEngine;
 
 impl Engine for EchoEngine {
@@ -360,10 +354,27 @@ fn answer_id() -> Id {
 pub struct AgentPanel {
     /// Shown on the right of the window.
     pub open: bool,
-    /// Makes an engine: the first, and a fresh one for each new
-    /// conversation, which forgets the last one's session.
-    make_engine: Box<dyn FnMut() -> Box<dyn Engine>>,
+    /// Makes an engine: the first, a fresh one for each new conversation,
+    /// which forgets the last one's session, and one carrying the
+    /// conversation on when the settings change or Resume brings it back.
+    make_engine: Box<dyn FnMut(&EngineRequest) -> Built>,
     engine: Box<dyn Engine>,
+    /// The engine's name and model, and why none can answer.
+    engine_label: String,
+    engine_problem: Option<String>,
+    /// The agent's settings and the library folders the engine was made
+    /// with, and the check of the engines it saw.
+    agent: AgentSettings,
+    libraries: Vec<PathBuf>,
+    built_for: Option<(AgentSettings, Vec<PathBuf>, u64)>,
+    /// Checks which engines this computer has, once the panel or the
+    /// settings are first shown, and the `claude` path it checked.
+    prober: Prober,
+    probed: Option<Option<PathBuf>>,
+    /// The API key typed in the settings, until saved.
+    key_input: String,
+    /// The user asked for the Agent settings.
+    pub open_settings: bool,
     transcript: Transcript,
     /// The events of the turn under way.
     events: Option<Receiver<Event>>,
@@ -392,12 +403,20 @@ pub struct AgentPanel {
 impl AgentPanel {
     /// A closed panel, its engines made by `make_engine`, its
     /// conversations kept in `store`.
-    pub fn new(mut make_engine: impl FnMut() -> Box<dyn Engine> + 'static, store: Option<PathBuf>) -> Self {
-        let engine = make_engine();
-        AgentPanel {
+    pub fn new(make_engine: impl FnMut(&EngineRequest) -> Built + 'static, store: Option<PathBuf>) -> Self {
+        let mut panel = AgentPanel {
             open: false,
             make_engine: Box::new(make_engine),
-            engine,
+            engine: Box::new(EchoEngine),
+            engine_label: String::new(),
+            engine_problem: None,
+            agent: AgentSettings::default(),
+            libraries: Vec::new(),
+            built_for: None,
+            prober: Prober::default(),
+            probed: None,
+            key_input: String::new(),
+            open_settings: false,
             transcript: Transcript::default(),
             events: None,
             owner: None,
@@ -411,7 +430,59 @@ impl AgentPanel {
             unfolded: HashSet::new(),
             thumbnails: HashMap::new(),
             focus_input: false,
+        };
+        panel.build();
+        panel
+    }
+
+    /// Makes the engine for the settings, the engines found and the
+    /// conversation as it is; what the user should know of it goes into
+    /// the conversation.
+    fn build(&mut self) {
+        let (generation, probe) = self.prober.current();
+        let request = EngineRequest {
+            agent: &self.agent,
+            libraries: &self.libraries,
+            probe: probe.as_ref(),
+            folder: self.folder.as_deref(),
+            transcript: &self.transcript,
+        };
+        let built = (self.make_engine)(&request);
+        self.engine = built.engine;
+        self.engine_label = built.label;
+        self.engine_problem = built.problem;
+        if let Some(notice) = built.notice.filter(|_| !self.transcript.entries.is_empty()) {
+            self.transcript.entries.push(Entry::Notice { text: notice, error: false });
         }
+        self.built_for = Some((self.agent.clone(), self.libraries.clone(), generation));
+    }
+
+    /// Takes the agent's settings and the user's library folders, every
+    /// frame: the engines are checked once the panel shows, and again
+    /// when the path to `claude` changes; the engine is made again, the
+    /// conversation carried on, when they or the engines found change.
+    pub fn configure(&mut self, ctx: &egui::Context, agent: &AgentSettings, libraries: &[PathBuf]) {
+        if self.agent != *agent || self.libraries != libraries {
+            self.agent = agent.clone();
+            self.libraries = libraries.to_vec();
+        }
+        let checked = self.probed.as_ref().is_some_and(|path| *path == self.agent.claude_path);
+        if (self.open || self.probed.is_some()) && !checked {
+            self.probed = Some(self.agent.claude_path.clone());
+            self.prober.check(ctx, self.agent.claude_path.clone(), KeyChange::Keep);
+        }
+        let now = (self.agent.clone(), self.libraries.clone(), self.prober.current().0);
+        if self.built_for.as_ref() != Some(&now) && !self.running() {
+            self.build();
+        }
+    }
+
+    /// The Agent page of the settings.
+    pub fn settings_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, agent: &mut AgentSettings) {
+        if self.probed.is_none() {
+            self.probed = Some(agent.claude_path.clone());
+        }
+        agent_setup::page(ui, ctx, agent, &self.prober, &mut self.key_input);
     }
 
     /// What the conversation holds so far, for the live tools to read.
@@ -541,7 +612,7 @@ impl AgentPanel {
     /// An empty conversation about `owner`, with a fresh engine.
     fn fresh(&mut self, owner: Option<PathBuf>) {
         self.transcript = Transcript::default();
-        self.engine = (self.make_engine)();
+        self.build();
         self.owner = owner;
         self.problem = None;
         self.unfolded.clear();
@@ -568,6 +639,8 @@ impl AgentPanel {
             Ok(transcript) => {
                 self.fresh(self.file.clone());
                 self.transcript = transcript;
+                // Its session resumed, or its texts carried on.
+                self.build();
             }
             Err(err) => {
                 self.problem = Some(tr!("Cannot read the last conversation: {err}", "Impossible de lire la dernière conversation : {err}"));
@@ -653,7 +726,7 @@ impl AgentPanel {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
             icons::paint(ui.painter(), rect, Icon::Agent, palette.text_dim);
             ui.label(RichText::new("Agent").strong().size(13.5).color(palette.text));
-            ui.label(RichText::new(self.engine.name()).size(11.5).color(palette.text_faint));
+            ui.label(RichText::new(&self.engine_label).size(11.5).color(palette.text_faint));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let close = ui.add(Button::new(RichText::new("×").size(16.0).color(palette.text_dim)).frame(false));
@@ -672,6 +745,14 @@ impl AgentPanel {
                 }
             });
         });
+        if let Some(problem) = &self.engine_problem {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(problem).size(12.0).color(palette.text_dim));
+                if ui.small_button(tr("Open settings", "Ouvrir les réglages")).clicked() {
+                    self.open_settings = true;
+                }
+            });
+        }
     }
 
     /// The prompts' buttons, and the field one of them asks with.
@@ -1242,7 +1323,47 @@ mod tests {
     }
 
     fn fake(turns: Vec<Vec<Event>>) -> AgentPanel {
-        AgentPanel::new(move || Box::new(FakeEngine::new(turns.clone())), None)
+        AgentPanel::new(move |_: &EngineRequest| Built::ready(Box::new(FakeEngine::new(turns.clone())), "fake"), None)
+    }
+
+    #[test]
+    fn the_engine_is_made_again_when_the_settings_or_the_engines_change() {
+        use c2f_agent::engine::claude_code::ClaudeCodeStatus;
+
+        // What each engine was made from: the probe's key, the session, the
+        // permission and the texts carried on.
+        type Made = (bool, Option<String>, bool, usize);
+        let made: Arc<Mutex<Vec<Made>>> = Arc::default();
+        let log = made.clone();
+        let mut panel = AgentPanel::new(
+            move |request: &EngineRequest| {
+                let probe = request.probe.is_some_and(|p| p.key.is_some());
+                let session = request.transcript.session_id.clone();
+                log.lock().unwrap().push((probe, session, request.agent.ask_first, request.transcript.entries.len()));
+                Built::ready(Box::new(FakeEngine::new(vec![turn()])), "fake")
+            },
+            None,
+        );
+        let ctx = egui::Context::default();
+        panel.configure(&ctx, &AgentSettings::default(), &[]);
+        assert_eq!(made.lock().unwrap().len(), 1, "nothing changed");
+        panel.send("a cube");
+        panel.poll();
+
+        let ask = AgentSettings { ask_first: true, ..AgentSettings::default() };
+        panel.configure(&ctx, &ask, &[]);
+        panel.prober.set(agent_setup::Probe {
+            claude: None,
+            status: ClaudeCodeStatus::Missing,
+            key: Some("sk-ant-test".into()),
+            key_from_env: false,
+        });
+        panel.configure(&ctx, &ask, &[]);
+        panel.configure(&ctx, &ask, &[]);
+        let made = made.lock().unwrap();
+        assert_eq!(made.len(), 3, "{made:?}");
+        assert_eq!(made[1], (false, Some("s1".into()), true, 5), "the settings changed: the conversation carried on");
+        assert_eq!(made[2], (true, Some("s1".into()), true, 5), "the engines found");
     }
 
     #[test]
@@ -1315,7 +1436,7 @@ mod tests {
         let sender = Arc::new(Mutex::new(None));
         let stops = Arc::new(AtomicUsize::new(0));
         let (s, n) = (sender.clone(), stops.clone());
-        let mut panel = AgentPanel::new(move || Box::new(Held { sender: s.clone(), stops: n.clone() }), None);
+        let mut panel = AgentPanel::new(move |_: &EngineRequest| Built::ready(Box::new(Held { sender: s.clone(), stops: n.clone() }), "held"), None);
         panel.send("a long job");
         let events = sender.lock().unwrap().clone().unwrap();
         events.send(Event::Text { delta: "Working".into() }).unwrap();
@@ -1353,7 +1474,7 @@ mod tests {
         let file = PathBuf::from("/work/box.c2f");
         let other = PathBuf::from("/work/lid.c2f");
         let turns = vec![turn(), vec![Event::Text { delta: "Hi".into() }, Event::Done { usage: None, cost_usd: None, session_id: None }]];
-        let mut panel = AgentPanel::new(move || Box::new(FakeEngine::new(turns.clone())), Some(store.clone()));
+        let mut panel = AgentPanel::new(move |_: &EngineRequest| Built::ready(Box::new(FakeEngine::new(turns.clone())), "fake"), Some(store.clone()));
         panel.set_tab(Some(&file), Some(PathBuf::from("/work")));
         assert!(!panel.can_resume(), "nothing kept yet");
         panel.send("a cube");
@@ -1384,7 +1505,7 @@ mod tests {
     #[test]
     fn an_untitled_conversation_goes_with_the_file_saved() {
         let store = temp_store("untitled");
-        let mut panel = AgentPanel::new(|| Box::new(EchoEngine), Some(store.clone()));
+        let mut panel = AgentPanel::new(|_: &EngineRequest| Built::ready(Box::new(EchoEngine), "echo"), Some(store.clone()));
         panel.set_tab(None, None);
         panel.send("hello");
         panel.poll();

@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::agent_setup::AgentSettings;
 use crate::app_icon::Tint;
 use crate::i18n::Language;
 use crate::shortcuts::Shortcuts;
@@ -93,6 +94,8 @@ pub struct Settings {
     pub reveal_export: bool,
     /// Buttons and highlights take the app icon's color rather than blue.
     pub accent_from_icon: bool,
+    /// The agent's engine, model and permissions.
+    pub agent: AgentSettings,
 }
 
 /// Where the window is, in the screen's points: the top left corner of its
@@ -148,6 +151,7 @@ impl Default for Settings {
             export_format: Format::Stl,
             reveal_export: false,
             accent_from_icon: false,
+            agent: AgentSettings::default(),
         }
     }
 }
@@ -221,6 +225,9 @@ impl Settings {
                 "reveal-export" => set(&mut settings.reveal_export, value.parse().ok()),
                 "accent-from-icon" => set(&mut settings.accent_from_icon, value.parse().ok()),
                 key => {
+                    if settings.agent.read(key, value) {
+                        continue;
+                    }
                     if let Some(action) = key.strip_prefix("shortcut-") {
                         settings.shortcuts.read(action, value);
                     }
@@ -267,6 +274,7 @@ impl Settings {
         text.push_str(&format!("export-format = {}\n", self.export_format.extension()));
         text.push_str(&format!("reveal-export = {}\n", self.reveal_export));
         text.push_str(&format!("accent-from-icon = {}\n", self.accent_from_icon));
+        self.agent.write(&mut text);
         self.shortcuts.write(&mut text);
         text
     }
@@ -379,6 +387,7 @@ mod tests {
             export_format: Format::Glb,
             reveal_export: true,
             accent_from_icon: true,
+            agent: AgentSettings { ask_first: true, allow_export: false, claude_model: "haiku".into(), ..AgentSettings::default() },
         };
         settings.save(Some(&store)).unwrap();
         assert_eq!(Settings::load(Some(&store)), settings);
