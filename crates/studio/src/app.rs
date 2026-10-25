@@ -53,6 +53,8 @@ use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 pub mod live;
 /// What the user selects, sent to the agent with the message.
 pub mod selection_context;
+/// The agent's live tools on the circuit open in the active tab.
+pub mod live_circuit;
 
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {

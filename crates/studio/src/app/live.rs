@@ -70,6 +70,8 @@ enum Op {
     Focus { name: Option<String>, line: Option<usize>, bounds: Option<([f32; 3], [f32; 3])> },
     /// Opens a file in a tab.
     Open { path: String },
+    /// A circuit tool's request ([`super::live_circuit`]).
+    Circuit(super::live_circuit::CircuitOp),
 }
 
 /// The studio's side of the live tools: the requests to answer, and the
@@ -288,7 +290,7 @@ impl LiveTools {
 
     /// Waits for the render of tab `id` numbered `generation`: its report,
     /// or one saying it is still running.
-    fn wait_render(&self, id: u64, generation: u64) -> Result<Value, String> {
+    pub(super) fn wait_render(&self, id: u64, generation: u64) -> Result<Value, String> {
         let deadline = Instant::now() + RENDER_WAIT;
         loop {
             let report = self.ask(Op::Rendered { id, generation })?;
@@ -300,6 +302,11 @@ impl LiveTools {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// Sends a circuit tool's request to the UI thread.
+    pub(super) fn ask_circuit(&self, op: super::live_circuit::CircuitOp) -> Result<Value, String> {
+        self.ask(Op::Circuit(op))
     }
 
     fn state(&self, args: &Value) -> Result<Vec<Value>, String> {
@@ -433,7 +440,7 @@ fn part_bounds(snapshot: &Value, name: &str) -> Result<([f32; 3], [f32; 3]), Str
 impl Tools for LiveTools {
     fn list(&self) -> Vec<Value> {
         let views: Vec<&str> = ["current"].into_iter().chain(c2f_geom::VIEWS.iter().map(|(name, _, _)| *name)).chain(["isometric", "sheet"]).collect();
-        vec![
+        let tools = vec![
             json!({
                 "name": "studio_state",
                 "title": "What the studio shows",
@@ -552,7 +559,8 @@ impl Tools for LiveTools {
                     "required": ["path"],
                 },
             }),
-        ]
+        ];
+        tools.into_iter().chain(super::live_circuit::tools()).collect()
     }
 
     fn call(&self, name: &str, args: &Value) -> Option<Result<Vec<Value>, String>> {
@@ -563,7 +571,7 @@ impl Tools for LiveTools {
             "view_image" => self.view_image(args),
             "focus" => self.focus(args),
             "open_file" => self.open_file(args),
-            _ => return None,
+            _ => return super::live_circuit::call(self, name, args),
         })
     }
 }
@@ -733,6 +741,7 @@ impl StudioApp {
                 }
                 Ok(Value::Object(done))
             }
+            Op::Circuit(op) => self.answer_circuit(ctx, op),
             Op::Open { path } => {
                 let dir = self.doc.directory().ok_or("the active tab has no folder")?;
                 let asked = Path::new(&path);

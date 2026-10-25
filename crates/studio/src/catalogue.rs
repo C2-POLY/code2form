@@ -266,6 +266,13 @@ pub fn coordinate(v: f64) -> String {
 /// wire, or at the end); and where to put the cursor, as a char index.
 pub fn insert_part(src: &str, name: &str, rel: &str, at: [f64; 2]) -> (String, usize) {
     let table = format!("[parts.{name}]\npart = \"{rel}\"\nat = [{}, {}, 0]\n", coordinate(at[0]), coordinate(at[1]));
+    insert_table(src, &table)
+}
+
+/// The circuit's text with the part's table `table` (its lines, each
+/// ending with a line break) where [`insert_part`] puts one; and where to
+/// put the cursor, as a char index.
+pub fn insert_table(src: &str, table: &str) -> (String, usize) {
     let mut starts = vec![0];
     starts.extend(src.match_indices('\n').map(|(i, _)| i + 1).filter(|&i| i < src.len()));
     let line = |i: usize| {
