@@ -11,7 +11,9 @@
 //! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
 //! `exploded` draws its part()s apart (`play,exploded` does both;
 //! `exploded,axis` along each part's axis); `agent` opens the Agent panel
-//! and sends it a message.
+//! and sends it a message; `agent-edit` shows an edit of the agent's
+//! landing (its line marked, its part flashed), and `agent-review` the
+//! review of one before it applies.
 //! `CODE2FORM_APPEARANCE` picks the theme, `CODE2FORM_LANGUAGE` the
 //! language (`en` or `fr`).
 

@@ -14,6 +14,7 @@ use std::fmt::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use c2f_agent::Tools;
@@ -27,6 +28,8 @@ use crate::pick::Hit;
 
 /// How long a call waits for the UI thread to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
+/// How long an edit waits for its answer: the user may review it first.
+const REVIEW_WAIT: Duration = Duration::from_secs(15 * 60);
 /// How long an edit waits for its render.
 const RENDER_WAIT: Duration = Duration::from_secs(30);
 /// The longest side of a picture of the view, in pixels.
@@ -40,7 +43,16 @@ const CONSOLE_ROWS: usize = 40;
 pub struct LiveTools {
     requests: Sender<Request>,
     ctx: egui::Context,
+    /// The parts of the design last edited, with the text and values they
+    /// were read from, to tell which parts the next edit moved.
+    parts: PartsSeen,
 }
+
+/// The parts of the design last edited, and what they were read from.
+type PartsSeen = Arc<Mutex<Option<(Value, Vec<PartBox>)>>>;
+
+/// A part of a design and the corners of its box.
+pub(super) type PartBox = (String, [f32; 3], [f32; 3]);
 
 /// A call on its way to the UI thread, and where its answer goes.
 pub struct Request {
@@ -72,6 +84,9 @@ enum Op {
     Open { path: String },
     /// A circuit tool's request ([`super::live_circuit`]).
     Circuit(super::live_circuit::CircuitOp),
+    /// Flashes the box `lo`..`hi` in the view of tab `id`: the part an
+    /// edit touched.
+    Flash { id: u64, lo: [f32; 3], hi: [f32; 3] },
 }
 
 /// The studio's side of the live tools: the requests to answer, and the
@@ -80,6 +95,8 @@ pub struct Live {
     tools: LiveTools,
     requests: Receiver<Request>,
     shot: Option<Sender<Result<Value, String>>>,
+    /// The agent's change waiting for the user's review.
+    pub(super) review: Option<super::review::Pending>,
 }
 
 /// The mark of the screenshots the live tools ask for.
@@ -89,7 +106,8 @@ impl Live {
     /// The live tools of the app drawn in `ctx`, and their requests.
     pub fn new(ctx: &egui::Context) -> Live {
         let (requests, received) = mpsc::channel();
-        Live { tools: LiveTools { requests, ctx: ctx.clone() }, requests: received, shot: None }
+        let tools = LiveTools { requests, ctx: ctx.clone(), parts: Arc::default() };
+        Live { tools, requests: received, shot: None, review: None }
     }
 
     /// The tools, to give an agent.
@@ -230,15 +248,30 @@ fn line_offset(text: &str, line: usize) -> usize {
 
 /// The byte where `part("name"` is written in `text`, spaces allowed.
 fn part_call(text: &str, name: &str) -> Option<usize> {
-    let quoted = format!("\"{name}\"");
-    text.match_indices("part").map(|(at, _)| at).find(|&at| {
+    part_calls(text).find(|(_, n)| *n == name).map(|(at, _)| at)
+}
+
+/// Each `part("name"` written in `text`, spaces allowed: the byte where
+/// it starts, and the name.
+pub(super) fn part_calls(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.match_indices("part").filter_map(|(at, _)| {
         let before = text[..at].chars().next_back();
         if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
-            return false;
+            return None;
         }
-        let rest = text[at + 4..].trim_start();
-        rest.strip_prefix('(').is_some_and(|args| args.trim_start().starts_with(&quoted))
+        let args = text[at + 4..].trim_start().strip_prefix('(')?.trim_start().strip_prefix('"')?;
+        Some((at, &args[..args.find('"')?]))
     })
+}
+
+/// Why an edit cannot be made, for the agent: the text may have changed
+/// under it, as the user types too.
+pub(super) fn refused(why: String) -> String {
+    if why.contains("studio_state") {
+        why
+    } else {
+        format!("{why}. The code may have changed since you read it (the user types too): call studio_state again before editing")
+    }
 }
 
 /// A customizer value as JSON.
@@ -276,10 +309,11 @@ fn tab_schema() -> Value {
 impl LiveTools {
     /// Sends `op` to the UI thread and waits for its answer.
     fn ask(&self, op: Op) -> Result<Value, String> {
+        let wait = if matches!(op, Op::Edit { .. }) { REVIEW_WAIT } else { ANSWER_WAIT };
         let (reply, answer) = mpsc::channel();
         self.requests.send(Request { op, reply }).map_err(|_| "the studio is closing".to_string())?;
         self.ctx.request_repaint();
-        match answer.recv_timeout(ANSWER_WAIT) {
+        match answer.recv_timeout(wait) {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
                 Err("the studio did not answer within 30 s (busy, or a dialog is open): try again".into())
@@ -337,7 +371,33 @@ impl LiveTools {
         };
         let done = self.ask(Op::Edit { tab: tab_arg(args)?, edit })?;
         let report = self.wait_render(done["tab_id"].as_u64().unwrap_or(0), done["generation"].as_u64().unwrap_or(0))?;
-        Ok(vec![text(pretty(&json!({ "edited": true, "changed_lines": done["changed_lines"], "render": report })))])
+        let mut result = json!({ "edited": true, "changed_lines": done["changed_lines"], "render": report });
+        if let Some(part) = done["part"].as_str().filter(|_| report["ok"] == true) {
+            result["part"] = json!(part);
+            if let Some(changed) = self.touched_parts(&done, part) {
+                result["parts_changed"] = changed;
+            }
+        }
+        Ok(vec![text(pretty(&result))])
+    }
+
+    /// Once an edit inside part `part` rendered: flashes the part in the
+    /// view, and gives the parts whose box the edit changed, when the
+    /// parts before it are known from the last edit.
+    fn touched_parts(&self, done: &Value, part: &str) -> Option<Value> {
+        let snapshot = self.ask(Op::Snapshot { tab: done["tab"].as_u64().map(|n| n as usize) }).ok()?;
+        let after = design_parts(&snapshot).ok()?;
+        let key = |text: &Value| json!([text, snapshot["values"]]);
+        let before = {
+            let mut cache = self.parts.lock().ok()?;
+            let before = cache.take().filter(|(k, _)| *k == key(&done["text_before"])).map(|(_, parts)| parts);
+            *cache = Some((key(&snapshot["text"]), after.clone()));
+            before
+        };
+        if let Some((_, lo, hi)) = after.iter().find(|p| p.0 == part) {
+            let _ = self.ask(Op::Flash { id: done["tab_id"].as_u64().unwrap_or(0), lo: *lo, hi: *hi });
+        }
+        Some(json!(changed_parts(&before?, &after)))
     }
 
     fn set_parameters(&self, args: &Value) -> Result<Vec<Value>, String> {
@@ -402,9 +462,41 @@ impl LiveTools {
     }
 }
 
+/// The parts whose box differs between `before` and `after`, those added
+/// and those gone, with their boxes.
+fn changed_parts(before: &[PartBox], after: &[PartBox]) -> Vec<Value> {
+    let corners = |p: Option<&PartBox>| p.map(|(_, lo, hi)| json!({ "min": lo, "max": hi }));
+    let mut names: Vec<&str> = Vec::new();
+    for (name, _, _) in before.iter().chain(after) {
+        if !names.contains(&name.as_str()) {
+            names.push(name);
+        }
+    }
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let (old, new) = (before.iter().find(|p| p.0 == name), after.iter().find(|p| p.0 == name));
+            let close = |a: &[f32; 3], b: &[f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4);
+            let same = matches!((old, new), (Some(a), Some(b)) if close(&a.1, &b.1) && close(&a.2, &b.2));
+            (!same).then(|| json!({ "part": name, "before": corners(old), "after": corners(new) }))
+        })
+        .collect()
+}
+
 /// The box around the part `name` of the design in `snapshot`, rendered
 /// with its parameter values.
 fn part_bounds(snapshot: &Value, name: &str) -> Result<([f32; 3], [f32; 3]), String> {
+    let parts = design_parts(snapshot)?;
+    let Some((_, lo, hi)) = parts.iter().find(|p| p.0 == name) else {
+        let names: Vec<&str> = parts.iter().map(|p| p.0.as_str()).collect();
+        return Err(format!("no part(\"{name}\") in the design; its parts: {}", if names.is_empty() { "none".into() } else { names.join(", ") }));
+    };
+    Ok((*lo, *hi))
+}
+
+/// The parts of the design in `snapshot`, rendered with its parameter
+/// values, with their boxes: those with nothing in them left out.
+pub(super) fn design_parts(snapshot: &Value) -> Result<Vec<PartBox>, String> {
     let source = snapshot["text"].as_str().unwrap_or_default();
     let path = PathBuf::from(snapshot["path"].as_str().unwrap_or_default());
     let mut program = c2f_eval::Program::load(source, &path, &c2f_eval::default_library_paths())
@@ -426,15 +518,14 @@ fn part_bounds(snapshot: &Value, name: &str) -> Result<([f32; 3], [f32; 3]), Str
     let (json, _) = c2f_geom::parts_json(&output.nodes, dir, &options)?;
     let parts: Value = serde_json::from_str(&json).map_err(|err| err.to_string())?;
     let parts = parts["parts"].as_array().cloned().unwrap_or_default();
-    let Some(part) = parts.iter().find(|p| p["name"] == name) else {
-        let names: Vec<&str> = parts.iter().filter_map(|p| p["name"].as_str()).filter(|n| *n != "(root)").collect();
-        return Err(format!("no part(\"{name}\") in the design; its parts: {}", if names.is_empty() { "none".into() } else { names.join(", ") }));
-    };
-    let corner = |key: &str| -> Option<[f32; 3]> {
-        let v = part["bounds"][key].as_array()?;
-        Some([v.first()?.as_f64()? as f32, v.get(1)?.as_f64()? as f32, v.get(2)?.as_f64()? as f32])
-    };
-    corner("min").zip(corner("max")).ok_or_else(|| format!("part(\"{name}\") is empty: nothing to frame"))
+    let boxes = parts.iter().filter(|p| p["name"] != "(root)").filter_map(|part| {
+        let corner = |key: &str| -> Option<[f32; 3]> {
+            let v = part["bounds"][key].as_array()?;
+            Some([v.first()?.as_f64()? as f32, v.get(1)?.as_f64()? as f32, v.get(2)?.as_f64()? as f32])
+        };
+        Some((part["name"].as_str()?.to_string(), corner("min")?, corner("max")?))
+    });
+    Ok(boxes.collect())
 }
 
 impl Tools for LiveTools {
@@ -614,7 +705,7 @@ fn render_report(tab: &Tab) -> Value {
 }
 
 /// Agent marks as line numbers from 1, both ends included.
-fn marks_json(marks: &[Range<usize>]) -> Value {
+pub(super) fn marks_json(marks: &[Range<usize>]) -> Value {
     json!(marks.iter().map(|m| [m.start + 1, m.end]).collect::<Vec<_>>())
 }
 
@@ -638,6 +729,20 @@ impl StudioApp {
                 }
                 continue;
             }
+            // Reviewed first, when the settings ask: the answer waits for
+            // the user's.
+            let op = match op {
+                Op::Edit { tab, edit } if self.reviews_agent_edits() => {
+                    let index = tab.unwrap_or(self.shelf.active());
+                    if index < self.shelf.len() {
+                        self.in_tab(index, |app| app.review_agent_edit(ctx, edit, Some(reply)));
+                    } else {
+                        let _ = reply.send(Err(format!("no tab {index}: there are {} (studio_state lists them)", self.shelf.len())));
+                    }
+                    continue;
+                }
+                op => op,
+            };
             let answer = self.answer_live(ctx, op);
             // A caller that gave up waiting is gone.
             let _ = reply.send(answer);
@@ -660,19 +765,17 @@ impl StudioApp {
                     "values": values,
                 }))
             }),
-            Op::Edit { tab, edit } => self.on_tab(tab, |app, _| {
-                let (text, lines) = apply(&app.doc.text, &edit)?;
-                let start = lines.first().map_or(0, |l| line_offset(&text, l.start));
-                let cursor = text[..start].chars().count();
-                app.doc.editor.replace_text(ctx, &mut app.doc.text, text, cursor);
-                let described: Vec<String> =
-                    lines.iter().map(|l| if l.len() <= 1 { format!("{}", l.start + 1) } else { format!("{}–{}", l.start + 1, l.end) }).collect();
-                let message = tr!("The agent edited line {}", "L'agent a modifié la ligne {}", described.join(", "));
-                app.doc.console.log(Level::Info, message);
-                app.doc.agent_marks = lines;
-                app.render_now();
-                Ok(json!({ "tab_id": app.doc.id, "generation": app.doc.sent, "changed_lines": marks_json(&app.doc.agent_marks) }))
+            Op::Edit { tab, edit } => self.on_tab(tab, |app, index| {
+                let (text, lines) = apply(&app.doc.text, &edit).map_err(refused)?;
+                let mut done = app.land_agent_edit(ctx, text, lines);
+                done["tab"] = json!(index);
+                Ok(done)
             }),
+            Op::Flash { id, lo, hi } => {
+                self.flash_part(id, lo, hi);
+                ctx.request_repaint();
+                Ok(Value::Null)
+            }
             Op::SetParameters { tab, values } => self.on_tab(tab, |app, _| {
                 if app.doc.is_circuit() {
                     return Err("a circuit has no customizer parameters".into());
@@ -1084,5 +1187,150 @@ mod tests {
             assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
             assert!(tool["description"].as_str().is_some_and(|d| d.len() > 80), "{tool}");
         }
+    }
+
+    /// A folder of its own for a test, with `box.c2f` holding `text`.
+    fn scratch(name: &str, text: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("c2f-live-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("box.c2f");
+        std::fs::write(&file, text).unwrap();
+        (dir, file)
+    }
+
+    const PARTS: &str = "part(\"base\") cube([20, 10, 5]);\ntranslate([0, 0, 10]) part(\"lid\") cube([20, 10, 2]);\n";
+
+    #[test]
+    fn the_user_s_typing_survives_the_agent_s_edits_landing_between_frames() {
+        let (dir, file) = scratch("typing", "width = 20;\ncube([width, 10, 5]);\n// mine\n");
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        // A frame as the app draws it: the agent's edits land first, then
+        // the editor takes the keys pressed.
+        let frame = |app: &mut StudioApp, events: Vec<egui::Event>| {
+            let _ = ctx.run(egui::RawInput { events, ..Default::default() }, |ctx| {
+                app.receive();
+                app.serve_live(ctx);
+                egui::CentralPanel::default().show(ctx, |ui| app.doc.editor.show(ui, &mut app.doc.text));
+            });
+        };
+        frame(&mut app, Vec::new());
+        // The user types at the start of the last line.
+        let at = app.doc.text.find("// mine").unwrap();
+        app.doc.editor.go_to(&ctx, &app.doc.text, at);
+        app.doc.editor.focus(&ctx);
+        frame(&mut app, Vec::new());
+
+        let tools = app.live_tools();
+        let edit = json!({ "edits": [{ "old": "cube([width, 10, 5]);", "new": "translate([0, 0, 1])\n    cube([width, 30, 5]);" }] });
+        let caller = std::thread::spawn(move || tools.call("edit_code", &edit).expect("a live tool"));
+        let start = Instant::now();
+        let mut typed = "abcdefghij".chars();
+        while !caller.is_finished() || typed.clone().next().is_some() {
+            assert!(start.elapsed() < Duration::from_secs(60), "no answer");
+            let events = typed.next().map(|c| vec![egui::Event::Text(c.to_string())]).unwrap_or_default();
+            frame(&mut app, events);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let done = report(&caller.join().unwrap().unwrap());
+        assert_eq!(done["edited"], true, "{done}");
+        assert_eq!(app.doc.text, "width = 20;\ntranslate([0, 0, 1])\n    cube([width, 30, 5]);\nabcdefghij// mine\n");
+
+        // An edit written against text the user has changed since is
+        // refused, and the agent told to read it again.
+        app.doc.text = app.doc.text.replace("30, 5", "31, 5");
+        let refused = call(&mut app, &ctx, "edit_code", json!({ "edits": [{ "old": "cube([width, 30, 5]);", "new": "x" }] })).unwrap_err();
+        assert!(refused.contains("studio_state"), "{refused}");
+        let refused = call(&mut app, &ctx, "edit_code", json!({ "range": { "start_line": 9, "end_line": 9 }, "new": "x" })).unwrap_err();
+        assert!(refused.contains("call studio_state again"), "{refused}");
+        assert!(app.doc.text.contains("abcdefghij// mine"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_answer_s_edits_undo_as_one_step() {
+        let (dir, file) = scratch("group", PARTS);
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        let original = app.doc.text.clone();
+        app.follow_agent_turn(&ctx, true);
+        let first = report(&call(&mut app, &ctx, "edit_code", json!({ "edits": [{ "old": "[20, 10, 5]", "new": "[30, 10, 5]" }] })).unwrap());
+        assert_eq!(first["part"], "base", "{first}");
+        let second = report(&call(&mut app, &ctx, "edit_code", json!({ "edits": [{ "old": "[20, 10, 2]", "new": "[30, 10, 2]" }] })).unwrap());
+        assert_eq!(second["part"], "lid", "{second}");
+        // The second edit knows the parts before it: the lid grew.
+        assert_eq!(second["parts_changed"], json!([{ "part": "lid", "before": { "min": [0.0, 0.0, 10.0], "max": [20.0, 10.0, 12.0] }, "after": { "min": [0.0, 0.0, 10.0], "max": [30.0, 10.0, 12.0] } }]));
+        assert!(app.doc.agent_flash.is_some(), "the lid flashes");
+        let marks = app.doc.agent_highlight.clone().unwrap();
+        // The second edit's line tinted, both edits' lines marked.
+        assert_eq!(marks.lines.iter().map(|r| (r.start, r.end)).collect::<Vec<_>>(), [(1, 2)]);
+        assert_eq!(marks.markers.iter().map(|r| (r.start, r.end)).collect::<Vec<_>>(), [(0, 2)]);
+        app.follow_agent_turn(&ctx, false);
+        assert!(app.agent_undo_offer().unwrap().contains("2 edits"));
+
+        let edited = app.doc.text.clone();
+        app.undo_agent_change(&ctx);
+        assert_eq!(app.doc.text, original);
+        assert!(app.agent_undo_offer().is_none());
+        // One step of the undo history: Cmd+Z brings the change back whole.
+        let mut text = original.clone();
+        assert!(app.doc.editor.undo_step(&ctx, &mut text, true));
+        assert_eq!(text, edited);
+        assert!(app.doc.editor.undo_step(&ctx, &mut text, false));
+        assert_eq!(text, original);
+
+        // After the user's own edit, the agent's change is not undone.
+        app.follow_agent_turn(&ctx, true);
+        call(&mut app, &ctx, "edit_code", json!({ "edits": [{ "old": "[20, 10, 5]", "new": "[25, 10, 5]" }] })).unwrap();
+        app.follow_agent_turn(&ctx, false);
+        app.doc.text.push_str("// mine\n");
+        let before = app.doc.text.clone();
+        assert!(app.agent_undo_offer().is_none());
+        app.undo_agent_change(&ctx);
+        assert_eq!(app.doc.text, before, "nothing undone");
+        assert!(app.doc.console.rows().any(|r| r.1.contains("Cmd+Z")));
+        assert!(app.doc.agent_highlight.as_ref().is_none_or(|h| !h.shows(&app.doc.text)), "the marks go");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reviewed_change_applies_once_accepted_and_not_when_declined() {
+        let (dir, file) = scratch("review", PARTS);
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, &file);
+        app.settings.review_agent_edits = true;
+        let original = app.doc.text.clone();
+        // Calls `edit_code`, answering the review with `accept`.
+        let reviewed = |app: &mut StudioApp, old: &str, new: &str, accept: bool| {
+            let tools = app.live_tools();
+            let args = json!({ "edits": [{ "old": old, "new": new }] });
+            let caller = std::thread::spawn(move || tools.call("edit_code", &args).expect("a live tool"));
+            let start = Instant::now();
+            let mut asked = None;
+            while !caller.is_finished() {
+                assert!(start.elapsed() < Duration::from_secs(60), "no answer");
+                app.receive();
+                app.serve_live(&ctx);
+                app.receive_review();
+                if let Some(pending) = app.live.review.as_ref().filter(|p| p.settled()) {
+                    asked = Some(pending.state.clone());
+                    app.answer_review(&ctx, accept);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            (caller.join().unwrap(), asked.expect("a review"))
+        };
+        let (declined, state) = reviewed(&mut app, "[20, 10, 2]", "[20, 10, 4]", false);
+        assert!(declined.unwrap_err().contains("declined"));
+        assert_eq!((state.added, state.removed), (1, 1));
+        assert!(state.proposed.contains("[20, 10, 4]"));
+        assert_eq!(app.doc.text, original, "nothing changed");
+
+        let (accepted, _) = reviewed(&mut app, "[20, 10, 2]", "[20, 10, 4]", true);
+        let done = report(&accepted.unwrap());
+        assert_eq!(done["render"]["ok"], true, "{done}");
+        assert!(app.doc.text.contains("[20, 10, 4]"));
+        assert!(app.live.review.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

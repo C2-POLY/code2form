@@ -93,6 +93,11 @@ pub struct Settings {
     pub reveal_export: bool,
     /// Buttons and highlights take the app icon's color rather than blue.
     pub accent_from_icon: bool,
+    /// Each change of the agent's to the code waits for the user to review
+    /// it, its diff and its model, and accept it. Written in settings.txt
+    /// for now: the settings page that sets it comes with the agent's
+    /// settings (C2F-89).
+    pub review_agent_edits: bool,
 }
 
 /// Where the window is, in the screen's points: the top left corner of its
@@ -148,6 +153,7 @@ impl Default for Settings {
             export_format: Format::Stl,
             reveal_export: false,
             accent_from_icon: false,
+            review_agent_edits: false,
         }
     }
 }
@@ -220,6 +226,7 @@ impl Settings {
                 }
                 "reveal-export" => set(&mut settings.reveal_export, value.parse().ok()),
                 "accent-from-icon" => set(&mut settings.accent_from_icon, value.parse().ok()),
+                "review-agent-edits" => set(&mut settings.review_agent_edits, value.parse().ok()),
                 key => {
                     if let Some(action) = key.strip_prefix("shortcut-") {
                         settings.shortcuts.read(action, value);
@@ -267,6 +274,7 @@ impl Settings {
         text.push_str(&format!("export-format = {}\n", self.export_format.extension()));
         text.push_str(&format!("reveal-export = {}\n", self.reveal_export));
         text.push_str(&format!("accent-from-icon = {}\n", self.accent_from_icon));
+        text.push_str(&format!("review-agent-edits = {}\n", self.review_agent_edits));
         self.shortcuts.write(&mut text);
         text
     }
@@ -379,6 +387,7 @@ mod tests {
             export_format: Format::Glb,
             reveal_export: true,
             accent_from_icon: true,
+            review_agent_edits: true,
         };
         settings.save(Some(&store)).unwrap();
         assert_eq!(Settings::load(Some(&store)), settings);

@@ -27,6 +27,12 @@ pub struct Editor {
     pub error_line: Option<usize>,
     /// Where the cursor is, 0-based line and column, for the status bar.
     pub cursor: Option<(usize, usize)>,
+    /// The lines (0-based, the end excluded) of the agent's last edit,
+    /// tinted as strongly as the second value says, from 0 to 1.
+    pub agent_tint: (Vec<Range<usize>>, f32),
+    /// The lines the agent changed since the user's last edit, marked in
+    /// the margin.
+    pub agent_markers: Vec<Range<usize>>,
     /// The selection as last shown, to start a search from.
     selection: Option<CCursorRange>,
     /// A byte offset to scroll into view once laid out.
@@ -121,6 +127,8 @@ impl Editor {
             highlighter: Highlighter::default(),
             error_line: None,
             cursor: None,
+            agent_tint: (Vec::new(), 0.0),
+            agent_markers: Vec::new(),
             selection: None,
             reveal_at: None,
             find: FindBar::default(),
@@ -140,6 +148,11 @@ impl Editor {
     /// Gives the editor keyboard focus.
     pub fn focus(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(self.id));
+    }
+
+    /// Whether the editor has keyboard focus: the user is typing in it.
+    pub fn has_focus(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|m| m.has_focus(self.id))
     }
 
     /// Drops what egui keeps of the editor, its undo history first, once
@@ -554,6 +567,15 @@ impl Editor {
                 let band = Rect::from_x_y_ranges(gutter.left()..=text_rect.right(), rect.y_range());
                 if current_line == Some(line) {
                     shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, theme::palette().current_line));
+                }
+                let (tinted, tint) = (&self.agent_tint.0, self.agent_tint.1);
+                if tint > 0.0 && tinted.iter().any(|r| r.contains(&line)) {
+                    let color = theme::palette().accent.gamma_multiply(0.22 * tint);
+                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, color));
+                }
+                if self.agent_markers.iter().any(|r| r.contains(&line)) {
+                    let mark = Rect::from_min_size(Pos2::new(gutter.left() + 1.0, rect.top()), Vec2::new(3.0, rect.height()));
+                    shapes.push(Shape::rect_filled(mark, CornerRadius::same(1), theme::palette().accent));
                 }
                 if self.error_line == Some(line) {
                     shapes.push(Shape::rect_filled(

@@ -378,6 +378,18 @@ fn render_source(
     (RenderOutcome { generation, elapsed, console, result, parameters, annotation_error, watch, animated }, shown)
 }
 
+/// The scene of a design's `source`, rendered on the caller's thread (one
+/// with a [`STACK`]-sized stack) apart from the worker's renders: a
+/// preview, such as the agent's change under review. The error is the
+/// first the render printed.
+pub fn render_preview(source: &str, path: &Path, values: &[(String, Literal)], library_paths: &[PathBuf]) -> Result<Scene, String> {
+    let (outcome, _) = render_source(0, source, path, values, 0.0, library_paths);
+    outcome.result.map_err(|_| {
+        let error = outcome.console.iter().find(|line| line.level == Level::Error);
+        error.map_or_else(|| tr("it does not render", "il ne se rend pas").to_string(), |line| line.text.clone())
+    })
+}
+
 /// The circuit a design names in `// @circuit`, and its part files.
 fn circuit_files(source: &str, path: &Path, library_paths: &[PathBuf]) -> Vec<PathBuf> {
     let (annotations, _) = c2f_lang::annotations::read(source);
