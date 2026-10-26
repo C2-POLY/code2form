@@ -568,11 +568,16 @@ pub fn narrow(width: f32) -> bool {
     (1.0..NARROW_VIEW).contains(&width)
 }
 
-/// Whether the card of the parameters is unfolded. In a narrow view, it is
-/// folded until the user unfolds it there (`narrow_choice`); elsewhere, it
-/// is as the user last chose (`choice`), by default unfolded when the
-/// file has parameters.
-pub fn unfolded(choice: Option<bool>, narrow_choice: Option<bool>, has_parameters: bool, narrow: bool) -> bool {
+/// Whether the card of the parameters is unfolded. While the chat with the
+/// agent is open (`chat` is `Some`), it is folded, the agent setting the
+/// values, until the user unfolds it then (`Some(Some(true))`). In a
+/// narrow view, it is folded until the user unfolds it there
+/// (`narrow_choice`); elsewhere, it is as the user last chose (`choice`),
+/// by default unfolded when the file has parameters.
+pub fn unfolded(choice: Option<bool>, narrow_choice: Option<bool>, chat: Option<Option<bool>>, has_parameters: bool, narrow: bool) -> bool {
+    if let Some(chat_choice) = chat {
+        return chat_choice.unwrap_or(false);
+    }
     if narrow { narrow_choice.unwrap_or(false) } else { choice.unwrap_or(has_parameters) }
 }
 
@@ -592,13 +597,17 @@ mod tests {
         assert!(!narrow(NARROW_VIEW));
         assert!(!narrow(f32::NEG_INFINITY), "not drawn yet");
         // Wide: the user's choice, else open when there are parameters.
-        assert!(unfolded(None, None, true, false));
-        assert!(!unfolded(None, None, false, false));
-        assert!(!unfolded(Some(false), None, true, false));
-        assert!(unfolded(Some(true), None, false, false));
+        assert!(unfolded(None, None, None, true, false));
+        assert!(!unfolded(None, None, None, false, false));
+        assert!(!unfolded(Some(false), None, None, true, false));
+        assert!(unfolded(Some(true), None, None, false, false));
         // Narrow: folded, whatever was chosen in a wide view, until unfolded there.
-        assert!(!unfolded(Some(true), None, true, true));
-        assert!(unfolded(Some(false), Some(true), true, true));
+        assert!(!unfolded(Some(true), None, None, true, true));
+        assert!(unfolded(Some(false), Some(true), None, true, true));
+        // The chat open: folded, until the user unfolds it then.
+        assert!(!unfolded(Some(true), None, Some(None), true, false));
+        assert!(unfolded(Some(false), None, Some(Some(true)), true, false));
+        assert!(!unfolded(Some(true), Some(true), Some(Some(false)), true, true));
         // Never more than two fifths of the view, nor narrower than its rows need.
         assert_eq!(card_width(1200.0), 276.0);
         assert_eq!(card_width(600.0), 240.0);

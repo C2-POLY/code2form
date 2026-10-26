@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 use glam::Vec3;
+use c2f_agent::conversation::{Event, Usage};
 use serde_json::{Value, json};
 
 use super::live::{self, part_calls};
@@ -407,13 +408,29 @@ impl StudioApp {
         self.in_tab(index, |app| app.doc.agent_flash = Some(Flash::new(lo, hi, Instant::now())));
     }
 
-    /// For a screenshot (`CODE2FORM_SCREENSHOT_SELECT` = `agent-edit` or
-    /// `agent-review`): an edit of the agent's to the active tab, made or
-    /// under review; it scales the first number in the first part.
+    /// For a screenshot (`CODE2FORM_SCREENSHOT_SELECT`): `agent-empty`,
+    /// the chat open and empty; `agent-code`, the code beside the view,
+    /// the chat folded over it and a turn under way; `agent`, the chat
+    /// open over the view alone, a short conversation in it whose edit
+    /// lands; `agent-edit` or `agent-review`, an edit of the agent's to
+    /// the active tab, made or under review. The edit scales the first
+    /// number in the first part.
     pub(super) fn screenshot_agent(&mut self, ctx: &egui::Context) {
         let select = self.screenshot.as_ref().and_then(|s| s.select.clone()).unwrap_or_default();
-        if select != "agent-edit" && select != "agent-review" {
-            return;
+        match select.as_str() {
+            "agent-empty" => {
+                self.open_chat(ctx);
+                return;
+            }
+            "agent-code" => {
+                self.open_chat(ctx);
+                self.arrangement = super::Arrangement::Split;
+                self.overlay.minimised = true;
+                self.agent.send(tr("Make the box 40 mm wide, with a **lid**.", "Élargis la boîte à 40 mm, avec un **couvercle**."));
+                return;
+            }
+            "agent" | "agent-edit" | "agent-review" => {}
+            _ => return,
         }
         let text = &self.doc.text;
         let from = part_calls(text).next().map_or(0, |(at, name)| at + name.len() + 8);
@@ -426,6 +443,27 @@ impl StudioApp {
         let edit = live::CodeEdit::Replace(vec![(old, new)]);
         if select == "agent-review" {
             self.review_agent_edit(ctx, edit, None);
+            return;
+        }
+        if select == "agent" {
+            let line = self.doc.text[..line_start].matches('\n').count() + 1;
+            let (old, new) = match &edit {
+                live::CodeEdit::Replace(edits) => edits[0].clone(),
+                _ => return,
+            };
+            let Ok((text, lines)) = live::apply(&self.doc.text, &edit) else { return };
+            self.land_agent_edit(ctx, text, lines);
+            let result = json!({ "edited": true, "changed_lines": [[line, line]], "render": { "ok": true } });
+            let events = vec![
+                Event::Text { delta: tr!("I widen it by half: line {line} sets its size.", "Je l'élargis de moitié : la ligne {line} fixe sa taille.") },
+                Event::ToolCall { id: "e1".into(), name: "edit_code".into(), input: json!({ "edits": [{ "old": old, "new": new }] }) },
+                Event::ToolResult { id: "e1".into(), content: vec![json!({ "type": "text", "text": result.to_string() })], is_error: false },
+                Event::Text { delta: tr(" It renders without errors. Shall I round its edges too?", " Le rendu passe sans erreur. J'arrondis aussi ses bords ?").into() },
+                Event::Done { usage: Some(Usage { input_tokens: 5120, output_tokens: 310 }), cost_usd: None, session_id: None },
+            ];
+            self.agent.use_engine(Box::new(crate::agent_panel::ScriptedEngine(events)), "Claude Code · haiku");
+            self.agent.send(tr("Make it **50% wider**.", "Rends-le **50 % plus large**."));
+            self.open_chat(ctx);
             return;
         }
         let Ok((text, lines)) = live::apply(&self.doc.text, &edit) else { return };

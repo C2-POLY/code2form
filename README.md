@@ -152,9 +152,10 @@ they are. Written in Rust, it renders as you type.
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window; and describes a
   circuit from the library's parts, has it checked and looks at it with
-  its wires. The app has its own agent too, in the editor column in
-  place of the code (Code · Agent), which edits the open document live (see
-  [the agent in the app](docs/agent.md)).
+  its wires. The app has its own agent too, in a chat floating over the
+  3D view (Cmd+L), which edits the open document live (see
+  [the agent in the app](docs/agent.md)). A new file can start with it:
+  describe the idea, and the agent plans the object with you.
 - **Sheet of views**: one PNG of a model from the diagonal, the front,
   the right and the top at one scale, each titled, with its size in
   millimeters (width × depth × height) and a scale bar, and on request a
@@ -234,9 +235,13 @@ draws, best seen from `top`.
 
 ### The agent in the app
 
-The editor column's Agent mode (Code · Agent at its top, or Cmd+L) runs
-an agent in place of the code, beside the view, on your own Claude Code
-or an Anthropic API key (Settings › Agent). It reads
+The chat with the agent (the speech bubble in the top bar, or Cmd+L)
+floats over the 3D view, at its bottom left, the view shown alone while
+it is open and your layout coming back when it closes. It grows with the
+conversation up to the view's height, folds to its message field, and
+shows each edit as a compact diff card that opens the code at its line.
+It runs on your own Claude Code or an Anthropic API key (Settings ›
+Agent). It reads
 the open document, unsaved edits included, and edits it in place, each
 edit one undo step, Cmd+Alt+Z undoing a whole answer; in a circuit it
 places parts and wires them, and the wiring checks refuse a short before

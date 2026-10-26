@@ -1,6 +1,7 @@
-//! The Agent panel: a conversation with the agent, shown in the editor
-//! column in place of the code, beside the view: another way of editing
-//! the model.
+//! The agent's chat: a conversation with the agent, on a card floating
+//! over the 3D view, another way of editing the model. While the code is
+//! hidden, each edit shows in the conversation as a compact diff, which
+//! shows its line in the code when clicked.
 //!
 //! The user's messages go to an [`Engine`], which streams back what
 //! happens: the reply, delta by delta, and the tools the agent calls. The
@@ -27,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::agent_setup::{self, AgentSettings, Built, EngineRequest, KeyChange, Prober};
+use crate::app::{overlay, review};
 use crate::app::selection_context::{self, Suggestion};
 use crate::i18n::tr;
 use crate::icons::{self, Icon};
@@ -194,7 +196,7 @@ impl Transcript {
 /// first of its result's `changed_lines` (`[[first, last], ...]`, from 1),
 /// else its input's `range.start_line`.
 pub fn edited_line(call: &ToolCall) -> Option<usize> {
-    if call.name != "edit_code" || call.status != Status::Ok {
+    if !is_tool(&call.name, "edit_code") || call.status != Status::Ok {
         return None;
     }
     let changed = call.content.iter().find_map(|item| {
@@ -203,6 +205,157 @@ pub fn edited_line(call: &ToolCall) -> Option<usize> {
     });
     let asked = || call.input.get("range")?.get("start_line")?.as_u64();
     changed.or_else(asked).filter(|&n| n >= 1).map(|n| n as usize)
+}
+
+/// Whether a call's `name` is the tool `tool`: as the studio names it, or
+/// as Claude Code does, prefixed with its server (`mcp__studio__edit_code`).
+fn is_tool(name: &str, tool: &str) -> bool {
+    name == tool || name.strip_suffix(tool).is_some_and(|prefix| prefix.ends_with("__"))
+}
+
+/// The most lines a diff card shows.
+const DIFF_LINES: usize = 6;
+
+/// An edit of the agent's, as the conversation shows it while the code
+/// is hidden.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffCard {
+    /// The first line (from 1) it changed, to show in the code.
+    pub line: Option<usize>,
+    /// The lines removed and added, the first [`DIFF_LINES`] of them.
+    pub lines: Vec<(review::Change, String)>,
+    /// How many more there are.
+    pub more: usize,
+    /// What a circuit's edit did, as its tool says.
+    pub done: Option<String>,
+}
+
+/// The diff card of a call that edited the code or the circuit, once it
+/// succeeded: `edit_code`'s `edits` (`[{old, new}]`) diffed line by line,
+/// or the lines its `range` was replaced with; the circuit tools' `done`.
+pub fn diff_card(call: &ToolCall) -> Option<DiffCard> {
+    if call.status != Status::Ok {
+        return None;
+    }
+    let result = call
+        .content
+        .iter()
+        .find_map(|item| serde_json::from_str::<Value>(item.get("text")?.as_str()?).ok())
+        .unwrap_or(Value::Null);
+    if is_tool(&call.name, "edit_code") {
+        let mut lines = Vec::new();
+        if let Some(edits) = call.input.get("edits").and_then(Value::as_array) {
+            for edit in edits {
+                let (old, new) = (edit["old"].as_str().unwrap_or(""), edit["new"].as_str().unwrap_or(""));
+                let changed = review::diff_lines(old, new).into_iter().filter(|l| l.change != review::Change::Same);
+                lines.extend(changed.map(|l| (l.change, l.text)));
+            }
+        } else if let Some(new) = call.input.get("new").and_then(Value::as_str) {
+            lines.extend(new.lines().map(|l| (review::Change::Added, l.to_string())));
+        }
+        let more = lines.len().saturating_sub(DIFF_LINES);
+        lines.truncate(DIFF_LINES);
+        // Without the indentation they share, which would take the width.
+        let indent = lines.iter().filter(|(_, l)| !l.trim().is_empty()).map(|(_, l)| l.len() - l.trim_start().len()).min().unwrap_or(0);
+        for (_, line) in &mut lines {
+            *line = line.get(indent..).unwrap_or(line.trim_start()).to_string();
+        }
+        return Some(DiffCard { line: edited_line(call), lines, more, done: None });
+    }
+    let circuit = ["place_component", "connect", "disconnect"].iter().any(|tool| is_tool(&call.name, tool));
+    let done = result.get("done").and_then(Value::as_str).filter(|_| circuit)?;
+    Some(DiffCard { line: None, lines: Vec::new(), more: 0, done: Some(done.to_string()) })
+}
+
+// ---- Suggestions ----
+
+/// A suggestion of what to ask, offered while the conversation is empty:
+/// what its chip says, and the message it sends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Starter {
+    pub label: String,
+    pub message: String,
+}
+
+/// What the active tab holds, for the suggestions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Subject<'a> {
+    /// Nothing written yet.
+    Empty,
+    /// A design, and the first of its parameters that is a number.
+    Design { parameter: Option<&'a str> },
+    Circuit,
+}
+
+/// The suggestions for `subject`: things to ask of what is open, taken
+/// from what it is, never claims about it.
+pub fn starters(subject: Subject) -> Vec<Starter> {
+    let starter = |label: String, message: String| Starter { label, message };
+    match subject {
+        Subject::Empty => vec![
+            starter(
+                tr("A box with a lid", "Une boîte avec couvercle").into(),
+                tr(
+                    "Make a parametric box with a lid in this file: its width, depth and height as parameters.",
+                    "Fais dans ce fichier une boîte paramétrique avec couvercle : sa largeur, sa profondeur et sa hauteur en paramètres.",
+                )
+                .into(),
+            ),
+            starter(
+                tr("Help me choose what to make", "Aide-moi à choisir quoi faire").into(),
+                tr(
+                    "Help me decide what to make: ask me what the object must do, one question at a time.",
+                    "Aide-moi à décider quoi fabriquer : demande-moi ce que l'objet doit faire, une question à la fois.",
+                )
+                .into(),
+            ),
+        ],
+        Subject::Design { parameter } => {
+            let mut list = Vec::new();
+            if let Some(name) = parameter {
+                list.push(starter(
+                    tr!("Make {name} bigger", "Agrandir {name}"),
+                    tr!("Make `{name}` bigger, and check the design still renders.", "Augmente `{name}`, et vérifie que le design se rend toujours."),
+                ));
+            }
+            list.push(starter(
+                tr("Check it prints without supports", "Vérifier l'impression sans supports").into(),
+                tr(
+                    "Check whether this design prints without supports, and show me where it would need them.",
+                    "Vérifie si ce design s'imprime sans supports, et montre-moi où il en faudrait.",
+                )
+                .into(),
+            ));
+            list.push(starter(
+                tr("Make it lighter", "L'alléger").into(),
+                tr(
+                    "Make this design lighter while keeping it strong: say where you remove material, then do it.",
+                    "Allège ce design en le gardant solide : dis où tu retires de la matière, puis fais-le.",
+                )
+                .into(),
+            ));
+            list.push(starter(
+                tr("Explain how it is built", "Expliquer sa construction").into(),
+                tr("Explain how this design is built, part by part.", "Explique comment ce design est construit, pièce par pièce.").into(),
+            ));
+            list.truncate(4);
+            list
+        }
+        Subject::Circuit => vec![
+            starter(
+                tr("Check the wiring", "Vérifier le câblage").into(),
+                tr("Check the wiring of this circuit and explain any problem.", "Vérifie le câblage de ce circuit et explique les problèmes.").into(),
+            ),
+            starter(
+                tr("Guide me through the assembly", "Me guider dans le montage").into(),
+                tr("Guide me through the assembly of this circuit, one wire at a time.", "Guide-moi dans le montage de ce circuit, un fil à la fois.").into(),
+            ),
+            starter(
+                tr("Explain each part", "Expliquer chaque composant").into(),
+                tr("Explain what each part of this circuit does.", "Explique le rôle de chaque composant de ce circuit.").into(),
+            ),
+        ],
+    }
 }
 
 /// A tool's input on one line: `key: value` for each argument, the
@@ -259,6 +412,14 @@ impl Shortcut {
             Shortcut::Plan => tr("Plan", "Planifier"),
             Shortcut::Design => tr("Design", "Concevoir"),
             Shortcut::Electronics => tr("Electronics", "Électronique"),
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Shortcut::Plan => Icon::Plan,
+            Shortcut::Design => Icon::Design,
+            Shortcut::Electronics => Icon::Electronics,
         }
     }
 
@@ -375,6 +536,25 @@ impl Engine for WorkingEngine {
     }
 }
 
+/// Stands in for an engine in the screenshot of a conversation: it plays
+/// the events it was given as a turn.
+pub struct ScriptedEngine(pub Vec<Event>);
+
+impl Engine for ScriptedEngine {
+    fn send(&mut self, _: UserMessage, events: mpsc::Sender<Event>) -> Result<(), String> {
+        for event in std::mem::take(&mut self.0) {
+            let _ = events.send(event);
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) {}
+
+    fn name(&self) -> &str {
+        "scripted"
+    }
+}
+
 // ---- Persistence ----
 
 /// The folder the conversations are kept in, in the settings folder, but
@@ -411,7 +591,7 @@ fn answer_id() -> Id {
 }
 
 pub struct AgentPanel {
-    /// On screen: the app sets it each frame, from the editor column's mode.
+    /// Open over the view: the app sets it each frame.
     pub open: bool,
     /// Makes an engine: the first, a fresh one for each new conversation,
     /// which forgets the last one's session, and one carrying the
@@ -474,6 +654,11 @@ pub struct AgentPanel {
     /// the app says it can; and whether it was clicked, for the app.
     pub undo_offer: Option<String>,
     pub undo_asked: bool,
+    /// What to suggest asking while the conversation is empty, for the
+    /// active tab: the app sets them each frame.
+    pub starters: Vec<Starter>,
+    /// The height the card's header and field took at the last frame.
+    chrome: f32,
 }
 
 impl AgentPanel {
@@ -512,6 +697,8 @@ impl AgentPanel {
             awaiting_view: None,
             undo_offer: None,
             undo_asked: false,
+            starters: Vec::new(),
+            chrome: 170.0,
         };
         panel.build();
         panel
@@ -853,6 +1040,40 @@ impl AgentPanel {
         }
     }
 
+    /// Starts the conversation with the plan prompt for `idea`, as the
+    /// start screen of a new file asks: a note first says where the plan
+    /// is written, the active tab's folder (a scratch folder until the
+    /// file is saved).
+    pub fn start_plan(&mut self, idea: &str) {
+        if idea.trim().is_empty() || self.running() {
+            return;
+        }
+        if !self.transcript.entries.is_empty() {
+            self.new_conversation();
+        }
+        self.send_prompt(Shortcut::Plan, idea);
+        if self.transcript.entries.is_empty() {
+            return;
+        }
+        let folder = self.folder.as_deref().map_or_else(String::new, |f| f.display().to_string());
+        let note = if self.file.is_some() {
+            tr!("The agent writes the plan in {folder}.", "L'agent écrit le plan dans {folder}.")
+        } else {
+            tr!(
+                "The agent writes the plan in {folder}, a folder of this untitled tab's: save the design later to keep it with your files.",
+                "L'agent écrit le plan dans {folder}, un dossier de cet onglet sans titre : enregistrez le design plus tard pour le garder avec vos fichiers."
+            )
+        };
+        self.transcript.entries.insert(0, Entry::Notice { text: note, error: false });
+    }
+
+    /// Talks to `engine` from now on, named `label`: for screenshots.
+    pub fn use_engine(&mut self, engine: Box<dyn Engine>, label: &str) {
+        self.engine = engine;
+        self.engine_label = label.to_string();
+        self.engine_problem = None;
+    }
+
     /// Sends the prompt asked for in the inline field.
     fn send_prompt(&mut self, shortcut: Shortcut, answer: &str) {
         if answer.trim().is_empty() {
@@ -879,36 +1100,63 @@ impl AgentPanel {
         }
     }
 
-    /// Shows the panel filling `ui`, the editor column; the line (from 1)
-    /// of the code to show, when an edit's link is clicked.
-    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-        let palette = theme::palette();
-        let frame = Frame::new().fill(palette.panel).inner_margin(Margin { left: 10, right: 10, top: 6, bottom: 8 });
-        let mut go_to = None;
-        egui::CentralPanel::default().frame(frame).show_inside(ui, |ui| {
-            self.header(ui);
-            ui.add_space(4.0);
-            self.prompt_row(ui);
-            egui::TopBottomPanel::bottom("agent-composer")
-                .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 8, bottom: 0 }))
-                .show_separator_line(false)
-                .show_inside(ui, |ui| self.composer(ui));
-            egui::CentralPanel::default()
-                .frame(Frame::new().fill(palette.editor).corner_radius(CornerRadius::same(8)).inner_margin(Margin::same(10)))
-                .show_inside(ui, |ui| go_to = self.conversation(ui));
-        });
-        go_to
+    /// Shows the conversation on a card floating over the view, as `place`
+    /// says, or only its message field when `minimised`; what the user
+    /// asked of the app.
+    pub fn show_card(&mut self, ctx: &egui::Context, place: Placement, minimised: &mut bool) -> CardResponse {
+        let mut out = CardResponse::default();
+        let area = egui::Area::new(Id::new("agent-chat"))
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(place.anchor)
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                theme::card_frame().inner_margin(Margin { left: 12, right: 10, top: 8, bottom: 10 }).show(ui, |ui| {
+                    ui.set_width(place.width - 22.0);
+                    if *minimised {
+                        self.input_bar(ui, minimised, &mut out);
+                        return;
+                    }
+                    let top = ui.cursor().top();
+                    self.header(ui, minimised, &mut out);
+                    ui.add_space(6.0);
+                    let shown = if self.transcript.entries.is_empty() {
+                        self.empty_state(ui);
+                        0.0
+                    } else {
+                        let max = overlay::conversation_room(self.chrome, place.cap);
+                        let (go_to, height) = self.conversation(ui, max);
+                        out.go_to = go_to;
+                        height
+                    };
+                    ui.add_space(8.0);
+                    self.composer(ui, &mut out);
+                    // What the card takes besides its messages, for the next
+                    // frame's room for them.
+                    self.chrome = ui.cursor().top() - top - shown + 18.0;
+                });
+            });
+        out.rect = Some(area.response.rect);
+        out
     }
 
-    /// The engine's name, and New and Resume.
-    fn header(&mut self, ui: &mut egui::Ui) {
+    /// The engine's name; New, Resume, Minimise and Close.
+    fn header(&mut self, ui: &mut egui::Ui, minimised: &mut bool, out: &mut CardResponse) {
         let palette = theme::palette();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(RichText::new(&self.engine_label).size(11.5).color(palette.text_faint));
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::hover());
+            icons::paint(ui.painter(), rect, Icon::Agent, palette.text_dim);
+            ui.add(egui::Label::new(RichText::new(&self.engine_label).size(11.5).color(palette.text_faint)).truncate());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let resume = ui.add_enabled(self.can_resume(), Button::new(RichText::new(tr("Resume last", "Reprendre")).size(12.0)));
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if small_icon(ui, Icon::Close, tr("Close the chat (Esc in an empty field)", "Fermer la discussion (Échap dans un champ vide)")).clicked() {
+                    out.close = true;
+                }
+                if small_icon(ui, Icon::Minimise, tr("Fold the chat to its message field", "Replier la discussion sur son champ de message")).clicked() {
+                    *minimised = true;
+                }
+                ui.add_space(4.0);
+                let resume = ui.add_enabled(self.can_resume(), Button::new(RichText::new(tr("Resume", "Reprendre")).size(12.0)));
                 let hint = tr("Bring back the last conversation about this file", "Reprendre la dernière conversation sur ce fichier");
                 if resume.on_hover_text(hint).clicked() {
                     self.resume();
@@ -930,16 +1178,51 @@ impl AgentPanel {
         }
     }
 
+    /// What an empty conversation shows: what the agent does, suggestions
+    /// for the open file, and the prompts' buttons.
+    fn empty_state(&mut self, ui: &mut egui::Ui) {
+        let palette = theme::palette();
+        ui.label(
+            RichText::new(tr(
+                "Ask the agent to design, change or check the model: it edits the code and the view follows.",
+                "Demandez à l'agent de concevoir, modifier ou vérifier le modèle : il modifie le code et la vue suit.",
+            ))
+            .size(12.5)
+            .color(palette.text_dim),
+        );
+        ui.add_space(6.0);
+        let mut picked = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+            for (index, starter) in self.starters.iter().enumerate() {
+                if suggestion_chip(ui, &starter.label).on_hover_text(&starter.message).clicked() {
+                    picked = Some(index);
+                }
+            }
+        });
+        if let Some(starter) = picked.and_then(|i| self.starters.get(i).cloned()) {
+            if !self.running() {
+                self.attach_view_or_send(starter.message);
+            }
+        }
+        ui.add_space(8.0);
+        self.prompt_row(ui);
+    }
+
     /// The prompts' buttons, and the field one of them asks with.
     fn prompt_row(&mut self, ui: &mut egui::Ui) {
         let palette = theme::palette();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(RichText::new(tr("Start:", "Démarrer :")).size(12.0).color(palette.text_dim));
+        ui.label(RichText::new(tr("Or start from an idea:", "Ou partir d'une idée :")).size(11.5).color(palette.text_faint));
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
             for shortcut in Shortcut::ALL {
                 let on = self.asking.as_ref().is_some_and(|(s, _)| *s == shortcut);
-                let button = Button::selectable(on, RichText::new(shortcut.label()).size(12.0));
-                if ui.add_enabled(!self.running(), button).on_hover_text(shortcut.hint()).clicked() {
+                let clicked = ui
+                    .add_enabled_ui(!self.running(), |ui| icons::labelled(ui, shortcut.icon(), shortcut.label(), on))
+                    .inner
+                    .on_hover_text(shortcut.hint())
+                    .clicked();
+                if clicked {
                     self.asking = if on { None } else { Some((shortcut, String::new())) };
                     self.problem = None;
                     ui.memory_mut(|m| m.request_focus(answer_id()));
@@ -949,10 +1232,10 @@ impl AgentPanel {
         let Some((shortcut, mut answer)) = self.asking.take() else { return };
         let mut send = false;
         let mut cancel = false;
-        ui.add_space(2.0);
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let width = (ui.available_width() - 120.0).max(80.0);
+            let width = (ui.available_width() - 130.0).max(80.0);
             let field = egui::TextEdit::singleline(&mut answer).id(answer_id()).hint_text(shortcut.question()).desired_width(width);
             let response = ui.add(field);
             if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
@@ -972,36 +1255,42 @@ impl AgentPanel {
         }
     }
 
-    /// The attachments, the message field, and Send or Stop.
-    fn composer(&mut self, ui: &mut egui::Ui) {
-        let palette = theme::palette();
-        if let Some(problem) = &self.problem {
-            ui.label(RichText::new(problem).size(12.0).color(palette.error));
+    /// The attachments and suggestions of the selection, as chips.
+    fn attachment_row(&mut self, ui: &mut egui::Ui) {
+        if self.attachments.is_empty() && self.suggestions().next().is_none() {
+            return;
         }
-        if !self.attachments.is_empty() || self.suggestions().next().is_some() {
-            let (mut remove, mut dismiss) = (None, None);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
-                for (index, attachment) in self.attachments.iter().enumerate() {
-                    if chip(ui, attachment, true) {
-                        remove = Some(index);
-                    }
+        let (mut remove, mut dismiss) = (None, None);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+            for (index, attachment) in self.attachments.iter().enumerate() {
+                if chip(ui, attachment, true) {
+                    remove = Some(index);
                 }
-                for (index, attachment) in self.suggestions() {
-                    if chip(ui, attachment, true) {
-                        dismiss = Some(index);
-                    }
+            }
+            for (index, attachment) in self.suggestions() {
+                if chip(ui, attachment, true) {
+                    dismiss = Some(index);
                 }
-            });
-            if let Some(index) = remove {
-                self.attachments.remove(index);
             }
-            if let Some(index) = dismiss {
-                self.suggested[index].dismiss();
-            }
-            ui.add_space(4.0);
+        });
+        if let Some(index) = remove {
+            self.attachments.remove(index);
         }
-        // Enter sends; Shift+Enter goes to the field, a new line.
+        if let Some(index) = dismiss {
+            self.suggested[index].dismiss();
+        }
+        ui.add_space(4.0);
+    }
+
+    /// The message field, `rows` high: Enter sends, Shift+Enter goes to the
+    /// field, a new line; Escape in it, empty, asks to close the chat.
+    fn field(&mut self, ui: &mut egui::Ui, rows: usize, width: f32, out: &mut CardResponse) -> (egui::Response, bool) {
+        let hint = if rows > 1 {
+            tr("Ask the agent… (Enter sends, Shift+Enter: new line)", "Demandez à l'agent… (Entrée envoie, Maj+Entrée : nouvelle ligne)")
+        } else {
+            tr("Ask the agent…", "Demandez à l'agent…")
+        };
         let focused = ui.memory(|m| m.has_focus(input_id()));
         let enter = focused
             && ui.input_mut(|i| {
@@ -1013,13 +1302,59 @@ impl AgentPanel {
             });
         let field = egui::TextEdit::multiline(&mut self.input)
             .id(input_id())
-            .desired_rows(3)
-            .desired_width(f32::INFINITY)
-            .hint_text(tr("Ask the agent… (Enter sends, Shift+Enter: new line)", "Demandez à l'agent… (Entrée envoie, Maj+Entrée : nouvelle ligne)"));
-        let response = ui.add(field);
+            .desired_rows(rows)
+            .desired_width(width)
+            .frame(false)
+            .hint_text(hint);
+        let response = field_frame(ui, |ui| ui.add(field));
         if std::mem::take(&mut self.focus_input) {
             response.request_focus();
         }
+        if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Escape)) && self.input.trim().is_empty() {
+            out.close = true;
+        }
+        (response, enter)
+    }
+
+    /// The chat folded to its message field, with Unfold and Close.
+    fn input_bar(&mut self, ui: &mut egui::Ui, minimised: &mut bool, out: &mut CardResponse) {
+        let palette = theme::palette();
+        self.attachment_row(ui);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if self.running() || self.awaits_view() {
+                ui.add(egui::Spinner::new().size(14.0).color(palette.accent_strong)).on_hover_text(tr("The agent is working", "L'agent travaille"));
+            } else {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::hover());
+                icons::paint(ui.painter(), rect, Icon::Agent, palette.text_dim);
+            }
+            let width = (ui.available_width() - 2.0 * 26.0 - 8.0).max(80.0);
+            let (response, enter) = self.field(ui, 1, width, out);
+            if small_icon(ui, Icon::FoldUp, tr("Show the conversation", "Afficher la conversation")).clicked() {
+                *minimised = false;
+            }
+            if small_icon(ui, Icon::Close, tr("Close the chat", "Fermer la discussion")).clicked() {
+                out.close = true;
+            }
+            if enter && !self.running() && !self.awaits_view() {
+                let text = std::mem::take(&mut self.input);
+                self.attach_view_or_send(text);
+                response.request_focus();
+            }
+        });
+        if let Some(problem) = &self.problem {
+            ui.label(RichText::new(problem).size(12.0).color(palette.error));
+        }
+    }
+
+    /// The attachments, the message field, and Send or Stop.
+    fn composer(&mut self, ui: &mut egui::Ui, out: &mut CardResponse) {
+        let palette = theme::palette();
+        if let Some(problem) = &self.problem {
+            ui.label(RichText::new(problem).size(12.0).color(palette.error));
+        }
+        self.attachment_row(ui);
+        let (response, enter) = self.field(ui, 2, f32::INFINITY, out);
         ui.add_space(4.0);
         let mut send = enter && !self.running() && !self.awaits_view();
         ui.horizontal(|ui| {
@@ -1038,6 +1373,7 @@ impl AgentPanel {
                 ui.label(RichText::new(text).size(11.5).color(palette.text_faint)).on_hover_text(tr("Tokens of the conversation", "Jetons de la conversation"));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
                 if self.running() {
                     if ui.button(tr("Stop", "Arrêter")).on_hover_text(tr("Stop the agent's turn", "Arrêter le tour de l'agent")).clicked() {
                         self.stop();
@@ -1047,60 +1383,70 @@ impl AgentPanel {
                     let button = Button::new(RichText::new(tr("Send", "Envoyer")).color(palette.on_accent).strong())
                         .fill(palette.accent)
                         .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(6));
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(Vec2::new(0.0, 26.0));
                     send |= ui.add_enabled(ready, button).clicked();
-                    let view = Button::selectable(self.attach_view, RichText::new(tr("Attach the view", "Joindre la vue")).size(12.0));
-                    let hint = tr(
-                        "Attach a picture of the 3D view, as you see it, to each message",
-                        "Joindre à chaque message une image de la vue 3D, telle que vous la voyez",
-                    );
-                    if ui.add(view).on_hover_text(hint).clicked() {
-                        self.attach_view = !self.attach_view;
-                    }
+                }
+                let hint = if self.attach_view {
+                    tr(
+                        "On: a picture of the 3D view, as you see it, goes with each message. Click to stop attaching it",
+                        "Activé : une image de la vue 3D, telle que vous la voyez, part avec chaque message. Cliquer pour ne plus la joindre",
+                    )
+                } else {
+                    tr(
+                        "Off: click to attach a picture of the 3D view, as you see it, to each message",
+                        "Désactivé : cliquer pour joindre à chaque message une image de la vue 3D, telle que vous la voyez",
+                    )
+                };
+                if icons::button(ui, Icon::Camera, self.attach_view, hint).clicked() {
+                    self.attach_view = !self.attach_view;
                 }
             });
         });
         if send {
             let text = std::mem::take(&mut self.input);
-            if self.attach_view && (!text.trim().is_empty() || !self.attachments.is_empty()) {
-                // Sent once the app has taken the picture.
-                self.awaiting_view = Some((text, false));
-                return;
-            }
-            self.send(&text);
-            if !self.running() && self.transcript.entries.is_empty() {
-                // Nothing was sent: the text stays.
-                self.input = text;
-            }
+            self.attach_view_or_send(text);
             response.request_focus();
         }
     }
 
-    /// The conversation, scrolled to its end as it grows.
-    fn conversation(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-        let palette = theme::palette();
-        if self.transcript.entries.is_empty() {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(tr(
-                    "Ask the agent to design, change or check the model: it reads and edits the code beside you. The buttons above start from an idea.",
-                    "Demandez à l'agent de concevoir, modifier ou vérifier le modèle : il lit et modifie le code à côté de vous. Les boutons ci-dessus partent d'une idée.",
-                ))
-                .size(12.5)
-                .color(palette.text_faint),
-            );
-            return None;
+    /// Sends `text`, once the app has taken the picture of the view when
+    /// it goes with each message; a text nothing could send stays.
+    fn attach_view_or_send(&mut self, text: String) {
+        if self.attach_view && (!text.trim().is_empty() || !self.attachments.is_empty()) {
+            // Sent once the app has taken the picture.
+            self.awaiting_view = Some((text, false));
+            return;
         }
+        self.send(&text);
+        if !self.running() && self.transcript.entries.is_empty() {
+            self.input = text;
+        }
+    }
+
+    /// The conversation, at most `max` high, scrolled to its end as it
+    /// grows unless the user scrolled up; the line of the code to show, and
+    /// the height it took.
+    fn conversation(&mut self, ui: &mut egui::Ui, max: f32) -> (Option<usize>, f32) {
+        let palette = theme::palette();
         let running = self.running();
+        let file = self.owner.as_deref().or(self.file.as_deref()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
+        let file = file.unwrap_or_else(|| tr("Untitled", "Sans titre").to_string());
         let AgentPanel { transcript, unfolded, thumbnails, undo_offer, undo_asked, .. } = self;
         let mut go_to = None;
-        egui::ScrollArea::vertical().auto_shrink(false).stick_to_bottom(true).show(ui, |ui| {
+        let scroll = egui::ScrollArea::vertical().max_height(max).auto_shrink([false, true]).stick_to_bottom(true).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             for entry in &transcript.entries {
                 match entry {
                     Entry::User { message, shown } => user_message(ui, message, shown.as_deref()),
                     Entry::Assistant { text } => markdown(ui, text),
-                    Entry::Tool(call) => go_to = go_to.or(tool_row(ui, call, unfolded, thumbnails)),
+                    Entry::Tool(call) => {
+                        let clicked = match diff_card(call) {
+                            Some(card) => diff_card_row(ui, &card, &file, &call.id),
+                            None => tool_row(ui, call, unfolded, thumbnails),
+                        };
+                        go_to = go_to.or(clicked);
+                    }
                     Entry::Notice { text, error } => {
                         let color = if *error { palette.error } else { palette.text_faint };
                         ui.label(RichText::new(text).size(12.0).color(color));
@@ -1116,13 +1462,134 @@ impl AgentPanel {
             }
             if let Some(label) = undo_offer.as_deref().filter(|_| !running) {
                 let hint = tr("Put the code back as it was before the agent's answer, in one step", "Remettre le code comme avant la réponse de l'agent, en une étape");
-                if ui.button(RichText::new(format!("↶ {label}")).size(12.0)).on_hover_text(hint).clicked() {
+                if icons::labelled(ui, Icon::Reset, label, false).on_hover_text(hint).clicked() {
                     *undo_asked = true;
                 }
             }
         });
-        go_to
+        (go_to, scroll.inner_rect.height())
     }
+}
+
+/// Where the chat's card goes: its bottom-left corner, its width, and the
+/// tallest it grows.
+#[derive(Clone, Copy, Debug)]
+pub struct Placement {
+    pub anchor: egui::Pos2,
+    pub width: f32,
+    pub cap: f32,
+}
+
+/// What the user asked of the app on the card.
+#[derive(Debug, Default)]
+pub struct CardResponse {
+    /// The line (from 1) of the code to show: an edit's card was clicked.
+    pub go_to: Option<usize>,
+    pub close: bool,
+    /// Where the card is.
+    pub rect: Option<egui::Rect>,
+}
+
+/// A text field drawn by `add` in a box that stands out of the card, its
+/// border lit while it has the focus.
+pub fn field_frame(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> egui::Response) -> egui::Response {
+    let palette = theme::palette();
+    let mut response = None;
+    let frame = Frame::new()
+        .fill(palette.editor)
+        .stroke(Stroke::new(1.0, palette.border_strong))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(6, 4))
+        .show(ui, |ui| response = Some(add(ui)));
+    let rect = frame.response.rect;
+    let response = response.unwrap_or(frame.response);
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, palette.accent), egui::StrokeKind::Inside);
+    }
+    response
+}
+
+/// A small square button holding `icon`, for the card's header.
+fn small_icon(ui: &mut egui::Ui, icon: Icon, hint: &str) -> egui::Response {
+    let palette = theme::palette();
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(5), palette.hover);
+    }
+    let color = if response.hovered() { palette.text_strong } else { palette.text_dim };
+    icons::paint(ui.painter(), egui::Rect::from_center_size(rect.center(), Vec2::splat(15.0)), icon, color);
+    response.on_hover_text(hint)
+}
+
+/// A suggestion of what to ask, as a rounded chip that sends it.
+fn suggestion_chip(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let palette = theme::palette();
+    let galley = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), Color32::PLACEHOLDER);
+    let size = Vec2::new(galley.size().x + 22.0, 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let fill = if response.hovered() { palette.hover } else { palette.raised };
+    let stroke = Stroke::new(1.0, if response.hovered() { palette.border_strong } else { palette.border });
+    ui.painter().rect(rect, CornerRadius::same(13), fill, stroke, egui::StrokeKind::Inside);
+    let color = if response.hovered() { palette.text_strong } else { palette.text };
+    ui.painter().galley(egui::pos2(rect.left() + 11.0, rect.center().y - galley.size().y / 2.0), galley, color);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// An edit of the agent's as a compact diff: the file and line, the lines
+/// removed and added; clicked, the line it shows in the code.
+fn diff_card_row(ui: &mut egui::Ui, card: &DiffCard, file: &str, id: &str) -> Option<usize> {
+    let palette = theme::palette();
+    let inner = Frame::new()
+        .fill(palette.faint_bg)
+        .stroke(Stroke::new(1.0, palette.border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                status_mark(ui, Status::Ok);
+                let place = match card.line {
+                    Some(line) => format!("{file}:{line}"),
+                    None => file.to_string(),
+                };
+                ui.label(RichText::new(place).font(FontId::monospace(12.0)).color(palette.text_strong));
+                if card.line.is_some() {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(RichText::new(tr("Show in the code", "Voir dans le code")).size(11.5).color(palette.accent_strong));
+                    });
+                }
+            });
+            if let Some(done) = &card.done {
+                ui.label(RichText::new(done).size(12.0).color(palette.text));
+            }
+            ui.add_space(3.0);
+            for (change, text) in &card.lines {
+                let (sign, color, fill) = match change {
+                    review::Change::Removed => ('−', palette.error, palette.error.gamma_multiply(0.14)),
+                    _ => ('+', palette.success, palette.success.gamma_multiply(0.14)),
+                };
+                Frame::new().fill(fill).corner_radius(CornerRadius::same(3)).inner_margin(Margin::symmetric(4, 1)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let mut job = LayoutJob::default();
+                    job.wrap.max_rows = 1;
+                    job.wrap.max_width = ui.available_width();
+                    job.wrap.break_anywhere = true;
+                    let font = FontId::monospace(12.0);
+                    job.append(&format!("{sign} "), 0.0, TextFormat { font_id: font.clone(), color, ..Default::default() });
+                    job.append(text, 0.0, TextFormat { font_id: font, color: palette.code_text, ..Default::default() });
+                    ui.label(job);
+                });
+            }
+            if card.more > 0 {
+                ui.label(RichText::new(tr!("… {} more lines", "… {} lignes de plus", card.more)).size(11.5).color(palette.text_faint));
+            }
+        });
+    let line = card.line?;
+    let response = ui.interact(inner.response.rect, Id::new(("agent-diff", id)), Sense::click());
+    let hint = tr!("Show line {line} in the code", "Afficher la ligne {line} dans le code");
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(hint).clicked().then_some(line)
 }
 
 /// A message of the user's, in its bubble, with what went with it.
@@ -1882,6 +2349,82 @@ mod tests {
         );
         assert_eq!(spans("2 ** 3 and `x"), [Span::Plain("2 ** 3 and `x")]);
         assert_eq!(spans("`a**b`"), [Span::Code("a**b")]);
+    }
+
+    #[test]
+    fn edits_show_as_diff_cards() {
+        let ok = |name: &str, input: Value, result: Value| ToolCall {
+            id: "e".into(),
+            name: name.into(),
+            input,
+            status: Status::Ok,
+            content: vec![json!({ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap() })],
+        };
+        // `edits`, as live.rs takes them, and its result's changed lines.
+        let edit = ok(
+            "edit_code",
+            json!({ "edits": [{ "old": "w = 20;\nh = 5;", "new": "w = 30;\nh = 5;" }] }),
+            json!({ "edited": true, "changed_lines": [[3, 3]], "revision": "r2", "render": { "ok": true } }),
+        );
+        let card = diff_card(&edit).unwrap();
+        assert_eq!(card.line, Some(3));
+        assert_eq!(card.lines, [(review::Change::Removed, "w = 20;".to_string()), (review::Change::Added, "w = 30;".to_string())]);
+        assert_eq!(card.more, 0);
+        // As Claude Code names the tool.
+        let named = ToolCall { name: "mcp__code2form-studio__edit_code".into(), ..edit.clone() };
+        assert_eq!(diff_card(&named), Some(card));
+        // A range: the lines that replace it, cut to six.
+        let new = (1..=9).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let range = ok(
+            "edit_code",
+            json!({ "range": { "start_line": 7, "end_line": 8 }, "new": new, "revision": "r" }),
+            json!({ "edited": true, "changed_lines": [[7, 15]] }),
+        );
+        let card = diff_card(&range).unwrap();
+        assert_eq!((card.line, card.lines.len(), card.more), (Some(7), DIFF_LINES, 3));
+        assert!(card.lines.iter().all(|(change, _)| *change == review::Change::Added));
+        // Failed or still running: the tool's row instead.
+        assert_eq!(diff_card(&ToolCall { status: Status::Error, ..edit.clone() }), None);
+        assert_eq!(diff_card(&ToolCall { status: Status::Running, ..edit }), None);
+        // A circuit's edit: what it did.
+        let placed = ok("place_component", json!({ "name": "button" }), json!({ "done": "placed `button`", "check": {} }));
+        assert_eq!(diff_card(&placed).unwrap().done.as_deref(), Some("placed `button`"));
+        assert_eq!(diff_card(&ok("render", json!({}), json!({ "done": "x" }))), None);
+        assert_eq!(diff_card(&ok("my_edit_code", json!({}), json!({}))), None, "not the studio's");
+    }
+
+    #[test]
+    fn suggestions_follow_the_open_file() {
+        let labels = |subject| starters(subject).into_iter().map(|s| s.label).collect::<Vec<_>>();
+        let design = labels(Subject::Design { parameter: Some("width") });
+        assert_eq!(design.len(), 4);
+        assert_eq!(design[0], "Make width bigger");
+        assert!(design.contains(&"Check it prints without supports".to_string()));
+        assert!(design.contains(&"Make it lighter".to_string()));
+        let plain = labels(Subject::Design { parameter: None });
+        assert!(!plain.iter().any(|l| l.contains("bigger")), "no parameter to name");
+        let circuit = labels(Subject::Circuit);
+        assert!(circuit.contains(&"Check the wiring".to_string()));
+        assert!(circuit.contains(&"Guide me through the assembly".to_string()));
+        assert!(!labels(Subject::Empty).is_empty());
+        // Each sends a message of its own.
+        let starter = &starters(Subject::Design { parameter: Some("width") })[0];
+        assert!(starter.message.contains("`width`"));
+    }
+
+    #[test]
+    fn the_plan_starts_with_a_note_of_where_it_is_written() {
+        let mut panel = AgentPanel::new(|_: &EngineRequest| Built::ready(Box::new(EchoEngine), "echo"), None);
+        let scratch = PathBuf::from("/settings/agent-scratch/tab-1");
+        panel.set_tab(None, Some(scratch.clone()));
+        panel.start_plan("a lamp");
+        panel.poll();
+        let entries = &panel.transcript().entries;
+        let Entry::Notice { text, error: false } = &entries[0] else { panic!("{entries:?}") };
+        assert!(text.contains("/settings/agent-scratch/tab-1") && text.contains("save"), "{text}");
+        let Entry::User { message, shown } = &entries[1] else { panic!("{entries:?}") };
+        assert_eq!(message.text, prompt_text(Shortcut::Plan, "a lamp", None, Some(&scratch)).unwrap());
+        assert_eq!(shown.as_deref(), Some("Plan · a lamp"));
     }
 
     #[test]

@@ -331,7 +331,7 @@ impl StudioApp {
             let ask = ui.button(tr("Ask the agent…", "Demander à l'agent…"));
             if ask.on_hover_text(tr("Show the agent with this attached", "Afficher l'agent avec ceci joint")).clicked() {
                 self.agent.ask_about(target.clone());
-                self.set_editor_mode(ui.ctx(), super::EditorMode::Agent);
+                self.open_chat(ui.ctx());
                 ui.close();
             }
         });

@@ -105,7 +105,7 @@ impl Action {
             Action::ZoomIn => tr("Larger Interface", "Agrandir l'interface"),
             Action::ZoomOut => tr("Smaller Interface", "Réduire l'interface"),
             Action::ZoomReset => tr("Interface at 100%", "Interface à 100 %"),
-            Action::Agent => tr("Agent or Code", "Agent ou code"),
+            Action::Agent => tr("Chat with the Agent", "Discussion avec l'agent"),
             Action::UndoAgent => tr("Undo the Agent's Change", "Annuler la modification de l'agent"),
             Action::Settings => tr("Settings…", "Réglages…"),
         }

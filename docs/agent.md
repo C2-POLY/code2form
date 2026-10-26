@@ -1,24 +1,67 @@
 # The agent in the app
 
 Talking to the agent is another way of editing the model, as typing the
-code is: the editor column, on the left beside the view, switches
-between the two with **Code · Agent** at its top (Cmd+L, or the speech
-bubble in the top bar, switches to the agent and back; with the view
-alone, it brings the column back beside it). The console stays under
-both. The mode comes back at the next launch. In Agent mode, you write
-to the agent as in a chat; it reads the document you have open, unsaved
-edits included, and changes it in place: the view re-renders as if you
-had typed its edits, and the code shows their lines marked once you
-switch back to it. Each edit is one step of the undo history, and the
-edits of one answer can be undone together. A reply's **Edited line N**
-link switches to the code at that line.
+code is. The chat floats over the 3D view, on a card at its bottom left:
+the speech bubble in the top bar, **Cmd+L**, or a right-click in the view
+› **Ask the agent…** opens it, and shows the view alone, without the
+code. You write to the agent as in a chat; it reads the document you
+have open, unsaved edits included, and changes it in place: the view
+re-renders as if you had typed its edits, and the model is framed in
+the room the card leaves beside it. Each edit is one step of the undo
+history, and the edits of one answer can be undone together.
 
-While you work in the code, the Agent segment turns a small spinner
-while the agent is at work, then keeps a dot until you open it, when it
-answered meanwhile.
+The card is two fifths of the view wide (from 360 to 520 points). Empty,
+it is compact: suggestions of what to ask, the prompts' buttons and the
+field. It grows upward with the conversation, up to the view's height,
+then the messages scroll, following the reply as it streams unless you
+scroll up. **–** folds it to its message field along the bottom of the
+view; **×**, Cmd+L again, or Escape in the empty field closes it, and the
+layout you had before it opened comes back (unless you picked another
+meanwhile). You may still pick **Side by side** or **Code** in the top
+bar with the chat open: it then floats over the view's part. The chat
+comes back open at the next launch.
 
-The top bar's **Editor · Side by side · View** shares the window between
-the editor column, whatever its mode, and the view.
+Since the code is hidden, each edit shows in the conversation as a
+compact diff card: the file and the line, the lines removed in red and
+added in green (six at most, then how many more), or what a circuit edit
+did. Clicked, it shows the code beside the view, at that line, the chat
+still open over the view.
+
+While the chat is closed or folded, the speech bubble in the top bar
+turns a small spinner while the agent is at work, then keeps a dot until
+you open the chat again, when it answered meanwhile.
+
+While the chat is open, the Parameters card starts folded, the agent
+setting the values; unfold it and it stays so while the chat is open.
+
+An empty conversation suggests what to ask of the file open: for a
+design, to make its first number parameter bigger, to check it prints
+without supports, to make it lighter, to explain how it is built; for a
+circuit, to check the wiring, to guide you through the assembly, to
+explain each part. A click sends it.
+
+![The chat over the view, an edit's diff card in it](images/agent/chat.png)
+
+## A new file
+
+A new file (File › New, the tabs' **+**, or the first launch with nothing
+to reopen) starts on a card over the view with three choices: **Open a
+file…** (with the last files opened under it), **Start in code** (the
+empty code beside the view, as before), or **Start with the agent**:
+describe your idea in a line and send it. The chat opens over the view
+alone and the agent starts the plan (the MCP prompt `plan_object`, see
+[the plan](plan-mode.md)): its questions, one at a time, a review of
+the mechanics, then the brief. Until the file is saved, the plan is
+written in the untitled tab's scratch folder, and the chat's first note
+says so: save the design later to keep it with your files. **Examples**
+opens one of the app's examples instead.
+
+![The start screen of a new file](images/agent/start.png)
+
+The card goes as soon as you type in the code, open a file in the tab,
+or ask the agent something; Escape starts in code. It does not show for
+the tabs reopened from the last session, nor for files opened from the
+Finder or the command line.
 
 It uses the same tools as `c2f mcp` (see the
 [README](../README.md#ai-agents-mcp)), plus the studio's live tools, which
@@ -96,7 +139,7 @@ The night light of [From an idea to a night light](idea-to-build.md),
 
 ### Starting from an idea
 
-Over the conversation, the **Plan**, **Design** and **Electronics**
+In an empty conversation, the **Plan**, **Design** and **Electronics**
 buttons send the MCP server's prompts: `plan_object` (see
 [the plan](plan-mode.md)), `design_object` and `add_electronics`. Each
 asks for one line first: the idea, what the object is and does, or the
@@ -123,8 +166,10 @@ once (or a range of lines), renders, and waits for the render:
 dome_h = 34; // [10:40]
 ```
 
-The changed line is tinted in the editor, then fades (when you are in
-Agent mode, once you switch back to the code); a mark stays in the
+The conversation shows the edit as a diff card, `nightlight.c2f:29`,
+the old line in red and the new in green. The changed line is tinted in
+the editor, then fades (with the code hidden, once it shows); a mark
+stays in the
 margin until your next edit, and the console says "The agent edited
 line 29". An edit inside a `part()` also flashes that part's box in the
 view; this one, a parameter, is in none. The agent reads the
@@ -147,12 +192,13 @@ field; × keeps it out:
 - in a circuit, a part, a pin or a wire selected in the view.
 
 A right-click in the view, over a face of a design or a part, pin or
-wire of a circuit, opens **Ask the agent…**: the editor column shows the
-agent, with it attached. A face goes with its point in millimeters, its normal, the
+wire of a circuit, opens **Ask the agent…**: the chat opens with it
+attached. A face goes with its point in millimeters, its normal, the
 `part()` it belongs to and the line that part is written on.
 
-**Attach the view** sends a picture of the 3D view, as you see it, with
-each message. With the view hidden, the message goes without it.
+The camera button beside **Send** is a toggle: on (lit), a picture of
+the 3D view, as you see it, goes with each message; its tooltip says
+which. With the view hidden, the message goes without it.
 
 ### The electronics, live
 
@@ -194,7 +240,8 @@ refuse an edit; they come back with it.
   then.
 
 The conversation is kept for each file, in the app's settings folder (not
-beside the file). **Resume last** brings it back, **New** starts another.
+beside the file). **Resume** brings it back, **New** starts another; both
+are in the card's header, with the engine's name and model.
 
 ## Ask before each change
 

@@ -289,6 +289,17 @@ fn palettes() -> &'static [[Palette; 2]] {
 }
 
 /// The colors of the theme shown.
+/// The cards floating over the 3D view: its tools, the parameters, the
+/// animation bar, the chat with the agent.
+pub fn card_frame() -> egui::Frame {
+    let palette = palette();
+    egui::Frame::new()
+        .fill(palette.panel)
+        .stroke(Stroke::new(1.0, palette.border))
+        .corner_radius(CornerRadius::same(10))
+        .shadow(Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if palette.dark { 90 } else { 30 }) })
+}
+
 pub fn palette() -> &'static Palette {
     &palettes()[ACCENT.load(Ordering::Relaxed)][usize::from(SHOWS_LIGHT.load(Ordering::Relaxed))]
 }

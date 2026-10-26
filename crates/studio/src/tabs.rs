@@ -159,13 +159,13 @@ impl Owners {
 }
 
 /// The tabs open when the app was last closed: their files, and which one
-/// was active. Untitled tabs are not kept. With them, the mode of the
-/// editor column, by its id (`code`, `agent`).
+/// was active. Untitled tabs are not kept. With them, whether the chat
+/// with the agent was open.
 #[derive(Debug, Default, PartialEq)]
 pub struct Session {
     pub paths: Vec<PathBuf>,
     pub active: Option<usize>,
-    pub editor: Option<String>,
+    pub chat: bool,
 }
 
 impl Session {
@@ -194,16 +194,22 @@ pub fn store() -> Option<PathBuf> {
 
 /// The active tab's line starts with this.
 const ACTIVE: &str = "* ";
-/// The editor column's mode's line starts with this: not a path, which
-/// versions before it skip.
+/// The chat's line: not a path, which versions before it skip.
+const CHAT: &str = "chat: open";
+/// The line of the version that showed the agent in the editor column,
+/// read as the chat open (`editor: agent`) or not.
 const EDITOR: &str = "editor: ";
 
 /// One absolute path a line, the active one marked.
 fn parse(text: &str) -> Session {
     let mut session = Session::default();
     for line in text.lines() {
+        if line.trim() == CHAT {
+            session.chat = true;
+            continue;
+        }
         if let Some(mode) = line.strip_prefix(EDITOR) {
-            session.editor = Some(mode.trim().to_string());
+            session.chat |= mode.trim() == "agent";
             continue;
         }
         let (active, line) = match line.strip_prefix(ACTIVE) {
@@ -225,8 +231,9 @@ fn parse(text: &str) -> Session {
 /// Paths that a line cannot hold (a line break, or not UTF-8) are left out.
 fn format(session: &Session) -> String {
     let mut text = String::new();
-    if let Some(mode) = session.editor.as_deref().filter(|m| !m.contains(['\n', '\r'])) {
-        text.push_str(&format!("{EDITOR}{mode}\n"));
+    if session.chat {
+        text.push_str(CHAT);
+        text.push('\n');
     }
     for (i, path) in session.paths.iter().enumerate() {
         let Some(line) = path.to_str().filter(|p| !p.contains(['\n', '\r'])) else { continue };
@@ -362,14 +369,14 @@ mod tests {
         let session = Session {
             paths: vec![path("a.c2f"), path("with space.c2fc"), path("b.scad")],
             active: Some(1),
-            editor: Some("agent".into()),
+            chat: true,
         };
         session.save(Some(&store)).unwrap();
         assert_eq!(Session::load(Some(&store)), session);
         // A path a line cannot hold is left out, and the active one moves.
-        let odd = Session { paths: vec![path("bad\nname.c2f"), path("a.c2f")], active: Some(1), editor: None };
+        let odd = Session { paths: vec![path("bad\nname.c2f"), path("a.c2f")], active: Some(1), chat: false };
         odd.save(Some(&store)).unwrap();
-        assert_eq!(Session::load(Some(&store)), Session { paths: vec![path("a.c2f")], active: Some(0), editor: None });
+        assert_eq!(Session::load(Some(&store)), Session { paths: vec![path("a.c2f")], active: Some(0), chat: false });
         assert!(Session::load(None).paths.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -378,6 +385,9 @@ mod tests {
     fn ignores_bad_session_lines() {
         let a = std::env::temp_dir().join("a.c2f");
         let text = format!("relative.c2f\n\n* {}\n{}\n", a.display(), a.display());
-        assert_eq!(parse(&text), Session { paths: vec![a], active: Some(0), editor: None });
+        assert_eq!(parse(&text), Session { paths: vec![a.clone()], active: Some(0), chat: false });
+        // The agent shown in the editor column, as a version before kept it.
+        assert!(parse("editor: agent\n").chat);
+        assert!(!parse("editor: code\n").chat);
     }
 }

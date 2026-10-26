@@ -59,11 +59,13 @@ pub mod live_circuit;
 /// The agent's edits as they land: marked, flashed, undone together.
 mod agent_edits;
 /// The review of the agent's changes before they apply.
-mod review;
-/// The editor column's modes: the code, or the agent.
-mod editor_mode;
+pub mod review;
+/// What floats over the view: the chat with the agent.
+pub mod overlay;
+/// The start screen of a new file.
+mod start;
 
-use editor_mode::EditorMode;
+use overlay::Overlay;
 
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {
@@ -180,11 +182,13 @@ fn agent_factory(live: live::LiveTools, tabs: agent_setup::TabFiles) -> impl FnM
     let screenshot = std::env::var_os("CODE2FORM_SCREENSHOT").is_some();
     move |request| {
         if screenshot {
-            // `agent-code` shows a turn under way, beside the code.
+            // As the header shows a real engine's name and model.
+            let label = "Claude Code · haiku";
+            // `agent-code` shows a turn under way.
             if std::env::var("CODE2FORM_SCREENSHOT_SELECT").is_ok_and(|s| s == "agent-code") {
-                return agent_setup::Built::ready(Box::new(agent_panel::WorkingEngine::default()), "echo");
+                return agent_setup::Built::ready(Box::new(agent_panel::WorkingEngine::default()), label);
             }
-            return agent_setup::Built::ready(Box::new(agent_panel::EchoEngine), "echo");
+            return agent_setup::Built::ready(Box::new(agent_panel::EchoEngine), label);
         }
         // From a .app bundle, the studio's own executable: its hidden
         // `mcp --studio` mode serves the tools, the live ones through the
@@ -353,6 +357,8 @@ struct Tab {
     agent_highlight: Option<agent_edits::Highlight>,
     agent_group: Option<agent_edits::AgentGroup>,
     agent_flash: Option<agent_edits::Flash>,
+    /// A new file's start screen shows, with the idea typed in it so far.
+    start: Option<String>,
 }
 
 impl Tab {
@@ -400,6 +406,7 @@ impl Tab {
             agent_highlight: None,
             agent_group: None,
             agent_flash: None,
+            start: None,
         }
     }
 
@@ -441,9 +448,10 @@ impl Tab {
         self.sent_source.as_deref() != Some(self.text.as_str()) || self.sent_values != self.customizer.values()
     }
 
-    /// Whether the parameters show, over a view that is `narrow` or not.
-    fn customizer_shown(&self, narrow: bool) -> bool {
-        customizer::unfolded(self.customizer_open, self.customizer_open_narrow, self.customizer.has_parameters(), narrow)
+    /// Whether the parameters show, over a view that is `narrow` or not,
+    /// the chat open (with the user's choice then) or not.
+    fn customizer_shown(&self, narrow: bool, chat: Option<Option<bool>>) -> bool {
+        customizer::unfolded(self.customizer_open, self.customizer_open_narrow, chat, self.customizer.has_parameters(), narrow)
     }
 }
 
@@ -510,17 +518,22 @@ pub struct StudioApp {
     allow_close: bool,
     title: String,
     screenshot: Option<Screenshot>,
-    /// The editor column beside the view, or one of them alone.
+    /// The code beside the view, or one of them alone.
     arrangement: Arrangement,
-    /// What the editor column shows: the code or the agent.
-    editor_mode: EditorMode,
-    /// A turn of the agent's ended while it was not on screen.
+    /// What floats over the view: the chat with the agent.
+    overlay: Overlay,
+    /// A turn of the agent's ended while its conversation was not on
+    /// screen.
     agent_unread: bool,
+    /// The model is framed again once the chat's card opens or closes.
+    reframe: bool,
+    /// The height the bars along the view's bottom take (the animation's).
+    view_bars: f32,
     /// The widths of the header's buttons on the right and of its layout
     /// switch, as last drawn.
     header_right: f32,
     header_switch: f32,
-    /// The conversation with the agent, in the editor column in Agent mode.
+    /// The conversation with the agent, on a card over the view.
     agent: AgentPanel,
     /// The requests of the agent's live tools.
     live: live::Live,
@@ -607,8 +620,10 @@ impl StudioApp {
             title: String::new(),
             screenshot: Screenshot::from_env(),
             arrangement: Arrangement::Split,
-            editor_mode: EditorMode::Code,
+            overlay: Overlay::default(),
             agent_unread: false,
+            reframe: false,
+            view_bars: 0.0,
             header_right: 0.0,
             header_switch: 0.0,
             agent,
@@ -617,18 +632,13 @@ impl StudioApp {
             tabs,
         };
         app.apply_settings(ctx);
-        app.editor_mode = app.session.editor.as_deref().and_then(EditorMode::from_id).unwrap_or_default();
+        if app.session.chat {
+            app.arrangement = app.overlay.open_chat(app.arrangement);
+        }
         // A screenshot of a layout, as `layout:view`.
         let layout = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("layout:"));
         if let Some(arrangement) = layout.and_then(Arrangement::from_id) {
             app.arrangement = arrangement;
-        }
-        // A screenshot of the agent in the editor column, a message sent;
-        // or of the code, the agent at work.
-        let select = app.screenshot.as_ref().and_then(|s| s.select.as_deref());
-        if let Some(mode) = select.and_then(|s| [("agent", EditorMode::Agent), ("agent-code", EditorMode::Code)].into_iter().find(|(id, _)| *id == s)) {
-            app.editor_mode = mode.1;
-            app.agent.send("Make the box 40 mm wide, with a **lid**.");
         }
         // A screenshot of a settings page, as `settings:shortcuts`.
         let page = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("settings:"));
@@ -665,6 +675,12 @@ impl StudioApp {
             app.render_now();
         }
         app.show_tab(ctx);
+        // Nothing to restore: the start screen. Not in the screenshots of
+        // something else.
+        let select = app.screenshot.as_ref().and_then(|s| s.select.as_deref());
+        if app.shelf.len() == 1 && app.doc.is_blank() && (app.screenshot.is_none() || select == Some("start")) {
+            app.doc.start = Some(String::new());
+        }
         app.screenshot_agent(ctx);
         app
     }
@@ -777,7 +793,7 @@ impl StudioApp {
 
     /// Writes the open tabs down when they changed, for the next launch.
     fn save_session(&mut self) {
-        let mut session = Session { editor: Some(self.editor_mode.id().to_string()), ..Session::default() };
+        let mut session = Session { chat: self.overlay.chat_open(), ..Session::default() };
         for (i, tab) in self.shelf.iter(&self.doc).enumerate() {
             let Some(path) = &tab.path else { continue };
             if i == self.shelf.active() {
@@ -1393,33 +1409,51 @@ impl StudioApp {
         }
     }
 
-    /// Whether the agent is on screen: the editor column shows it.
+    /// Whether the conversation with the agent is on screen.
     fn agent_shown(&self) -> bool {
-        self.editor_mode == EditorMode::Agent && self.arrangement != Arrangement::View
+        self.overlay.chat_on_screen(self.arrangement)
     }
 
-    /// Shows the editor column in `mode`, ready to type in: the view alone
-    /// makes room for it.
-    fn set_editor_mode(&mut self, ctx: &egui::Context, mode: EditorMode) {
-        self.editor_mode = mode;
-        self.arrangement = editor_mode::showing_column(self.arrangement);
-        match mode {
-            EditorMode::Agent => self.agent.focus(),
-            EditorMode::Code => self.doc.editor.focus(ctx),
+    /// Opens the chat over the view alone, its field ready to type in.
+    fn open_chat(&mut self, ctx: &egui::Context) {
+        let was = self.overlay.chat_open();
+        self.arrangement = self.overlay.open_chat(self.arrangement);
+        self.reframe |= !was;
+        self.agent.focus();
+        ctx.request_repaint();
+    }
+
+    /// Closes the chat, the arrangement before it coming back.
+    fn close_chat(&mut self, ctx: &egui::Context) {
+        let was = self.overlay.chat_open();
+        self.arrangement = self.overlay.close_chat(self.arrangement);
+        self.reframe |= was;
+        if self.arrangement != Arrangement::View {
+            self.doc.editor.focus(ctx);
         }
         ctx.request_repaint();
     }
 
-    /// The Agent button and its shortcut: the agent, or back to the code.
+    /// The Agent button and its shortcut: the chat opens, unfolds, or
+    /// closes.
     fn toggle_agent(&mut self, ctx: &egui::Context) {
-        self.set_editor_mode(ctx, editor_mode::toggled(self.editor_mode, self.arrangement));
+        let was = self.overlay.chat_open();
+        self.arrangement = self.overlay.toggle_chat(self.arrangement);
+        let open = self.overlay.chat_open();
+        self.reframe |= was != open;
+        if open {
+            self.agent.focus();
+        } else if self.arrangement != Arrangement::View {
+            self.doc.editor.focus(ctx);
+        }
+        ctx.request_repaint();
     }
 
     /// The agent's side of each frame, shown or not: it follows the active
     /// tab, takes in the engine's events, and notes a turn ended out of
     /// sight.
     fn agent_panel(&mut self, ctx: &egui::Context) {
-        self.agent.open = self.agent_shown();
+        self.agent.open = self.overlay.chat_open();
         self.agent.configure(ctx, &self.settings.agent, &self.settings.library_folders);
         if std::mem::take(&mut self.agent.open_settings) {
             self.settings_open = true;
@@ -1431,27 +1465,62 @@ impl StudioApp {
         self.suggest_selection();
         self.agent_view_shot(ctx);
         self.agent.undo_offer = self.agent_undo_offer();
+        self.agent.starters = agent_panel::starters(self.agent_subject());
         self.agent.update(ctx);
         let running = self.agent.running();
-        self.agent_unread = editor_mode::unread(self.agent_unread, self.agent_running, running, self.agent_shown());
+        self.agent_unread = overlay::unread(self.agent_unread, self.agent_running, running, self.agent_shown());
         self.follow_agent_turn(ctx, running);
     }
 
-    /// The conversation in the editor column; an edit's link shows its
-    /// line in the code.
-    fn agent_column(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        if let Some(line) = self.agent.show(ui) {
-            self.show_edited_line(&ctx, line);
+    /// What the active tab holds, for the chat's suggestions.
+    fn agent_subject(&self) -> agent_panel::Subject<'_> {
+        if self.doc.is_circuit() {
+            return agent_panel::Subject::Circuit;
+        }
+        if self.doc.text.trim().is_empty() {
+            return agent_panel::Subject::Empty;
+        }
+        let number = self.doc.customizer.shown().find(|(_, value)| matches!(value, c2f_eval::customizer::Literal::Number(_)));
+        agent_panel::Subject::Design { parameter: number.map(|(p, _)| p.name.as_str()) }
+    }
+
+    /// The chat's card at the view's bottom left, in `rect`, when open; an
+    /// edit's card shows its line in the code.
+    fn chat_card(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        if !self.overlay.chat_open() || self.arrangement == Arrangement::Code {
+            return;
+        }
+        let top = self.doc.viewer.insets.top;
+        let place = agent_panel::Placement {
+            anchor: egui::pos2(rect.left() + overlay::MARGIN, rect.bottom() - overlay::MARGIN - self.view_bars),
+            width: overlay::card_width(rect.width()),
+            cap: overlay::height_cap(rect.height(), top, self.view_bars),
+        };
+        let minimised = self.overlay.minimised;
+        let out = self.agent.show_card(ctx, place, &mut self.overlay.minimised);
+        if minimised != self.overlay.minimised {
+            self.reframe = true;
+            if !self.overlay.minimised {
+                self.agent.focus();
+            }
+        }
+        if let Some(line) = out.go_to {
+            self.show_edited_line(ctx, line);
+        }
+        if out.close {
+            self.close_chat(ctx);
         }
         if std::mem::take(&mut self.agent.undo_asked) {
-            self.undo_agent_change(&ctx);
+            self.undo_agent_change(ctx);
         }
     }
 
-    /// An edit's link: the code in the column, at `line` (from 1).
+    /// An edit's card: the code beside the view, the chat still open over
+    /// it, at `line` (from 1).
     fn show_edited_line(&mut self, ctx: &egui::Context, line: usize) {
-        self.set_editor_mode(ctx, EditorMode::Code);
+        if self.arrangement == Arrangement::View {
+            self.arrangement = Arrangement::Split;
+        }
         let offset = agent_panel::line_offset(&self.doc.text, line);
         self.doc.editor.go_to(ctx, &self.doc.text, offset);
     }
@@ -1972,9 +2041,10 @@ impl StudioApp {
         self.render_now();
     }
 
-    /// Opens a new untitled tab.
+    /// Opens a new untitled tab, on its start screen.
     fn new_tab(&mut self, ctx: &egui::Context) {
         self.add_tab();
+        self.doc.start = Some(String::new());
         self.doc.console.log(Level::Info, tr("New file", "Nouveau fichier"));
         self.render_now();
         self.doc.editor.focus(ctx);
@@ -2356,8 +2426,8 @@ impl StudioApp {
                 Action::Export => self.export(self.shortcut_format()),
                 Action::Find | Action::FindReplace => {
                     // The search is the code's.
-                    if self.editor_mode != EditorMode::Code {
-                        self.set_editor_mode(ctx, EditorMode::Code);
+                    if self.arrangement == Arrangement::View {
+                        self.arrangement = Arrangement::Split;
                     }
                     self.doc.editor.find(FindRequest::Open { replace: action == Action::FindReplace });
                 }
@@ -2522,7 +2592,15 @@ impl StudioApp {
                     }
                     let shortcut = shortcuts::describe(ctx, &keys.get(Action::Agent));
                     let hint = tr!("Talk to the agent ({shortcut})", "Parler à l'agent ({shortcut})");
-                    if icons::button(ui, Icon::Agent, self.agent_shown(), &hint).clicked() {
+                    let badge = overlay::badge(self.agent.running(), self.agent_unread, self.agent_shown());
+                    let hint = match badge {
+                        overlay::Badge::Working => format!("{hint}\n{}", tr("The agent is working", "L'agent travaille")),
+                        overlay::Badge::Unread => format!("{hint}\n{}", tr("The agent answered", "L'agent a répondu")),
+                        overlay::Badge::None => hint,
+                    };
+                    let button = icons::button(ui, Icon::Agent, self.overlay.chat_open(), &hint);
+                    agent_badge(ui, button.rect, badge);
+                    if button.clicked() {
                         self.toggle_agent(ctx);
                     }
                     self.export_menu(ui, ctx, &keys);
@@ -2821,7 +2899,7 @@ impl StudioApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     // The tab names the file; its path, on hover.
-                    if self.arrangement != Arrangement::View && self.editor_mode == EditorMode::Code {
+                    if self.arrangement != Arrangement::View {
                         if let Some((line, column)) = self.doc.editor.cursor {
                             ui.label(small(tr!("Ln {}, Col {}", "Ligne {}, col {}", line + 1, column + 1)));
                         }
@@ -2896,22 +2974,10 @@ impl StudioApp {
         }
     }
 
-    /// The editor column: its mode's switch, the code or the agent, and
-    /// the console under them.
+    /// The code, and the console under it.
     fn code_column(&mut self, ui: &mut egui::Ui) {
         let max = ui.available_height() * 0.6;
         self.console_dock(max).show_inside(ui, |ui| self.console_contents(ui));
-        let strip = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 8, right: 8, top: 5, bottom: 5 });
-        egui::TopBottomPanel::top("editor-mode").frame(strip).show_inside(ui, |ui| {
-            let badge = editor_mode::badge(self.editor_mode, self.agent.running(), self.agent_unread);
-            if let Some(mode) = editor_mode::switch(ui, self.editor_mode, badge) {
-                self.set_editor_mode(ui.ctx(), mode);
-            }
-        });
-        if self.editor_mode == EditorMode::Agent {
-            self.agent_column(ui);
-            return;
-        }
         self.show_agent_marks(ui.ctx());
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().editor)).show_inside(ui, |ui| {
             if self.doc.editor.show(ui, &mut self.doc.text) {
@@ -2962,15 +3028,26 @@ impl StudioApp {
         // clear of them.
         let exploding = self.doc.exploded && self.doc.viewer.can_explode() && !self.doc.is_circuit();
         let cards = usize::from(exploding) + usize::from(self.doc.viewer.section_view && self.doc.viewer.can_section());
+        let width = self.view_rect.width();
+        let chat = self.overlay.chat_open().then_some(self.overlay.parameters);
+        // The chat folded to its field lies along the bottom: the view's
+        // own marks keep above it, and the model is framed in the rest.
+        let folded_chat = self.overlay.chat_open() && self.overlay.minimised;
+        self.view_bars = if animated { 58.0 } else { 0.0 };
         self.doc.viewer.insets = viewer::Insets {
             top: if cards > 0 { 12.0 + (1 + cards) as f32 * VIEW_TOOLS_HEIGHT } else { 48.0 },
-            bottom: if animated { 58.0 } else { 0.0 },
-            right: if card && self.doc.customizer_shown(customizer::narrow(self.view_rect.width())) {
-                customizer::card_width(self.view_rect.width()) + 24.0
+            bottom: self.view_bars + if folded_chat { overlay::FOLDED_HEIGHT } else { 0.0 },
+            left: overlay::left_inset(self.overlay.chat_open() && !folded_chat && width.is_finite(), width),
+            right: if card && self.doc.customizer_shown(customizer::narrow(width), chat) {
+                customizer::card_width(width) + 24.0
             } else {
                 0.0
             },
         };
+        // The chat opened or closed: the model fits beside it.
+        if std::mem::take(&mut self.reframe) && self.doc.model.as_ref().is_some_and(|m| !m.empty) {
+            self.doc.viewer.fly_to_fit();
+        }
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
             let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
             let status = viewer::Status {
@@ -3078,6 +3155,7 @@ impl StudioApp {
         if card {
             self.parameters_card(ctx, rect);
         }
+        self.chat_card(ctx, rect);
         if animated {
             let mut bar = None;
             egui::Area::new(Id::new(("animation", self.doc.id)))
@@ -3337,7 +3415,8 @@ impl StudioApp {
         if !narrow {
             self.doc.customizer_open_narrow = None;
         }
-        let shown = self.doc.customizer_shown(narrow);
+        let chat = self.overlay.chat_open().then_some(self.overlay.parameters);
+        let shown = self.doc.customizer_shown(narrow, chat);
         let mut folded = !shown;
         let max_height = (rect.height() - 24.0 - self.doc.viewer.insets.bottom).max(120.0);
         let mut changed = false;
@@ -3354,7 +3433,13 @@ impl StudioApp {
                 });
             });
         if folded == shown {
-            let choice = if narrow { &mut self.doc.customizer_open_narrow } else { &mut self.doc.customizer_open };
+            let choice = if chat.is_some() {
+                &mut self.overlay.parameters
+            } else if narrow {
+                &mut self.doc.customizer_open_narrow
+            } else {
+                &mut self.doc.customizer_open
+            };
             *choice = Some(!folded);
         }
         if changed && self.settings.render_while_typing {
@@ -3809,6 +3894,7 @@ impl eframe::App for StudioApp {
         self.catalogue_panel(ctx);
         self.code_panel(ctx);
         self.view_panel(ctx);
+        self.start_screen(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
         self.review_window(ctx);
@@ -4444,21 +4530,33 @@ fn tool_separator(ui: &mut egui::Ui) {
     ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, theme::palette().border));
 }
 
-/// The cards over the 3D view: the view's tools, the parameters, the
-/// animation bar.
+/// The cards over the 3D view.
 fn card_frame() -> Frame {
-    let palette = theme::palette();
-    Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(10))
-        .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if palette.dark { 90 } else { 30 }) })
+    theme::card_frame()
 }
 
-/// How the window is shared between the editor column (the code or the
-/// agent, as its mode says) and the 3D view.
+/// The spinner of a turn under way, or the dot of an answer not seen yet,
+/// over the top right of the Agent button at `rect`.
+fn agent_badge(ui: &mut egui::Ui, rect: egui::Rect, badge: overlay::Badge) {
+    let palette = theme::palette();
+    let mark = egui::Rect::from_center_size(rect.right_top() + Vec2::new(-3.0, 4.0), Vec2::splat(11.0));
+    match badge {
+        overlay::Badge::Working => {
+            ui.painter().circle_filled(mark.center(), 8.0, palette.panel);
+            egui::Spinner::new().size(11.0).color(palette.accent_strong).paint_at(ui, mark);
+            ui.ctx().request_repaint();
+        }
+        overlay::Badge::Unread => {
+            ui.painter().circle_filled(mark.center(), 6.0, palette.panel);
+            ui.painter().circle_filled(mark.center(), 4.0, palette.accent_strong);
+        }
+        overlay::Badge::None => {}
+    }
+}
+
+/// How the window is shared between the code and the 3D view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Arrangement {
+pub enum Arrangement {
     Code,
     Split,
     View,
@@ -4479,7 +4577,7 @@ impl Arrangement {
 
     fn label(self) -> &'static str {
         match self {
-            Arrangement::Code => tr("Editor", "Éditeur"),
+            Arrangement::Code => "Code",
             Arrangement::Split => tr("Side by side", "Côte à côte"),
             Arrangement::View => tr("View", "Vue"),
         }
@@ -4487,8 +4585,8 @@ impl Arrangement {
 
     fn hint(self) -> &'static str {
         match self {
-            Arrangement::Code => tr("The editor alone, across the window: the code or the agent", "L'éditeur seul, sur toute la fenêtre : le code ou l'agent"),
-            Arrangement::Split => tr("The editor beside the 3D view", "L'éditeur à côté de la vue 3D"),
+            Arrangement::Code => tr("The code alone, across the window", "Le code seul, sur toute la fenêtre"),
+            Arrangement::Split => tr("The code beside the 3D view", "Le code à côté de la vue 3D"),
             Arrangement::View => tr("The 3D view alone, the console under it", "La vue 3D seule, la console dessous"),
         }
     }
@@ -4976,47 +5074,55 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_takes_the_code_s_place_and_an_edit_s_link_brings_the_code_back() {
-        let dir = folder("editor-mode");
+    fn the_chat_floats_over_the_view_alone_and_brings_the_layout_back() {
+        let dir = folder("chat");
         let store = dir.join("settings").join("open-tabs.txt");
         let ctx = egui::Context::default();
         let mut app = studio(&ctx, Some(store.clone()), vec![dir.join("b.c2f")]);
-        assert_eq!(app.editor_mode, EditorMode::Code);
+        assert!(!app.overlay.chat_open());
+        assert_eq!(app.arrangement, Arrangement::Split);
         let agent = (Modifiers::COMMAND, Key::L);
         press(&ctx, &mut app, &[agent]);
-        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Agent, Arrangement::Split));
+        assert!(app.overlay.chat_open());
+        assert_eq!(app.arrangement, Arrangement::View, "without the code");
         assert!(app.agent_shown());
         press(&ctx, &mut app, &[agent]);
-        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Code, Arrangement::Split));
-        // The view alone: the key shows the agent beside it, even when it
-        // is the column's mode already.
-        app.arrangement = Arrangement::View;
-        app.editor_mode = EditorMode::Agent;
-        assert!(!app.agent_shown());
-        press(&ctx, &mut app, &[agent]);
-        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Agent, Arrangement::Split));
-        // The editor alone stays alone.
-        app.arrangement = Arrangement::Code;
-        press(&ctx, &mut app, &[agent]);
-        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Code, Arrangement::Code));
+        assert!(!app.overlay.chat_open());
+        assert_eq!(app.arrangement, Arrangement::Split, "back as it was");
 
-        // An edit's link shows the code, beside the view alone before.
-        app.editor_mode = EditorMode::Agent;
-        app.arrangement = Arrangement::View;
+        // An edit's card shows the code beside the view, the chat still open.
+        press(&ctx, &mut app, &[agent]);
         let _ = ctx.run(egui::RawInput::default(), |ctx| app.show_edited_line(ctx, 1));
-        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Code, Arrangement::Split));
+        assert_eq!(app.arrangement, Arrangement::Split);
+        assert!(app.agent_shown());
 
-        // The mode comes back at the next launch.
-        app.editor_mode = EditorMode::Agent;
+        // The chat comes back open at the next launch.
         app.save_session();
         drop(app);
         let app = studio(&ctx, Some(store), Vec::new());
-        assert_eq!(app.editor_mode, EditorMode::Agent);
+        assert!(app.overlay.chat_open());
+        assert_eq!(app.arrangement, Arrangement::View);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn a_turn_ended_beside_the_code_stays_unread_until_the_agent_shows() {
+    fn the_parameters_fold_while_the_chat_is_open_until_unfolded() {
+        let mut tab = Tab::new(0, None);
+        tab.customizer.set_parameters(vec![c2f_eval::customizer::Parameter {
+            name: "width".into(),
+            group: "Parameters".into(),
+            description: None,
+            default: c2f_eval::customizer::Literal::Number(10.0),
+            widget: c2f_eval::customizer::Widget::Spinbox { step: 1.0 },
+        }]);
+        assert!(tab.customizer.has_parameters());
+        assert!(tab.customizer_shown(false, None));
+        assert!(!tab.customizer_shown(false, Some(None)), "the chat open: folded");
+        assert!(tab.customizer_shown(false, Some(Some(true))), "unfolded by the user meanwhile");
+    }
+
+    #[test]
+    fn a_turn_ended_out_of_sight_stays_unread_until_the_chat_shows() {
         let ctx = egui::Context::default();
         let mut app = studio(&ctx, None, Vec::new());
         app.agent = AgentPanel::new(|_: &agent_setup::EngineRequest| agent_setup::Built::ready(Box::new(agent_panel::EchoEngine), "echo"), None);
@@ -5026,17 +5132,95 @@ mod tests {
         frame(&mut app);
         app.agent.send("Make it wider");
         assert!(app.agent.running());
-        // The turn starts, then ends, while the code is shown.
+        // The turn starts, then ends, while the chat is closed.
         app.agent_running = true;
         frame(&mut app);
         assert!(!app.agent.running());
         assert!(app.agent_unread);
-        assert_eq!(editor_mode::badge(app.editor_mode, false, app.agent_unread), editor_mode::Badge::Unread);
+        assert_eq!(overlay::badge(false, app.agent_unread, app.agent_shown()), overlay::Badge::Unread);
         frame(&mut app);
-        assert!(app.agent_unread, "until the agent shows");
-        app.editor_mode = EditorMode::Agent;
+        assert!(app.agent_unread, "until the chat shows");
+        // Minimised, it is still out of sight.
+        app.arrangement = app.overlay.open_chat(app.arrangement);
+        app.overlay.minimised = true;
+        frame(&mut app);
+        assert!(app.agent_unread);
+        app.overlay.minimised = false;
         frame(&mut app);
         assert!(!app.agent_unread);
+    }
+
+    #[test]
+    fn a_new_tab_starts_on_its_start_screen() {
+        let dir = folder("start");
+        let ctx = egui::Context::default();
+        // A file opened: no start screen.
+        let mut app = studio(&ctx, None, vec![dir.join("b.c2f")]);
+        assert!(!app.start_shown());
+        // File › New: the start screen, until typed in.
+        app.new_tab(&ctx);
+        assert!(app.start_shown());
+        app.doc.text.push_str("cube(1);");
+        assert!(!app.start_shown());
+        // Start in code: gone, the code beside the view.
+        app.new_tab(&ctx);
+        app.arrangement = Arrangement::View;
+        app.start_in_code(&ctx);
+        assert!(!app.start_shown());
+        assert_eq!(app.arrangement, Arrangement::Split);
+        // A file opened in the new tab takes its place.
+        app.new_tab(&ctx);
+        app.open(&ctx, dir.join("a.c2f"));
+        assert!(!app.start_shown());
+        // Escape starts in code.
+        app.new_tab(&ctx);
+        let escape = egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+        let _ = ctx.run(egui::RawInput { events: vec![escape], ..Default::default() }, |ctx| app.start_screen(ctx));
+        assert!(app.doc.start.is_none());
+        // The first launch, nothing to restore: the start screen.
+        let app = studio(&ctx, None, Vec::new());
+        assert!(app.start_shown());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn starting_with_the_agent_sends_the_plan_prompt_with_the_idea() {
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, None, Vec::new());
+        let sent: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let log = sent.clone();
+        app.agent = AgentPanel::new(
+            move |_: &agent_setup::EngineRequest| {
+                let log = log.clone();
+                agent_setup::Built::ready(Box::new(Recorder(log)), "recorder")
+            },
+            None,
+        );
+        assert!(app.start_shown());
+        app.start_with_agent(&ctx, "a watch winder");
+        assert!(!app.start_shown());
+        assert!(app.overlay.chat_open());
+        assert_eq!(app.arrangement, Arrangement::View);
+        let sent = sent.lock().unwrap();
+        let expected = agent_panel::prompt_text(agent_panel::Shortcut::Plan, "a watch winder", None, Some(&app.agent_folder())).unwrap();
+        assert_eq!(sent.as_slice(), [expected]);
+    }
+
+    /// An engine that keeps the texts it is sent.
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl c2f_agent::conversation::Engine for Recorder {
+        fn send(&mut self, message: c2f_agent::conversation::UserMessage, events: std::sync::mpsc::Sender<c2f_agent::conversation::Event>) -> Result<(), String> {
+            self.0.lock().unwrap().push(message.text);
+            let _ = events.send(c2f_agent::conversation::Event::Done { usage: None, cost_usd: None, session_id: None });
+            Ok(())
+        }
+
+        fn stop(&mut self) {}
+
+        fn name(&self) -> &str {
+            "recorder"
+        }
     }
 
     #[test]
