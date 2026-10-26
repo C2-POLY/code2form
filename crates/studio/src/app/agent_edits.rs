@@ -42,6 +42,9 @@ pub struct Highlight {
     /// edited: marked in the margin.
     pub markers: Vec<Range<usize>>,
     since: Instant,
+    /// The editor has drawn it: the tint started then, not when the edit
+    /// landed out of sight, the agent shown in the editor's place.
+    seen: bool,
 }
 
 impl Highlight {
@@ -55,7 +58,15 @@ impl Highlight {
             let map = review::line_map(before, after);
             marked.extend(previous.markers.iter().flat_map(Clone::clone).filter_map(|line| map.get(line).copied().flatten()));
         }
-        Highlight { text: after.to_string(), markers: ranges(marked), lines, since: now }
+        Highlight { text: after.to_string(), markers: ranges(marked), lines, since: now, seen: false }
+    }
+
+    /// The editor draws it at `now`: the first time, the tint starts over.
+    pub fn see(&mut self, now: Instant) {
+        if !self.seen {
+            self.seen = true;
+            self.since = now;
+        }
     }
 
     /// Whether the marks still show on `text`: the user has not edited it.
@@ -339,6 +350,9 @@ impl StudioApp {
     /// Gives the editor the agent's marks to draw, as they are now.
     pub(super) fn show_agent_marks(&mut self, ctx: &egui::Context) {
         let doc = &mut self.doc;
+        if let Some(highlight) = &mut doc.agent_highlight {
+            highlight.see(Instant::now());
+        }
         let shown = doc.agent_highlight.as_ref().filter(|h| h.shows(&doc.text));
         let (lines, tint, markers) = match shown {
             Some(h) => (h.lines.clone(), h.tint(Instant::now()), h.markers.clone()),
@@ -468,6 +482,21 @@ mod tests {
         // After an edit of the user's in between, only the new marks show.
         let third = Highlight::new(Some(&first), "a\nB!\nc\n", "a\nB!\nc\nd\n", vec![3..4], start);
         assert_eq!(third.markers, vec![3..4]);
+    }
+
+    #[test]
+    fn an_edit_landed_out_of_sight_is_tinted_once_the_editor_shows_it() {
+        let start = Instant::now();
+        let mut highlight = Highlight::new(None, "a\n", "b\n", vec![0..1], start);
+        // The agent was shown: by the time the code shows, the tint would be gone.
+        let later = start + Duration::from_secs(60);
+        assert_eq!(highlight.tint(later), 0.0);
+        highlight.see(later);
+        assert_eq!(highlight.tint(later), 1.0);
+        // Seen once: it fades as it would have.
+        highlight.see(later + HOLD + FADE);
+        assert_eq!(highlight.tint(later + HOLD + FADE), 0.0);
+        assert_eq!(highlight.markers, vec![0..1]);
     }
 
     #[test]

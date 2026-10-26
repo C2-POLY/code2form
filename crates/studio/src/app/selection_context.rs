@@ -329,8 +329,9 @@ impl StudioApp {
         response.context_menu(|ui| {
             ui.label(egui::RichText::new(label(&target)).size(11.5).color(crate::theme::palette().text_dim));
             let ask = ui.button(tr("Ask the agent…", "Demander à l'agent…"));
-            if ask.on_hover_text(tr("Open the Agent panel with this attached", "Ouvrir le panneau Agent avec ceci joint")).clicked() {
+            if ask.on_hover_text(tr("Show the agent with this attached", "Afficher l'agent avec ceci joint")).clicked() {
                 self.agent.ask_about(target.clone());
+                self.set_editor_mode(ui.ctx(), super::EditorMode::Agent);
                 ui.close();
             }
         });

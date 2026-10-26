@@ -559,9 +559,51 @@ pub fn frame() -> Frame {
         .corner_radius(CornerRadius::ZERO)
 }
 
+/// Below this width, the view is narrow: the card of the parameters,
+/// unfolded, would cover most of it.
+pub const NARROW_VIEW: f32 = 640.0;
+
+/// Whether a view `width` wide is narrow; not before it is first drawn.
+pub fn narrow(width: f32) -> bool {
+    (1.0..NARROW_VIEW).contains(&width)
+}
+
+/// Whether the card of the parameters is unfolded. In a narrow view, it is
+/// folded until the user unfolds it there (`narrow_choice`); elsewhere, it
+/// is as the user last chose (`choice`), by default unfolded when the
+/// file has parameters.
+pub fn unfolded(choice: Option<bool>, narrow_choice: Option<bool>, has_parameters: bool, narrow: bool) -> bool {
+    if narrow { narrow_choice.unwrap_or(false) } else { choice.unwrap_or(has_parameters) }
+}
+
+/// The width of the unfolded card over a view `view_width` wide: at most
+/// two fifths of it, its rows scrolling within.
+pub fn card_width(view_width: f32) -> f32 {
+    (view_width * 0.4).clamp(200.0, 276.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_card_folds_itself_in_a_narrow_view_and_keeps_the_user_s_choice_elsewhere() {
+        assert!(narrow(500.0));
+        assert!(!narrow(NARROW_VIEW));
+        assert!(!narrow(f32::NEG_INFINITY), "not drawn yet");
+        // Wide: the user's choice, else open when there are parameters.
+        assert!(unfolded(None, None, true, false));
+        assert!(!unfolded(None, None, false, false));
+        assert!(!unfolded(Some(false), None, true, false));
+        assert!(unfolded(Some(true), None, false, false));
+        // Narrow: folded, whatever was chosen in a wide view, until unfolded there.
+        assert!(!unfolded(Some(true), None, true, true));
+        assert!(unfolded(Some(false), Some(true), true, true));
+        // Never more than two fifths of the view, nor narrower than its rows need.
+        assert_eq!(card_width(1200.0), 276.0);
+        assert_eq!(card_width(600.0), 240.0);
+        assert_eq!(card_width(300.0), 200.0);
+    }
 
     fn parameter(name: &str, default: Literal) -> Parameter {
         Parameter {

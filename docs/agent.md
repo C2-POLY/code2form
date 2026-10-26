@@ -1,11 +1,24 @@
 # The agent in the app
 
-The Agent panel opens on the right of the window, beside the code and the
-view (Cmd+L, or the speech bubble in the top bar). You write to it as in a
-chat; the agent reads the document you have open, unsaved edits included,
-and changes it in place: its edits land in the editor and the view
-re-renders, as if you had typed them. Each edit is one step of the undo
-history, and the edits of one answer can be undone together.
+Talking to the agent is another way of editing the model, as typing the
+code is: the editor column, on the left beside the view, switches
+between the two with **Code · Agent** at its top (Cmd+L, or the speech
+bubble in the top bar, switches to the agent and back; with the view
+alone, it brings the column back beside it). The console stays under
+both. The mode comes back at the next launch. In Agent mode, you write
+to the agent as in a chat; it reads the document you have open, unsaved
+edits included, and changes it in place: the view re-renders as if you
+had typed its edits, and the code shows their lines marked once you
+switch back to it. Each edit is one step of the undo history, and the
+edits of one answer can be undone together. A reply's **Edited line N**
+link switches to the code at that line.
+
+While you work in the code, the Agent segment turns a small spinner
+while the agent is at work, then keeps a dot until you open it, when it
+answered meanwhile.
+
+The top bar's **Editor · Side by side · View** shares the window between
+the editor column, whatever its mode, and the view.
 
 It uses the same tools as `c2f mcp` (see the
 [README](../README.md#ai-agents-mcp)), plus the studio's live tools, which
@@ -110,8 +123,9 @@ once (or a range of lines), renders, and waits for the render:
 dome_h = 34; // [10:40]
 ```
 
-The changed line is tinted in the editor, then fades; a mark stays in
-the margin until your next edit, and the console says "The agent edited
+The changed line is tinted in the editor, then fades (when you are in
+Agent mode, once you switch back to the code); a mark stays in the
+margin until your next edit, and the console says "The agent edited
 line 29". An edit inside a `part()` also flashes that part's box in the
 view; this one, a parameter, is in none. The agent reads the
 render's report in `edit_code`'s answer: no error, and the bounding box
@@ -133,8 +147,8 @@ field; × keeps it out:
 - in a circuit, a part, a pin or a wire selected in the view.
 
 A right-click in the view, over a face of a design or a part, pin or
-wire of a circuit, opens **Ask the agent…**: the panel opens with it
-attached. A face goes with its point in millimeters, its normal, the
+wire of a circuit, opens **Ask the agent…**: the editor column shows the
+agent, with it attached. A face goes with its point in millimeters, its normal, the
 `part()` it belongs to and the line that part is written on.
 
 **Attach the view** sends a picture of the 3D view, as you see it, with

@@ -60,6 +60,10 @@ pub mod live_circuit;
 mod agent_edits;
 /// The review of the agent's changes before they apply.
 mod review;
+/// The editor column's modes: the code, or the agent.
+mod editor_mode;
+
+use editor_mode::EditorMode;
 
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {
@@ -176,6 +180,10 @@ fn agent_factory(live: live::LiveTools, tabs: agent_setup::TabFiles) -> impl FnM
     let screenshot = std::env::var_os("CODE2FORM_SCREENSHOT").is_some();
     move |request| {
         if screenshot {
+            // `agent-code` shows a turn under way, beside the code.
+            if std::env::var("CODE2FORM_SCREENSHOT_SELECT").is_ok_and(|s| s == "agent-code") {
+                return agent_setup::Built::ready(Box::new(agent_panel::WorkingEngine::default()), "echo");
+            }
             return agent_setup::Built::ready(Box::new(agent_panel::EchoEngine), "echo");
         }
         // From a .app bundle, the studio's own executable: its hidden
@@ -326,6 +334,9 @@ struct Tab {
     /// Shown or hidden by the user; by default shown when the file has
     /// parameters.
     customizer_open: Option<bool>,
+    /// Shown or hidden by the user while the view is narrow, where it is
+    /// hidden by default; forgotten once the view is wide again.
+    customizer_open_narrow: Option<bool>,
     /// Playing the design along `$t`, when it reads it.
     animation: Animation,
     /// The exploded view: whether it is on, how far apart the slider sets
@@ -379,6 +390,7 @@ impl Tab {
             console: Console::default(),
             customizer: Customizer::default(),
             customizer_open: None,
+            customizer_open_narrow: None,
             animation: Animation::default(),
             exploded: false,
             explode_amount: EXPLODE_START,
@@ -429,8 +441,9 @@ impl Tab {
         self.sent_source.as_deref() != Some(self.text.as_str()) || self.sent_values != self.customizer.values()
     }
 
-    fn customizer_shown(&self) -> bool {
-        self.customizer_open.unwrap_or_else(|| self.customizer.has_parameters())
+    /// Whether the parameters show, over a view that is `narrow` or not.
+    fn customizer_shown(&self, narrow: bool) -> bool {
+        customizer::unfolded(self.customizer_open, self.customizer_open_narrow, self.customizer.has_parameters(), narrow)
     }
 }
 
@@ -497,13 +510,17 @@ pub struct StudioApp {
     allow_close: bool,
     title: String,
     screenshot: Option<Screenshot>,
-    /// The code beside the view, or one of them alone.
+    /// The editor column beside the view, or one of them alone.
     arrangement: Arrangement,
+    /// What the editor column shows: the code or the agent.
+    editor_mode: EditorMode,
+    /// A turn of the agent's ended while it was not on screen.
+    agent_unread: bool,
     /// The widths of the header's buttons on the right and of its layout
     /// switch, as last drawn.
     header_right: f32,
     header_switch: f32,
-    /// The conversation with the agent, docked on the right.
+    /// The conversation with the agent, in the editor column in Agent mode.
     agent: AgentPanel,
     /// The requests of the agent's live tools.
     live: live::Live,
@@ -590,6 +607,8 @@ impl StudioApp {
             title: String::new(),
             screenshot: Screenshot::from_env(),
             arrangement: Arrangement::Split,
+            editor_mode: EditorMode::Code,
+            agent_unread: false,
             header_right: 0.0,
             header_switch: 0.0,
             agent,
@@ -598,14 +617,17 @@ impl StudioApp {
             tabs,
         };
         app.apply_settings(ctx);
+        app.editor_mode = app.session.editor.as_deref().and_then(EditorMode::from_id).unwrap_or_default();
         // A screenshot of a layout, as `layout:view`.
         let layout = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("layout:"));
         if let Some(arrangement) = layout.and_then(Arrangement::from_id) {
             app.arrangement = arrangement;
         }
-        // A screenshot of the Agent panel, a message sent.
-        if app.screenshot.as_ref().is_some_and(|s| s.select.as_deref() == Some("agent")) {
-            app.agent.open = true;
+        // A screenshot of the agent in the editor column, a message sent;
+        // or of the code, the agent at work.
+        let select = app.screenshot.as_ref().and_then(|s| s.select.as_deref());
+        if let Some(mode) = select.and_then(|s| [("agent", EditorMode::Agent), ("agent-code", EditorMode::Code)].into_iter().find(|(id, _)| *id == s)) {
+            app.editor_mode = mode.1;
             app.agent.send("Make the box 40 mm wide, with a **lid**.");
         }
         // A screenshot of a settings page, as `settings:shortcuts`.
@@ -755,7 +777,7 @@ impl StudioApp {
 
     /// Writes the open tabs down when they changed, for the next launch.
     fn save_session(&mut self) {
-        let mut session = Session::default();
+        let mut session = Session { editor: Some(self.editor_mode.id().to_string()), ..Session::default() };
         for (i, tab) in self.shelf.iter(&self.doc).enumerate() {
             let Some(path) = &tab.path else { continue };
             if i == self.shelf.active() {
@@ -1371,9 +1393,33 @@ impl StudioApp {
         }
     }
 
-    /// The Agent panel, on the right of the window, following the active
-    /// tab; an edit's link shows its line in the code.
+    /// Whether the agent is on screen: the editor column shows it.
+    fn agent_shown(&self) -> bool {
+        self.editor_mode == EditorMode::Agent && self.arrangement != Arrangement::View
+    }
+
+    /// Shows the editor column in `mode`, ready to type in: the view alone
+    /// makes room for it.
+    fn set_editor_mode(&mut self, ctx: &egui::Context, mode: EditorMode) {
+        self.editor_mode = mode;
+        self.arrangement = editor_mode::showing_column(self.arrangement);
+        match mode {
+            EditorMode::Agent => self.agent.focus(),
+            EditorMode::Code => self.doc.editor.focus(ctx),
+        }
+        ctx.request_repaint();
+    }
+
+    /// The Agent button and its shortcut: the agent, or back to the code.
+    fn toggle_agent(&mut self, ctx: &egui::Context) {
+        self.set_editor_mode(ctx, editor_mode::toggled(self.editor_mode, self.arrangement));
+    }
+
+    /// The agent's side of each frame, shown or not: it follows the active
+    /// tab, takes in the engine's events, and notes a turn ended out of
+    /// sight.
     fn agent_panel(&mut self, ctx: &egui::Context) {
+        self.agent.open = self.agent_shown();
         self.agent.configure(ctx, &self.settings.agent, &self.settings.library_folders);
         if std::mem::take(&mut self.agent.open_settings) {
             self.settings_open = true;
@@ -1385,17 +1431,29 @@ impl StudioApp {
         self.suggest_selection();
         self.agent_view_shot(ctx);
         self.agent.undo_offer = self.agent_undo_offer();
-        if let Some(line) = self.agent.show(ctx) {
-            if self.arrangement == Arrangement::View {
-                self.arrangement = Arrangement::Split;
-            }
-            let offset = agent_panel::line_offset(&self.doc.text, line);
-            self.doc.editor.go_to(ctx, &self.doc.text, offset);
+        self.agent.update(ctx);
+        let running = self.agent.running();
+        self.agent_unread = editor_mode::unread(self.agent_unread, self.agent_running, running, self.agent_shown());
+        self.follow_agent_turn(ctx, running);
+    }
+
+    /// The conversation in the editor column; an edit's link shows its
+    /// line in the code.
+    fn agent_column(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        if let Some(line) = self.agent.show(ui) {
+            self.show_edited_line(&ctx, line);
         }
         if std::mem::take(&mut self.agent.undo_asked) {
-            self.undo_agent_change(ctx);
+            self.undo_agent_change(&ctx);
         }
-        self.follow_agent_turn(ctx, self.agent.running());
+    }
+
+    /// An edit's link: the code in the column, at `line` (from 1).
+    fn show_edited_line(&mut self, ctx: &egui::Context, line: usize) {
+        self.set_editor_mode(ctx, EditorMode::Code);
+        let offset = agent_panel::line_offset(&self.doc.text, line);
+        self.doc.editor.go_to(ctx, &self.doc.text, offset);
     }
 
     // ---- Catalogue ----
@@ -2297,6 +2355,10 @@ impl StudioApp {
                 Action::Render => self.render_now(),
                 Action::Export => self.export(self.shortcut_format()),
                 Action::Find | Action::FindReplace => {
+                    // The search is the code's.
+                    if self.editor_mode != EditorMode::Code {
+                        self.set_editor_mode(ctx, EditorMode::Code);
+                    }
                     self.doc.editor.find(FindRequest::Open { replace: action == Action::FindReplace });
                 }
                 Action::FindNext | Action::FindPrevious => {
@@ -2305,7 +2367,7 @@ impl StudioApp {
                 Action::ZoomIn => zoom_steps += 1,
                 Action::ZoomOut => zoom_steps -= 1,
                 Action::ZoomReset => zoom_reset = true,
-                Action::Agent => self.agent.toggle(),
+                Action::Agent => self.toggle_agent(ctx),
                 Action::UndoAgent => self.undo_agent_change(ctx),
                 Action::Settings => self.settings_open = true,
             }
@@ -2460,8 +2522,8 @@ impl StudioApp {
                     }
                     let shortcut = shortcuts::describe(ctx, &keys.get(Action::Agent));
                     let hint = tr!("Talk to the agent ({shortcut})", "Parler à l'agent ({shortcut})");
-                    if icons::button(ui, Icon::Agent, self.agent.open, &hint).clicked() {
-                        self.agent.toggle();
+                    if icons::button(ui, Icon::Agent, self.agent_shown(), &hint).clicked() {
+                        self.toggle_agent(ctx);
                     }
                     self.export_menu(ui, ctx, &keys);
                     let render = Button::new(RichText::new(tr("Render", "Rendu")).color(palette.on_accent).strong())
@@ -2759,7 +2821,7 @@ impl StudioApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     // The tab names the file; its path, on hover.
-                    if self.arrangement != Arrangement::View {
+                    if self.arrangement != Arrangement::View && self.editor_mode == EditorMode::Code {
                         if let Some((line, column)) = self.doc.editor.cursor {
                             ui.label(small(tr!("Ln {}, Col {}", "Ligne {}, col {}", line + 1, column + 1)));
                         }
@@ -2834,10 +2896,22 @@ impl StudioApp {
         }
     }
 
-    /// The code, and the console under it.
+    /// The editor column: its mode's switch, the code or the agent, and
+    /// the console under them.
     fn code_column(&mut self, ui: &mut egui::Ui) {
         let max = ui.available_height() * 0.6;
         self.console_dock(max).show_inside(ui, |ui| self.console_contents(ui));
+        let strip = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 8, right: 8, top: 5, bottom: 5 });
+        egui::TopBottomPanel::top("editor-mode").frame(strip).show_inside(ui, |ui| {
+            let badge = editor_mode::badge(self.editor_mode, self.agent.running(), self.agent_unread);
+            if let Some(mode) = editor_mode::switch(ui, self.editor_mode, badge) {
+                self.set_editor_mode(ui.ctx(), mode);
+            }
+        });
+        if self.editor_mode == EditorMode::Agent {
+            self.agent_column(ui);
+            return;
+        }
         self.show_agent_marks(ui.ctx());
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().editor)).show_inside(ui, |ui| {
             if self.doc.editor.show(ui, &mut self.doc.text) {
@@ -2891,7 +2965,11 @@ impl StudioApp {
         self.doc.viewer.insets = viewer::Insets {
             top: if cards > 0 { 12.0 + (1 + cards) as f32 * VIEW_TOOLS_HEIGHT } else { 48.0 },
             bottom: if animated { 58.0 } else { 0.0 },
-            right: if card && self.doc.customizer_shown() { 300.0 } else { 0.0 },
+            right: if card && self.doc.customizer_shown(customizer::narrow(self.view_rect.width())) {
+                customizer::card_width(self.view_rect.width()) + 24.0
+            } else {
+                0.0
+            },
         };
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
             let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
@@ -3253,7 +3331,13 @@ impl StudioApp {
     /// right, which folds to its title. Clear of the layer slider.
     fn parameters_card(&mut self, ctx: &egui::Context, rect: egui::Rect) {
         let right = if self.doc.viewer.layer_view { 72.0 } else { 12.0 };
-        let shown = self.doc.customizer_shown();
+        // Over a narrow view, it folds itself and never takes more than
+        // two fifths of it.
+        let narrow = customizer::narrow(rect.width());
+        if !narrow {
+            self.doc.customizer_open_narrow = None;
+        }
+        let shown = self.doc.customizer_shown(narrow);
         let mut folded = !shown;
         let max_height = (rect.height() - 24.0 - self.doc.viewer.insets.bottom).max(120.0);
         let mut changed = false;
@@ -3264,13 +3348,14 @@ impl StudioApp {
             .show(ctx, |ui| {
                 let bottom = if folded { 4 } else { 10 };
                 card_frame().inner_margin(Margin { left: 12, right: 4, top: 4, bottom }).show(ui, |ui| {
-                    ui.set_width(if folded { 190.0 } else { 276.0 });
+                    ui.set_width(if folded { 190.0 } else { customizer::card_width(rect.width()) });
                     ui.set_max_height(max_height);
                     changed = self.doc.customizer.show(ui, &mut folded);
                 });
             });
         if folded == shown {
-            self.doc.customizer_open = Some(!folded);
+            let choice = if narrow { &mut self.doc.customizer_open_narrow } else { &mut self.doc.customizer_open };
+            *choice = Some(!folded);
         }
         if changed && self.settings.render_while_typing {
             self.doc.render_deadline = Some(Instant::now() + PARAMETER_DEBOUNCE);
@@ -3749,8 +3834,15 @@ impl eframe::App for StudioApp {
         if let Some(result) = self.screenshot.as_mut().and_then(|s| s.update(ctx, ready)) {
             match result {
                 Ok(message) => self.doc.console.log(Level::Info, message),
-                Err(error) => self.doc.console.log(Level::Error, error),
+                Err(error) => {
+                    eprintln!("{error}");
+                    self.doc.console.log(Level::Error, error);
+                }
             }
+            // The picture taken, the run is over: no question about the
+            // edits a screenshot made.
+            self.allow_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -4363,7 +4455,8 @@ fn card_frame() -> Frame {
         .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if palette.dark { 90 } else { 30 }) })
 }
 
-/// How the window is shared between the code and the 3D view.
+/// How the window is shared between the editor column (the code or the
+/// agent, as its mode says) and the 3D view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Arrangement {
     Code,
@@ -4386,7 +4479,7 @@ impl Arrangement {
 
     fn label(self) -> &'static str {
         match self {
-            Arrangement::Code => "Code",
+            Arrangement::Code => tr("Editor", "Éditeur"),
             Arrangement::Split => tr("Side by side", "Côte à côte"),
             Arrangement::View => tr("View", "Vue"),
         }
@@ -4394,8 +4487,8 @@ impl Arrangement {
 
     fn hint(self) -> &'static str {
         match self {
-            Arrangement::Code => tr("The code alone, across the window", "Le code seul, sur toute la fenêtre"),
-            Arrangement::Split => tr("The code beside the 3D view", "Le code à côté de la vue 3D"),
+            Arrangement::Code => tr("The editor alone, across the window: the code or the agent", "L'éditeur seul, sur toute la fenêtre : le code ou l'agent"),
+            Arrangement::Split => tr("The editor beside the 3D view", "L'éditeur à côté de la vue 3D"),
             Arrangement::View => tr("The 3D view alone, the console under it", "La vue 3D seule, la console dessous"),
         }
     }
@@ -4880,6 +4973,70 @@ mod tests {
         wait(&mut app, |app| !app.doc.busy());
         assert_eq!(app.shortcut_format(), Format::Svg, "a 2D model");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_agent_takes_the_code_s_place_and_an_edit_s_link_brings_the_code_back() {
+        let dir = folder("editor-mode");
+        let store = dir.join("settings").join("open-tabs.txt");
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, Some(store.clone()), vec![dir.join("b.c2f")]);
+        assert_eq!(app.editor_mode, EditorMode::Code);
+        let agent = (Modifiers::COMMAND, Key::L);
+        press(&ctx, &mut app, &[agent]);
+        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Agent, Arrangement::Split));
+        assert!(app.agent_shown());
+        press(&ctx, &mut app, &[agent]);
+        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Code, Arrangement::Split));
+        // The view alone: the key shows the agent beside it, even when it
+        // is the column's mode already.
+        app.arrangement = Arrangement::View;
+        app.editor_mode = EditorMode::Agent;
+        assert!(!app.agent_shown());
+        press(&ctx, &mut app, &[agent]);
+        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Agent, Arrangement::Split));
+        // The editor alone stays alone.
+        app.arrangement = Arrangement::Code;
+        press(&ctx, &mut app, &[agent]);
+        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Code, Arrangement::Code));
+
+        // An edit's link shows the code, beside the view alone before.
+        app.editor_mode = EditorMode::Agent;
+        app.arrangement = Arrangement::View;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.show_edited_line(ctx, 1));
+        assert_eq!((app.editor_mode, app.arrangement), (EditorMode::Code, Arrangement::Split));
+
+        // The mode comes back at the next launch.
+        app.editor_mode = EditorMode::Agent;
+        app.save_session();
+        drop(app);
+        let app = studio(&ctx, Some(store), Vec::new());
+        assert_eq!(app.editor_mode, EditorMode::Agent);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_turn_ended_beside_the_code_stays_unread_until_the_agent_shows() {
+        let ctx = egui::Context::default();
+        let mut app = studio(&ctx, None, Vec::new());
+        app.agent = AgentPanel::new(|_: &agent_setup::EngineRequest| agent_setup::Built::ready(Box::new(agent_panel::EchoEngine), "echo"), None);
+        let frame = |app: &mut StudioApp| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.agent_panel(ctx));
+        };
+        frame(&mut app);
+        app.agent.send("Make it wider");
+        assert!(app.agent.running());
+        // The turn starts, then ends, while the code is shown.
+        app.agent_running = true;
+        frame(&mut app);
+        assert!(!app.agent.running());
+        assert!(app.agent_unread);
+        assert_eq!(editor_mode::badge(app.editor_mode, false, app.agent_unread), editor_mode::Badge::Unread);
+        frame(&mut app);
+        assert!(app.agent_unread, "until the agent shows");
+        app.editor_mode = EditorMode::Agent;
+        frame(&mut app);
+        assert!(!app.agent_unread);
     }
 
     #[test]

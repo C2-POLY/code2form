@@ -10,12 +10,13 @@
 //! settings (`general`, `appearance`, `editor`, `model`, `export`,
 //! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
 //! `exploded` draws its part()s apart (`play,exploded` does both;
-//! `exploded,axis` along each part's axis); `agent` opens the Agent panel
-//! and sends it a message; `agent-edit` shows an edit of the agent's
+//! `exploded,axis` along each part's axis); `agent` shows the agent in
+//! the editor column, a message sent; `agent-code` shows the code, the
+//! agent at work beside it on the Code · Agent switch; `agent-edit` shows an edit of the agent's
 //! landing (its line marked, its part flashed), and `agent-review` the
 //! review of one before it applies.
 //! `CODE2FORM_APPEARANCE` picks the theme, `CODE2FORM_LANGUAGE` the
-//! language (`en` or `fr`).
+//! language (`en` or `fr`). The run quits once the picture is saved.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

@@ -1,5 +1,6 @@
-//! The Agent panel: a conversation with the agent, docked on the right of
-//! the window beside the code and the view.
+//! The Agent panel: a conversation with the agent, shown in the editor
+//! column in place of the code, beside the view: another way of editing
+//! the model.
 //!
 //! The user's messages go to an [`Engine`], which streams back what
 //! happens: the reply, delta by delta, and the tools the agent calls. The
@@ -352,6 +353,28 @@ impl Engine for EchoEngine {
     }
 }
 
+/// Stands in for an engine in the screenshot of a turn under way: it
+/// starts answering and holds the turn open.
+#[derive(Default)]
+pub struct WorkingEngine(Option<mpsc::Sender<Event>>);
+
+impl Engine for WorkingEngine {
+    fn send(&mut self, _: UserMessage, events: mpsc::Sender<Event>) -> Result<(), String> {
+        let delta = tr("Making the box 40 mm wide…", "J'élargis la boîte à 40 mm…").to_string();
+        let _ = events.send(Event::Text { delta });
+        self.0 = Some(events);
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        self.0 = None;
+    }
+
+    fn name(&self) -> &str {
+        "working"
+    }
+}
+
 // ---- Persistence ----
 
 /// The folder the conversations are kept in, in the settings folder, but
@@ -388,7 +411,7 @@ fn answer_id() -> Id {
 }
 
 pub struct AgentPanel {
-    /// Shown on the right of the window.
+    /// On screen: the app sets it each frame, from the editor column's mode.
     pub open: bool,
     /// Makes an engine: the first, a fresh one for each new conversation,
     /// which forgets the last one's session, and one carrying the
@@ -565,10 +588,9 @@ impl AgentPanel {
         self.events.is_some()
     }
 
-    /// Shows the panel, its message field ready, or hides it.
-    pub fn toggle(&mut self) {
-        self.open = !self.open;
-        self.focus_input = self.open;
+    /// Readies the message field, for when the panel next shows.
+    pub fn focus(&mut self) {
+        self.focus_input = true;
     }
 
     /// Adds something to send with the next message: a picture of the
@@ -594,9 +616,8 @@ impl AgentPanel {
         self.suggested.iter().enumerate().filter_map(move |(i, s)| s.shown().filter(|a| !attached(a)).map(|a| (i, a)))
     }
 
-    /// Opens the panel, its field focused, with `attachment` to send.
+    /// Readies the field, with `attachment` to send; the app shows the panel.
     pub fn ask_about(&mut self, attachment: Attachment) {
-        self.open = true;
         self.focus_input = true;
         self.attach(attachment);
     }
@@ -849,59 +870,44 @@ impl AgentPanel {
 
     // ---- Drawing ----
 
-    /// Takes in the engine's events, and shows the panel when open; the
-    /// line (from 1) of the code to show, when an edit's link is clicked.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<usize> {
+    /// Takes in the engine's events, every frame, shown or not.
+    pub fn update(&mut self, ctx: &egui::Context) {
         self.poll();
         if self.running() {
             // The events come from another thread, which cannot wake egui.
             ctx.request_repaint_after(Duration::from_millis(50));
         }
-        if !self.open {
-            return None;
-        }
+    }
+
+    /// Shows the panel filling `ui`, the editor column; the line (from 1)
+    /// of the code to show, when an edit's link is clicked.
+    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<usize> {
         let palette = theme::palette();
-        let width = ctx.screen_rect().width();
-        let frame = Frame::new()
-            .fill(palette.panel)
-            .stroke(Stroke::new(1.0, palette.border))
-            .inner_margin(Margin { left: 10, right: 10, top: 8, bottom: 8 });
+        let frame = Frame::new().fill(palette.panel).inner_margin(Margin { left: 10, right: 10, top: 6, bottom: 8 });
         let mut go_to = None;
-        egui::SidePanel::right("agent")
-            .frame(frame)
-            .resizable(true)
-            .default_width(380.0)
-            .width_range(300.0..=(width * 0.5).max(320.0))
-            .show(ctx, |ui| {
-                self.header(ui);
-                ui.add_space(4.0);
-                self.prompt_row(ui);
-                egui::TopBottomPanel::bottom("agent-composer")
-                    .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 8, bottom: 0 }))
-                    .show_separator_line(false)
-                    .show_inside(ui, |ui| self.composer(ui));
-                egui::CentralPanel::default()
-                    .frame(Frame::new().fill(palette.editor).corner_radius(CornerRadius::same(8)).inner_margin(Margin::same(10)))
-                    .show_inside(ui, |ui| go_to = self.conversation(ui));
-            });
+        egui::CentralPanel::default().frame(frame).show_inside(ui, |ui| {
+            self.header(ui);
+            ui.add_space(4.0);
+            self.prompt_row(ui);
+            egui::TopBottomPanel::bottom("agent-composer")
+                .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 8, bottom: 0 }))
+                .show_separator_line(false)
+                .show_inside(ui, |ui| self.composer(ui));
+            egui::CentralPanel::default()
+                .frame(Frame::new().fill(palette.editor).corner_radius(CornerRadius::same(8)).inner_margin(Margin::same(10)))
+                .show_inside(ui, |ui| go_to = self.conversation(ui));
+        });
         go_to
     }
 
-    /// The title, the engine's name, and New, Resume and Close.
+    /// The engine's name, and New and Resume.
     fn header(&mut self, ui: &mut egui::Ui) {
         let palette = theme::palette();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-            icons::paint(ui.painter(), rect, Icon::Agent, palette.text_dim);
-            ui.label(RichText::new("Agent").strong().size(13.5).color(palette.text));
             ui.label(RichText::new(&self.engine_label).size(11.5).color(palette.text_faint));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let close = ui.add(Button::new(RichText::new("×").size(16.0).color(palette.text_dim)).frame(false));
-                if close.on_hover_text(tr("Close the panel", "Fermer le panneau")).clicked() {
-                    self.open = false;
-                }
                 let resume = ui.add_enabled(self.can_resume(), Button::new(RichText::new(tr("Resume last", "Reprendre")).size(12.0)));
                 let hint = tr("Bring back the last conversation about this file", "Reprendre la dernière conversation sur ce fichier");
                 if resume.on_hover_text(hint).clicked() {
@@ -1129,7 +1135,7 @@ fn user_message(ui: &mut egui::Ui, message: &UserMessage, shown: Option<&str>) {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new(tr("You", "Vous")).size(11.0).color(palette.text_dim));
-            ui.label(RichText::new(shown.unwrap_or(&message.text)).color(palette.text));
+            markdown(ui, shown.unwrap_or(&message.text));
             if !message.attachments.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -1633,7 +1639,7 @@ mod tests {
         // Asked about from the view: attached once, with a picture taken
         // when sent.
         panel.ask_about(context("Face of Top"));
-        assert!(panel.open);
+        assert!(panel.focus_input);
         panel.suggest(Some(context("Face of Top")), None);
         assert_eq!(panel.suggestions().count(), 0, "attached already");
         panel.attach_view = true;
