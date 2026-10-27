@@ -413,8 +413,9 @@ impl StudioApp {
     /// the chat folded over it and a turn under way; `agent`, the chat
     /// open over the view alone, a short conversation in it whose edit
     /// lands; `agent-edit` or `agent-review`, an edit of the agent's to
-    /// the active tab, made or under review. The edit scales the first
-    /// number in the first part.
+    /// the active tab, made or under review; `agent-markdown`, a reply
+    /// with a web search, a table, a quote, a rule and nested lists. The
+    /// edit scales the first number in the first part.
     pub(super) fn screenshot_agent(&mut self, ctx: &egui::Context) {
         let select = self.screenshot.as_ref().and_then(|s| s.select.clone()).unwrap_or_default();
         match select.as_str() {
@@ -427,6 +428,26 @@ impl StudioApp {
                 self.arrangement = super::Arrangement::Split;
                 self.overlay.minimised = true;
                 self.agent.send(tr("Make the box 40 mm wide, with a **lid**.", "Élargis la boîte à 40 mm, avec un **couvercle**."));
+                return;
+            }
+            "agent-markdown" => {
+                let reply = tr(
+                    "## Dimensions\n\nThe values I used, from the [ISO 4762 table](https://example.com/iso-4762):\n\n| Dimension | Value | Note |\n|:---|:---:|---:|\n| Head **Ø** | `5.5` mm | max |\n| Head height | 3 mm | *nominal* |\n| Hole | 3.4 mm | _clearance_ |\n\n> Check the head height against your screws.\n\n---\n\n- Walls\n  - 2 mm at the sides\n  - 3 mm at the bottom\n- Lid: **press fit**",
+                    "## Cotes\n\nLes valeurs retenues, d'après la [table ISO 4762](https://example.com/iso-4762) :\n\n| Cote | Valeur | Note |\n|:---|:---:|---:|\n| **Ø** de tête | `5,5` mm | max |\n| Hauteur de tête | 3 mm | *nominale* |\n| Perçage | 3,4 mm | _passage_ |\n\n> Vérifiez la hauteur de tête sur vos vis.\n\n---\n\n- Parois\n  - 2 mm sur les côtés\n  - 3 mm au fond\n- Couvercle : **emboîté**",
+                );
+                let events = vec![
+                    Event::ToolCall { id: "w1".into(), name: "web_search".into(), input: json!({ "query": "ISO 4762 M3 head dimensions" }) },
+                    Event::ToolResult {
+                        id: "w1".into(),
+                        content: vec![json!({ "type": "text", "text": "ISO 4762 — https://example.com/iso-4762" })],
+                        is_error: false,
+                    },
+                    Event::Text { delta: reply.into() },
+                    Event::Done { usage: Some(Usage { input_tokens: 8200, output_tokens: 420 }), cost_usd: None, session_id: None },
+                ];
+                self.agent.use_engine(Box::new(crate::agent_panel::ScriptedEngine(events)), "Claude Code · opus");
+                self.agent.send(tr("What dimensions for an M3 screw head?", "Quelles cotes pour une tête de vis M3 ?"));
+                self.open_chat(ctx);
                 return;
             }
             "agent" | "agent-edit" | "agent-review" => {}

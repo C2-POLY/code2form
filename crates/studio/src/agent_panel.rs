@@ -27,6 +27,7 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::agent_markdown::markdown;
 use crate::agent_setup::{self, AgentSettings, Built, EngineRequest, KeyChange, Prober};
 use crate::app::{overlay, review};
 use crate::app::selection_context::{self, Suggestion};
@@ -1750,7 +1751,7 @@ fn status_mark(ui: &mut egui::Ui, status: Status) {
 }
 
 /// Code or JSON on the editor's colors, wrapped.
-fn code_block(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn code_block(ui: &mut egui::Ui, text: &str) {
     let palette = theme::palette();
     Frame::new()
         .fill(palette.faint_bg)
@@ -1809,166 +1810,6 @@ fn decode_png(bytes: &[u8]) -> Option<([usize; 2], Vec<u8>)> {
         png::ColorType::Indexed => return None,
     };
     Some(([info.width as usize, info.height as usize], rgba))
-}
-
-// ---- Markdown ----
-
-/// A block of the assistant's Markdown.
-#[derive(Debug, PartialEq)]
-enum Block {
-    Paragraph(String),
-    Heading(String),
-    /// A list item, its marker (`•` or `1.`) and its text.
-    Item(String, String),
-    Code(String),
-}
-
-/// The blocks of `text`: paragraphs, headings, list items and fenced
-/// code, which runs to the end while its fence is not closed yet, as the
-/// reply streams in.
-fn blocks(text: &str) -> Vec<Block> {
-    let mut blocks = Vec::new();
-    let mut code: Option<Vec<&str>> = None;
-    // Whether the next plain line carries on the last block.
-    let mut joinable = false;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if let Some(lines) = &mut code {
-            if trimmed.starts_with("```") {
-                blocks.push(Block::Code(lines.join("\n")));
-                code = None;
-            } else {
-                lines.push(line);
-            }
-            continue;
-        }
-        if trimmed.starts_with("```") {
-            code = Some(Vec::new());
-            joinable = false;
-        } else if trimmed.is_empty() {
-            joinable = false;
-        } else if let Some(heading) = trimmed.strip_prefix('#') {
-            blocks.push(Block::Heading(heading.trim_start_matches('#').trim().to_string()));
-            joinable = false;
-        } else if let Some((marker, item)) = list_item(trimmed) {
-            blocks.push(Block::Item(marker, item.to_string()));
-            joinable = true;
-        } else {
-            match blocks.last_mut() {
-                Some(Block::Paragraph(text) | Block::Item(_, text)) if joinable => {
-                    text.push(' ');
-                    text.push_str(trimmed.trim_end());
-                }
-                _ => blocks.push(Block::Paragraph(trimmed.trim_end().to_string())),
-            }
-            joinable = true;
-        }
-    }
-    if let Some(lines) = code {
-        blocks.push(Block::Code(lines.join("\n")));
-    }
-    blocks
-}
-
-/// A list item's marker and text: `- a`, `* a`, `+ a` or `1. a`.
-fn list_item(line: &str) -> Option<(String, &str)> {
-    for bullet in ["- ", "* ", "+ "] {
-        if let Some(item) = line.strip_prefix(bullet) {
-            return Some(("•".into(), item));
-        }
-    }
-    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
-    let rest = &line[digits..];
-    let item = rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))?;
-    (digits > 0).then(|| (format!("{}.", &line[..digits]), item))
-}
-
-/// A run of inline Markdown.
-#[derive(Debug, PartialEq)]
-enum Span<'a> {
-    Plain(&'a str),
-    Bold(&'a str),
-    Code(&'a str),
-}
-
-/// The runs of `text`: `**bold**`, `` `code` ``, and the plain text
-/// between; a marker never closed is plain text.
-fn spans(text: &str) -> Vec<Span<'_>> {
-    let mut spans = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        let code = rest.find('`').map(|at| (at, "`"));
-        let bold = rest.find("**").map(|at| (at, "**"));
-        let marker = match (code, bold) {
-            (Some(c), Some(b)) => Some(if c.0 <= b.0 { c } else { b }),
-            (c, b) => c.or(b),
-        };
-        let Some((at, marker)) = marker else {
-            spans.push(Span::Plain(rest));
-            break;
-        };
-        let inner = &rest[at + marker.len()..];
-        let Some(end) = inner.find(marker).filter(|&end| end > 0) else {
-            spans.push(Span::Plain(rest));
-            break;
-        };
-        if at > 0 {
-            spans.push(Span::Plain(&rest[..at]));
-        }
-        let content = &inner[..end];
-        spans.push(if marker == "`" { Span::Code(content) } else { Span::Bold(content) });
-        rest = &inner[end + marker.len()..];
-    }
-    spans
-}
-
-/// `text` laid out in `width`, its inline Markdown styled.
-fn inline(ui: &egui::Ui, text: &str, size: f32, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
-    let palette = theme::palette();
-    let mut job = LayoutJob::default();
-    job.wrap.max_width = width;
-    for span in spans(text) {
-        let (text, format) = match span {
-            Span::Plain(text) => (text, TextFormat { font_id: FontId::proportional(size), color, ..Default::default() }),
-            Span::Bold(text) => (text, TextFormat { font_id: FontId::proportional(size), color: palette.text_strong, ..Default::default() }),
-            Span::Code(text) => (
-                text,
-                TextFormat { font_id: FontId::monospace(size - 1.0), color: palette.code_text, background: palette.raised, ..Default::default() },
-            ),
-        };
-        job.append(text, 0.0, format);
-    }
-    ui.painter().layout_job(job)
-}
-
-/// The assistant's reply, its Markdown drawn.
-fn markdown(ui: &mut egui::Ui, text: &str) {
-    let palette = theme::palette();
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 5.0;
-        for block in blocks(text) {
-            let width = ui.available_width();
-            match block {
-                Block::Paragraph(text) => {
-                    ui.label(inline(ui, &text, 13.5, palette.text, width));
-                }
-                Block::Heading(text) => {
-                    ui.label(inline(ui, &text, 15.0, palette.text_strong, width));
-                }
-                Block::Item(marker, text) => {
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 16.0), Sense::hover());
-                        let font = FontId::proportional(13.5);
-                        ui.painter().text(rect.right_top(), egui::Align2::RIGHT_TOP, marker, font, palette.text_dim);
-                        let width = ui.available_width();
-                        ui.label(inline(ui, &text, 13.5, palette.text, width));
-                    });
-                }
-                Block::Code(code) => code_block(ui, &code),
-            }
-        }
-    });
 }
 
 #[cfg(test)]
@@ -2326,29 +2167,6 @@ mod tests {
         let file = Path::new("/work/winder/winder.c2f");
         let electronics = prompt_text(Shortcut::Electronics, "an ESP32", Some(file), Some(folder)).unwrap();
         assert!(electronics.contains("winder.c2f") && electronics.contains("an ESP32"));
-    }
-
-    #[test]
-    fn markdown_splits_into_blocks_and_spans() {
-        let text = "# Plan\nFirst line\nsame paragraph.\n\n- one\n  more\n2. two\n```\ncube(1);\n\nsphere(2);\n```\nafter\n```\nopen";
-        assert_eq!(
-            blocks(text),
-            [
-                Block::Heading("Plan".into()),
-                Block::Paragraph("First line same paragraph.".into()),
-                Block::Item("•".into(), "one more".into()),
-                Block::Item("2.".into(), "two".into()),
-                Block::Code("cube(1);\n\nsphere(2);".into()),
-                Block::Paragraph("after".into()),
-                Block::Code("open".into()),
-            ]
-        );
-        assert_eq!(
-            spans("a **b** `c` d"),
-            [Span::Plain("a "), Span::Bold("b"), Span::Plain(" "), Span::Code("c"), Span::Plain(" d")]
-        );
-        assert_eq!(spans("2 ** 3 and `x"), [Span::Plain("2 ** 3 and `x")]);
-        assert_eq!(spans("`a**b`"), [Span::Code("a**b")]);
     }
 
     #[test]

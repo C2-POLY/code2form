@@ -4,6 +4,7 @@
 #[macro_use]
 mod i18n;
 mod agent_confirm;
+mod agent_markdown;
 mod agent_panel;
 mod agent_setup;
 mod animation;
