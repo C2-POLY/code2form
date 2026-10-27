@@ -42,7 +42,7 @@ const hero = (w: number) => asset(`images/hero-${lang}-${w}.webp`);
       fetchpriority="high"
     />
   </figure>
-  <p class="caption"><span class="dot dot-soon"></span>{s.hero.shotCaption}</p>
+  <p class="caption">{s.hero.shotCaption}</p>
 </div>
 
 <section class="band" aria-labelledby="ways-title">
@@ -80,7 +80,7 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
             <span>✓ edit_code · line 29</span>
             <span class="ok">✓ rendered · 55.99 → 63.98 mm</span>
           </div>
-          <h3>{s.ways.agent.title} <span class="tag soon">{s.ways.soon}</span></h3>
+          <h3>{s.ways.agent.title}</h3>
           <p>{s.ways.agent.text}</p>
         </div>
       </article>
@@ -124,7 +124,6 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
     <div class="split-text">
       <h2 id="review-title" class="h2">{s.review.title}</h2>
       <p class="lead">{s.review.text}</p>
-      <p class="small"><span class="dot dot-soon"></span>{s.review.soon}</p>
     </div>
   </div>
 </section>

@@ -32,7 +32,7 @@ const en = {
     printExample: 'Print an example',
     shotAlt:
       'The Code2Form window: a night light in the 3D view, and the agent’s chat floating over it, showing the line of code it changed',
-    shotCaption: 'Coming in the next release: the agent’s chat, floating over the view.',
+    shotCaption: 'The agent’s chat, floating over the view.',
   },
   ways: {
     title: 'One model, three ways in',
@@ -76,7 +76,7 @@ const en = {
       ['Pinion, 14 teeth', 'module 1.5'],
       ['Back plate and base', 'no supports'],
     ],
-    editKicker: 'Live, with the agent · next release',
+    editKicker: 'Live, with the agent',
     editTitle: '“Make the dome 8 mm taller.”',
     editFile: 'nightlight.c2f',
     editLineBefore: '// Height of the dome above the top.',
@@ -110,7 +110,6 @@ const en = {
     title: 'You keep the last word',
     text:
       'Every change the agent makes is one undo step, and one button undoes all of an answer. Ask it to wait for you, and each change shows as a diff, the new model over the old one, before you accept it.',
-    soon: 'Coming in the next release.',
     alt: 'The agent’s change under review: line 50 of the code, removed and added, with Decline and Accept',
   },
   examples: {

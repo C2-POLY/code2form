@@ -34,7 +34,7 @@ const fr: Strings = {
     printExample: 'Imprimer un exemple',
     shotAlt:
       'La fenêtre de Code2Form : une veilleuse dans la vue 3D, et la discussion avec l’agent qui flotte par-dessus, avec la ligne de code qu’il a modifiée',
-    shotCaption: 'Dans la prochaine version : la discussion avec l’agent, qui flotte sur la vue.',
+    shotCaption: 'La discussion avec l’agent, qui flotte sur la vue.',
   },
   ways: {
     title: 'Un modèle, trois façons de le faire',
@@ -78,7 +78,7 @@ const fr: Strings = {
       ['Pignon, 14 dents', 'module 1,5'],
       ['Plaque et socle', 'sans supports'],
     ],
-    editKicker: 'En direct, avec l’agent · prochaine version',
+    editKicker: 'En direct, avec l’agent',
     editTitle: '« Rends le dôme 8 mm plus haut. »',
     editFile: 'nightlight.c2f',
     editLineBefore: '// Height of the dome above the top.',
@@ -112,7 +112,6 @@ const fr: Strings = {
     title: 'Vous gardez le dernier mot',
     text:
       'Chaque modification de l’agent est une étape d’annulation, et un bouton annule toute une réponse. Demandez-lui de vous attendre, et chaque modification s’affiche en diff, le nouveau modèle sur l’ancien, avant que vous l’acceptiez.',
-    soon: 'Dans la prochaine version.',
     alt: 'La modification de l’agent en revue : la ligne 50 du code, retirée et ajoutée, avec Decline et Accept',
   },
   examples: {
