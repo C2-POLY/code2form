@@ -4750,7 +4750,7 @@ fn part_boxes(scene: &crate::worker::Scene) -> Vec<Option<(glam::Vec3, glam::Vec
 }
 
 /// Shows `file` in the Finder, selected, or opens its folder elsewhere.
-fn reveal(file: &Path) -> std::io::Result<()> {
+pub(crate) fn reveal(file: &Path) -> std::io::Result<()> {
     let mut command = if cfg!(target_os = "macos") {
         let mut command = std::process::Command::new("open");
         command.arg("-R").arg(file);

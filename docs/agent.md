@@ -150,6 +150,15 @@ asks for one line first: the idea, what the object is and does, or the
 components (links or library parts). Electronics needs the design saved:
 its circuit goes beside its file.
 
+Once the plan has saved its brief, a **Draw it from this brief** button
+under the last answer sends `design_object` with that brief. When the
+brief lists components (`component "…"` lines) and the design drawn from
+it is saved as the active file, **Add the electronics** sends
+`add_electronics` with the design, the brief and those components. A
+brief saved in an untitled tab's own folder comes with a note and a
+**Show in Finder** button (**Open the folder** on Windows and Linux):
+save the design in a folder of yours to keep them together.
+
 ### A change in words
 
 > make the dome 8 mm taller

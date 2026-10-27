@@ -414,7 +414,9 @@ impl StudioApp {
     /// open over the view alone, a short conversation in it whose edit
     /// lands; `agent-edit` or `agent-review`, an edit of the agent's to
     /// the active tab, made or under review; `agent-markdown`, a reply
-    /// with a web search, a table, a quote, a rule and nested lists. The
+    /// with a web search, a table, a quote, a rule and nested lists;
+    /// `agent-brief`, a brief saved in a scratch folder and the chip that
+    /// draws from it. The
     /// edit scales the first number in the first part.
     pub(super) fn screenshot_agent(&mut self, ctx: &egui::Context) {
         let select = self.screenshot.as_ref().and_then(|s| s.select.clone()).unwrap_or_default();
@@ -447,6 +449,20 @@ impl StudioApp {
                 ];
                 self.agent.use_engine(Box::new(crate::agent_panel::ScriptedEngine(events)), "Claude Code · opus");
                 self.agent.send(tr("What dimensions for an M3 screw head?", "Quelles cotes pour une tête de vis M3 ?"));
+                self.open_chat(ctx);
+                return;
+            }
+            "agent-brief" => {
+                let path = crate::agent_setup::scratch_folder("tab-14").join("brief.md").display().to_string();
+                let saved = json!({ "saved": true, "path": path, "requirements": [], "warnings": [] });
+                let events = vec![
+                    Event::ToolCall { id: "b1".into(), name: "save_brief".into(), input: json!({ "path": path, "text": "# Watch winder" }) },
+                    Event::ToolResult { id: "b1".into(), content: vec![json!({ "type": "text", "text": saved.to_string() })], is_error: false },
+                    Event::Text { delta: tr("The brief is saved: approve it, then draw the object from it.", "Le brief est enregistré : validez-le, puis dessinez l'objet à partir de lui.").into() },
+                    Event::Done { usage: Some(Usage { input_tokens: 6100, output_tokens: 380 }), cost_usd: None, session_id: None },
+                ];
+                self.agent.use_engine(Box::new(crate::agent_panel::ScriptedEngine(events)), "Claude Code · opus");
+                self.agent.send(tr("Plan a watch winder.", "Planifie un remontoir de montre."));
                 self.open_chat(ctx);
                 return;
             }

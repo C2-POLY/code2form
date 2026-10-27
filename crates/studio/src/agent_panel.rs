@@ -479,7 +479,13 @@ pub fn prompt_text(shortcut: Shortcut, answer: &str, file: Option<&Path>, folder
     if let Value::Object(map) = &mut arguments {
         map.retain(|_, value| !value.is_null());
     }
-    let prompt = c2f_agent::prompt(shortcut.prompt(), &arguments)?;
+    prompt_messages(shortcut.prompt(), &arguments)
+}
+
+/// The text of the prompt `name` filled in with `arguments`: its messages'
+/// texts, joined.
+fn prompt_messages(name: &str, arguments: &Value) -> Result<String, String> {
+    let prompt = c2f_agent::prompt(name, arguments)?;
     let texts: Vec<&str> = prompt["messages"]
         .as_array()
         .into_iter()
@@ -487,6 +493,104 @@ pub fn prompt_text(shortcut: Shortcut, answer: &str, file: Option<&Path>, folder
         .filter_map(|message| message["content"]["text"].as_str())
         .collect();
     Ok(texts.join("\n\n"))
+}
+
+// ---- Next steps ----
+
+/// A step the conversation leads to, offered as a chip under its last
+/// turn.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NextStep {
+    /// Draw the object from the brief the plan saved.
+    Design { brief: PathBuf },
+    /// Give the design drawn from `brief` the components it lists.
+    Electronics { design: PathBuf, brief: PathBuf, components: String },
+}
+
+impl NextStep {
+    fn label(&self) -> &'static str {
+        match self {
+            NextStep::Design { .. } => tr("Draw it from this brief", "Dessiner à partir de ce brief"),
+            NextStep::Electronics { .. } => tr("Add the electronics", "Ajouter l'électronique"),
+        }
+    }
+
+    /// The prompt it sends, the design saved in `folder`.
+    fn prompt(&self, folder: Option<&Path>) -> Result<String, String> {
+        let shown = |path: &Path| path.display().to_string();
+        let (name, arguments) = match self {
+            NextStep::Design { brief } => {
+                let mut arguments = json!({ "brief": shown(brief) });
+                if let Some(folder) = folder {
+                    arguments["folder"] = json!(shown(folder));
+                }
+                ("design_object", arguments)
+            }
+            NextStep::Electronics { design, brief, components } => {
+                ("add_electronics", json!({ "design": shown(design), "brief": shown(brief), "components": components }))
+            }
+        };
+        prompt_messages(name, &arguments)
+    }
+}
+
+/// The brief a successful `save_brief` call wrote, and the components its
+/// requirements list (`component "…"` lines).
+fn saved_brief(call: &ToolCall) -> Option<(PathBuf, Vec<String>)> {
+    if !is_tool(&call.name, "save_brief") || call.status != Status::Ok {
+        return None;
+    }
+    call.content.iter().find_map(|item| {
+        let result: Value = serde_json::from_str(item.get("text")?.as_str()?).ok()?;
+        if result["saved"] != true {
+            return None;
+        }
+        let components = result["requirements"].as_array().into_iter().flatten();
+        let components = components.filter(|r| r["kind"] == "component").filter_map(|r| r["value"].as_str().map(str::to_string));
+        Some((PathBuf::from(result["path"].as_str()?), components.collect()))
+    })
+}
+
+/// The last brief the conversation saved, and the entry after which it
+/// was saved.
+fn last_brief(entries: &[Entry]) -> Option<(usize, PathBuf, Vec<String>)> {
+    entries.iter().enumerate().rev().find_map(|(at, entry)| match entry {
+        Entry::Tool(call) => saved_brief(call).map(|(path, components)| (at, path, components)),
+        _ => None,
+    })
+}
+
+/// What the user sent after entry `at` that starts with `start`: a prompt
+/// of the studio's, recognised by its first words.
+fn sent_after(entries: &[Entry], at: usize, start: &str) -> bool {
+    entries[at..].iter().any(|entry| matches!(entry, Entry::User { message, .. } if message.text.starts_with(start)))
+}
+
+/// The steps the conversation leads to, once its turn is over: drawing the
+/// object once the plan saved its brief, then, once the design was drawn
+/// from it and saved as the active `file`, its electronics when the brief
+/// lists components. A step already taken is not offered again.
+pub fn next_steps(entries: &[Entry], file: Option<&Path>) -> Vec<NextStep> {
+    let Some((at, brief, components)) = last_brief(entries) else { return Vec::new() };
+    // The prompts' first words, as `c2f_agent::prompt` writes them.
+    let designing = "Design this object with Code2Form";
+    if !sent_after(entries, at, designing) {
+        return vec![NextStep::Design { brief }];
+    }
+    let design = file.filter(|file| file.extension().is_some_and(|e| e == "c2f") && file.is_file());
+    match design {
+        Some(design) if !components.is_empty() && !sent_after(entries, at, "Add the electronics to") => {
+            vec![NextStep::Electronics { design: design.to_path_buf(), brief, components: components.join(", ") }]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The brief the conversation last saved, when it is in an untitled tab's
+/// scratch folder, which the user would not find.
+pub fn brief_in_scratch(entries: &[Entry]) -> Option<PathBuf> {
+    let (_, brief, _) = last_brief(entries)?;
+    brief.starts_with(agent_setup::scratch_folder("")).then_some(brief)
 }
 
 // ---- Engines ----
@@ -660,6 +764,8 @@ pub struct AgentPanel {
     pub starters: Vec<Starter>,
     /// The height the card's header and field took at the last frame.
     chrome: f32,
+    /// The next step the user picked under the last turn.
+    next_asked: Option<NextStep>,
 }
 
 impl AgentPanel {
@@ -698,6 +804,7 @@ impl AgentPanel {
             awaiting_view: None,
             undo_offer: None,
             undo_asked: false,
+            next_asked: None,
             starters: Vec::new(),
             chrome: 170.0,
         };
@@ -1075,6 +1182,21 @@ impl AgentPanel {
         self.engine_problem = None;
     }
 
+    /// Sends the prompt of `step`, the design saved in the active tab's
+    /// folder.
+    fn take_step(&mut self, step: &NextStep) {
+        if self.running() {
+            return;
+        }
+        match step.prompt(self.folder.as_deref()) {
+            Ok(text) => {
+                let message = UserMessage { text, attachments: self.outgoing() };
+                self.start(message, Some(step.label().to_string()));
+            }
+            Err(why) => self.problem = Some(why),
+        }
+    }
+
     /// Sends the prompt asked for in the inline field.
     fn send_prompt(&mut self, shortcut: Shortcut, answer: &str) {
         if answer.trim().is_empty() {
@@ -1127,6 +1249,9 @@ impl AgentPanel {
                         let max = overlay::conversation_room(self.chrome, place.cap);
                         let (go_to, height) = self.conversation(ui, max);
                         out.go_to = go_to;
+                        if let Some(step) = self.next_asked.take() {
+                            self.take_step(&step);
+                        }
                         height
                     };
                     ui.add_space(8.0);
@@ -1433,7 +1558,9 @@ impl AgentPanel {
         let running = self.running();
         let file = self.owner.as_deref().or(self.file.as_deref()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
         let file = file.unwrap_or_else(|| tr("Untitled", "Sans titre").to_string());
-        let AgentPanel { transcript, unfolded, thumbnails, undo_offer, undo_asked, .. } = self;
+        let steps = if running { Vec::new() } else { next_steps(&self.transcript.entries, self.file.as_deref()) };
+        let scratch = if running { None } else { brief_in_scratch(&self.transcript.entries) };
+        let AgentPanel { transcript, unfolded, thumbnails, undo_offer, undo_asked, next_asked, .. } = self;
         let mut go_to = None;
         let scroll = egui::ScrollArea::vertical().max_height(max).auto_shrink([false, true]).stick_to_bottom(true).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
@@ -1460,6 +1587,18 @@ impl AgentPanel {
                     ui.add(egui::Spinner::new().size(12.0).color(palette.text_dim));
                     ui.label(RichText::new(tr("Thinking…", "Réflexion…")).size(12.0).color(palette.text_dim));
                 });
+            }
+            if !steps.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    for step in steps {
+                        if suggestion_chip(ui, step.label()).clicked() {
+                            *next_asked = Some(step);
+                        }
+                    }
+                });
+            }
+            if let Some(brief) = &scratch {
+                scratch_notice(ui, brief);
             }
             if let Some(label) = undo_offer.as_deref().filter(|_| !running) {
                 let hint = tr("Put the code back as it was before the agent's answer, in one step", "Remettre le code comme avant la réponse de l'agent, en une étape");
@@ -1520,6 +1659,24 @@ fn small_icon(ui: &mut egui::Ui, icon: Icon, hint: &str) -> egui::Response {
     let color = if response.hovered() { palette.text_strong } else { palette.text_dim };
     icons::paint(ui.painter(), egui::Rect::from_center_size(rect.center(), Vec2::splat(15.0)), icon, color);
     response.on_hover_text(hint)
+}
+
+/// A note that the brief is in an untitled tab's scratch folder, with a
+/// button that shows it in the Finder (or opens its folder).
+fn scratch_notice(ui: &mut egui::Ui, brief: &Path) {
+    let palette = theme::palette();
+    ui.label(
+        RichText::new(tr(
+            "The brief is in this untitled tab's own folder. Save the design in a folder of yours to keep them together.",
+            "Le brief est dans le dossier propre à cet onglet sans titre. Enregistrez le design dans un de vos dossiers pour les garder ensemble.",
+        ))
+        .size(12.0)
+        .color(palette.text_dim),
+    );
+    let label = if cfg!(target_os = "macos") { tr("Show in Finder", "Afficher dans le Finder") } else { tr("Open the folder", "Ouvrir le dossier") };
+    if ui.small_button(label).on_hover_text(brief.display().to_string()).clicked() {
+        let _ = crate::app::reveal(brief);
+    }
 }
 
 /// A suggestion of what to ask, as a rounded chip that sends it.
@@ -2167,6 +2324,74 @@ mod tests {
         let file = Path::new("/work/winder/winder.c2f");
         let electronics = prompt_text(Shortcut::Electronics, "an ESP32", Some(file), Some(folder)).unwrap();
         assert!(electronics.contains("winder.c2f") && electronics.contains("an ESP32"));
+    }
+
+    fn brief_saved(path: &Path, components: &[&str]) -> Entry {
+        let mut requirements = vec![json!({ "line": 5, "text": "mass < 400 g", "kind": "mass", "op": "<", "value": 400, "checkable": true })];
+        requirements.extend(components.iter().map(|c| json!({ "line": 6, "text": c, "kind": "component", "op": null, "value": c, "checkable": true })));
+        let result = json!({ "saved": true, "path": path.display().to_string(), "requirements": requirements, "warnings": [] });
+        Entry::Tool(ToolCall {
+            id: "b1".into(),
+            name: "mcp__code2form__save_brief".into(),
+            input: json!({ "path": path.display().to_string(), "text": "# Winder" }),
+            status: Status::Ok,
+            content: vec![json!({ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap() })],
+        })
+    }
+
+    fn sent(text: &str) -> Entry {
+        Entry::User { message: UserMessage::text(text), shown: None }
+    }
+
+    #[test]
+    fn a_saved_brief_offers_to_draw_it_then_its_electronics() {
+        let dir = temp_store("next-steps");
+        std::fs::create_dir_all(&dir).unwrap();
+        let brief = dir.join("brief.md");
+        let design = dir.join("winder.c2f");
+        let mut entries = vec![sent("plan a winder"), brief_saved(&brief, &["28BYJ-48.c2f"]), Entry::Assistant { text: "Saved.".into() }];
+        assert_eq!(next_steps(&entries, None), [NextStep::Design { brief: brief.clone() }]);
+
+        // A brief refused, or another tool, offers nothing.
+        let Entry::Tool(call) = &entries[1] else { panic!() };
+        assert_eq!(next_steps(&[Entry::Tool(ToolCall { status: Status::Error, ..call.clone() })], None), []);
+        let refused = json!({ "saved": false, "why": ["it has no `# Title`"] }).to_string();
+        let refused = ToolCall { content: vec![json!({ "type": "text", "text": refused })], ..call.clone() };
+        assert_eq!(next_steps(&[Entry::Tool(refused)], None), []);
+        assert_eq!(next_steps(&[Entry::Tool(ToolCall { name: "read_brief".into(), ..call.clone() })], None), []);
+
+        // The chip's prompt draws from the brief, in the tab's folder.
+        let step = NextStep::Design { brief: brief.clone() };
+        let text = step.prompt(Some(&dir)).unwrap();
+        assert!(text.starts_with("Design this object with Code2Form"), "{text}");
+        assert!(text.contains(&format!("Brief: {}", brief.display())));
+        assert!(text.contains(&format!("Save it in: {}", dir.display())));
+
+        // Once drawn and saved, its electronics, with the brief's components.
+        entries.push(sent(&text));
+        assert_eq!(next_steps(&entries, None), [], "no design saved yet");
+        assert_eq!(next_steps(&entries, Some(&design)), [], "the file is not there");
+        std::fs::write(&design, "cube(10);").unwrap();
+        let electronics = NextStep::Electronics { design: design.clone(), brief: brief.clone(), components: "28BYJ-48.c2f".into() };
+        assert_eq!(next_steps(&entries, Some(&design)), [electronics.clone()]);
+        let text = electronics.prompt(None).unwrap();
+        assert!(text.starts_with(&format!("Add the electronics to the approved design {}", design.display())), "{text}");
+        assert!(text.contains("Components: 28BYJ-48.c2f") && text.contains(&format!("Brief: {}", brief.display())));
+        entries.push(sent(&text));
+        assert_eq!(next_steps(&entries, Some(&design)), []);
+
+        // A brief without components stops at the drawing.
+        let plain = vec![brief_saved(&brief, &[]), sent("Design this object with Code2Form, …")];
+        assert_eq!(next_steps(&plain, Some(&design)), []);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_brief_in_a_scratch_folder_is_pointed_out() {
+        let scratch = agent_setup::scratch_folder("tab-14").join("brief.md");
+        assert_eq!(brief_in_scratch(&[brief_saved(&scratch, &[])]), Some(scratch));
+        assert_eq!(brief_in_scratch(&[brief_saved(Path::new("/work/winder/brief.md"), &[])]), None);
+        assert_eq!(brief_in_scratch(&[]), None);
     }
 
     #[test]

@@ -18,6 +18,7 @@
 //! shows an edit of the agent's landing (its line marked, its part
 //! flashed), and `agent-review` the review of one before it applies;
 //! `agent-markdown` a reply in Markdown, with a table, after a web search;
+//! `agent-brief` a brief saved in a scratch folder, and its next step;
 //! `start`, run without a file, the start screen of a new file.
 //! `CODE2FORM_APPEARANCE` picks the theme, `CODE2FORM_LANGUAGE` the
 //! language (`en` or `fr`). The run quits once the picture is saved.
