@@ -48,6 +48,17 @@ use crate::window;
 use crate::wiring::{self, Emphasis, Look, Wiring};
 use crate::worker::{ExportOptions, Format, Reply, Worker, group_digits};
 
+mod handles;
+mod modelling;
+mod properties;
+mod shapes;
+mod sketch;
+mod toolbar;
+mod tree;
+mod workspace;
+#[cfg(test)]
+mod e2e;
+
 /// File dialog filters: a name and an extension.
 fn design_files() -> (&'static str, &'static str) {
     (tr("Code2Form design", "Fichier Code2Form"), "c2f")
@@ -106,6 +117,8 @@ const MODEL_COLORS: [NamedColor; 8] = [
 
 /// The pages of the settings window.
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// The settings' pages, in their order: the work first, the app's icon
+/// last.
 enum Section {
     General,
     Appearance,
@@ -300,6 +313,8 @@ struct Tab {
     explode_shown: f32,
     /// Radially, or along each part's axis.
     explode_how: c2f_geom::Explode,
+    /// The sketch mode, when on, and the sketch it left unfinished.
+    sketch: sketch::SketchState,
 }
 
 impl Tab {
@@ -342,6 +357,7 @@ impl Tab {
             explode_amount: EXPLODE_START,
             explode_shown: 0.0,
             explode_how: c2f_geom::Explode::default(),
+            sketch: sketch::SketchState::default(),
         }
     }
 
@@ -455,6 +471,10 @@ pub struct StudioApp {
     /// switch, as last drawn.
     header_right: f32,
     header_switch: f32,
+    /// The tree of the active tab's program, as last read.
+    tree: tree::TreeState,
+    /// The tabs picked in the side panels.
+    panels: workspace::Panels,
 }
 
 impl StudioApp {
@@ -502,7 +522,7 @@ impl StudioApp {
             wire_margin: WireMargin::load(crate::prefs::wire_margin_store()),
             started: Instant::now(),
             view_rect: egui::Rect::NOTHING,
-            console_open: true,
+            console_open: false,
             catalogue: Catalogue::new(ctx),
             catalogue_open: false,
             recent,
@@ -524,6 +544,8 @@ impl StudioApp {
             arrangement: Arrangement::Split,
             header_right: 0.0,
             header_switch: 0.0,
+            tree: tree::TreeState::default(),
+            panels: workspace::Panels::default(),
         };
         app.apply_settings(ctx);
         // A screenshot of a layout, as `layout:view`.
@@ -633,7 +655,7 @@ impl StudioApp {
         if self.doc.sent == 0 || self.doc.stale || lost {
             self.render_now();
         }
-        self.doc.editor.focus(ctx);
+        self.focus_editor(ctx);
     }
 
     /// Closes tab `index`, first asking about its unsaved edits, in the
@@ -825,6 +847,16 @@ impl StudioApp {
                         self.doc.part_boxes = part_boxes(&scene);
                         if on_screen {
                             self.doc.viewer.set_scene(scene, frame);
+                            // A screenshot of a design's selection, as `code:cube(` asks.
+                            let target = self.screenshot.as_ref().and_then(|s| s.select.clone()).filter(|_| shown);
+                            if let Some(offset) = target.and_then(|t| self.doc.text.find(t.strip_prefix("code:")?)) {
+                                self.doc.viewer.select_at(offset);
+                                self.doc.viewer.take_picked();
+                            }
+                            // The sketch mode, as `sketch:xy` or `sketch:open:l_bracket` asks.
+                            if let Some(spec) = self.screenshot.as_mut().and_then(|s| s.select.take_if(|t| shown && t.starts_with("sketch:"))) {
+                                self.doc.sketch.screenshot = Some(spec);
+                            }
                             if let Some(section) = cut.filter(|_| shown) {
                                 self.doc.viewer.show_section(section);
                             }
@@ -851,6 +883,10 @@ impl StudioApp {
                         }
                     }
                     Err(line) => {
+                        // A render that starts failing shows why.
+                        if !self.doc.failed {
+                            self.console_open = true;
+                        }
                         self.doc.failed = true;
                         self.doc.editor.error_line = line.or(outcome.annotation_error);
                     }
@@ -1658,6 +1694,26 @@ impl StudioApp {
         }
     }
 
+    /// Links the objects selected in a design's view and the code: a click
+    /// puts the editor on the statement's line, and the editor's cursor
+    /// lights up the statement it is in. Both only while the code is the
+    /// one on screen, whose bytes the statements point into.
+    fn design_selection(&mut self, ctx: &egui::Context) {
+        let current = self.doc.viewer.scene_source() == self.doc.text;
+        if let Some(key) = self.doc.viewer.take_picked() {
+            match key.range() {
+                Some(range) if current => self.doc.editor.go_to(ctx, &self.doc.text, range.start),
+                Some(_) => {}
+                None => {
+                    let message = "This shape comes from a library or an included file: it is read-only here";
+                    self.doc.console.log(Level::Info, message);
+                }
+            }
+        }
+        let offset = self.doc.editor.focused_offset.filter(|_| current);
+        self.doc.viewer.set_cursor(offset);
+    }
+
     // ---- Files ----
 
     /// Opens the file at `path` in a tab: its own tab when it is open
@@ -1679,7 +1735,7 @@ impl StudioApp {
                     self.add_tab();
                 }
                 self.load(path, text);
-                self.doc.editor.focus(ctx);
+                self.focus_editor(ctx);
             }
             Err(err) => self.doc.console.log(Level::Error, tr!("Cannot open {}: {err}", "Impossible d'ouvrir {} : {err}", path.display())),
         }
@@ -1801,7 +1857,7 @@ impl StudioApp {
         self.add_tab();
         self.doc.console.log(Level::Info, tr("New file", "Nouveau fichier"));
         self.render_now();
-        self.doc.editor.focus(ctx);
+        self.focus_editor(ctx);
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
@@ -2188,6 +2244,11 @@ impl StudioApp {
                 Action::ZoomOut => zoom_steps -= 1,
                 Action::ZoomReset => zoom_reset = true,
                 Action::Settings => self.settings_open = true,
+                Action::SwitchWorkspace => {
+                    if !self.doc.is_circuit() {
+                        self.set_workspace(ctx, self.settings.workspace.other());
+                    }
+                }
             }
         }
         let size = if zoom_reset {
@@ -2326,8 +2387,15 @@ impl StudioApp {
                     });
                 ui.add_space((switch_left - ui.cursor().min.x).max(0.0));
                 let switch = ui.scope(|ui| {
-                    if let Some(arrangement) = layout_switch(ui, self.arrangement) {
-                        self.arrangement = arrangement;
+                    // A design is made with the mouse or in code; in code,
+                    // beside the view or one of them alone.
+                    if !self.doc.is_circuit() {
+                        self.workspace_switch(ctx, ui);
+                    }
+                    if !self.models() {
+                        if let Some(arrangement) = layout_switch(ui, self.arrangement) {
+                            self.arrangement = arrangement;
+                        }
                     }
                 });
                 self.header_switch = switch.response.rect.width();
@@ -2634,7 +2702,7 @@ impl StudioApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     // The tab names the file; its path, on hover.
-                    if self.arrangement != Arrangement::View {
+                    if self.arrangement() != Arrangement::View {
                         if let Some((line, column)) = self.doc.editor.cursor {
                             ui.label(small(tr!("Ln {}, Col {}", "Ligne {}, col {}", line + 1, column + 1)));
                         }
@@ -2709,12 +2777,25 @@ impl StudioApp {
         }
     }
 
-    /// The code, and the console under it.
+    /// The code, and the console under it; a design's tree is a tab away.
     fn code_column(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         let max = ui.available_height() * 0.6;
         self.console_dock(max).show_inside(ui, |ui| self.console_contents(ui));
+        let design = !self.doc.is_circuit();
+        if design {
+            let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 12, right: 12, top: 8, bottom: 0 });
+            egui::TopBottomPanel::top("code-tabs").frame(frame).show_separator_line(false).show_inside(ui, |ui| {
+                let choices = [(workspace::CodeTab::Code, tr("Code", "Code")), (workspace::CodeTab::Tree, tr("Tree", "Arbre"))];
+                workspace::tab_strip(ui, &mut self.panels.code_tab, &choices);
+            });
+        }
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().editor)).show_inside(ui, |ui| {
-            if self.doc.editor.show(ui, &mut self.doc.text) {
+            if design && self.panels.code_tab == workspace::CodeTab::Tree {
+                Frame::new().inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 }).show(ui, |ui| {
+                    self.tree_view(&ctx, ui);
+                });
+            } else if self.doc.editor.show(ui, &mut self.doc.text) {
                 if self.settings.render_while_typing {
                     let delay = Duration::from_millis(self.settings.render_delay.into());
                     self.doc.render_deadline = Some(Instant::now() + delay);
@@ -2725,12 +2806,18 @@ impl StudioApp {
         });
     }
 
+    /// How the code and the view share the window: the Model workspace
+    /// shows the view alone, with the tree and the inspector around it.
+    fn arrangement(&self) -> Arrangement {
+        if self.models() { Arrangement::View } else { self.arrangement }
+    }
+
     /// The code: beside the view, or across the window when it is shown
     /// alone. With the view alone, the console takes the bottom of the
     /// window.
     fn code_panel(&mut self, ctx: &egui::Context) {
         let width = ctx.screen_rect().width();
-        match self.arrangement {
+        match self.arrangement() {
             Arrangement::View => {
                 let max = ctx.screen_rect().height() * 0.6;
                 self.console_dock(max).show(ctx, |ui| self.console_contents(ui));
@@ -2752,12 +2839,13 @@ impl StudioApp {
     }
 
     fn view_panel(&mut self, ctx: &egui::Context) {
-        if self.arrangement == Arrangement::Code {
+        if self.arrangement() == Arrangement::Code {
             return;
         }
         let mut remove_part = None;
         let animated = self.doc.animation.animated && !self.doc.is_circuit();
-        let card = !self.doc.is_circuit();
+        // The Model workspace has the parameters in its inspector.
+        let card = !self.doc.is_circuit() && !self.models();
         // The floating bars cover the view's edges: its own overlays keep
         // clear of them.
         let exploding = self.doc.exploded && self.doc.viewer.can_explode() && !self.doc.is_circuit();
@@ -2768,7 +2856,9 @@ impl StudioApp {
             right: if card && self.doc.customizer_shown() { 300.0 } else { 0.0 },
         };
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().bg)).show(ctx, |ui| {
-            let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty);
+            // A sketch being drawn is something to show: no empty-state card
+            // over it.
+            let has_model = self.doc.model.as_ref().is_some_and(|m| !m.empty) || self.doc.sketch.active();
             let status = viewer::Status {
                 rendering: self.doc.busy(),
                 failed: self.doc.failed,
@@ -2786,10 +2876,15 @@ impl StudioApp {
             // A double-click on a part opens it rather than framing the view.
             self.doc.viewer.frame_on_double_click = !matches!(self.doc.hover, Some(Hit::Part(_)));
             self.start_rewire(ctx);
-            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none();
+            // The handles are off while sketching.
+            let handles = !self.doc.sketch.active() && self.handles_before_view(ctx);
+            self.doc.viewer.orbit_enabled = self.doc.rewire.is_none() && self.doc.part_drag.is_none() && !handles;
+            self.sketch_before_view();
             let response = self.doc.viewer.show(ui, &status);
             self.view_rect = response.rect;
             self.circuit_input(ctx, &response);
+            self.design_selection(ctx);
+            self.modelling_view(ctx, ui, &response);
             self.paint_rewire(&ui.painter_at(response.rect), response.rect, ctx.input(|i| i.pointer.interact_pos()));
             if let (Some((drag, _, true, original)), Some(pointer)) = (&self.doc.part_drag, response.hover_pos()) {
                 let name = &original.parts[drag.part].name;
@@ -3571,6 +3666,25 @@ impl StudioApp {
     }
 }
 
+impl StudioApp {
+    /// The window's bars, panels, view and dialogs, in the order egui lays
+    /// them out: the bars across the window first, then the side panels,
+    /// then the view in what is left.
+    fn panels(&mut self, ctx: &egui::Context) {
+        self.refocus(ctx);
+        self.header(ctx);
+        self.tools_panel(ctx);
+        self.status_bar(ctx);
+        self.catalogue_panel(ctx);
+        self.code_panel(ctx);
+        self.modelling_panels(ctx);
+        self.view_panel(ctx);
+        self.settings_dialog(ctx);
+        self.confirm_dialog(ctx);
+        self.drop_unseen_focus(ctx);
+    }
+}
+
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if theme::follow(ctx, self.settings.appearance) {
@@ -3588,13 +3702,7 @@ impl eframe::App for StudioApp {
         self.shortcuts(ctx);
         self.poll_disk(ctx);
 
-        self.header(ctx);
-        self.status_bar(ctx);
-        self.catalogue_panel(ctx);
-        self.code_panel(ctx);
-        self.view_panel(ctx);
-        self.settings_dialog(ctx);
-        self.confirm_dialog(ctx);
+        self.panels(ctx);
         self.keep_settings(ctx);
 
         if let Some(deadline) = self.doc.render_deadline {

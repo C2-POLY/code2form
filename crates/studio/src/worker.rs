@@ -50,6 +50,8 @@ pub struct Scene {
     /// For a design with `part()`s, its parts drawn each on its own, for the
     /// exploded view.
     pub exploded: Option<Arc<c2f_geom::Exploded>>,
+    /// What a click in the view picks, for a design (not a circuit).
+    pub picking: Option<Arc<crate::select::Picking>>,
 }
 
 impl Scene {
@@ -354,7 +356,14 @@ fn render_source(
         },
     );
     let (result, shown) = match result {
-        Ok((mut rendered, program)) => {
+        Ok((mut rendered, program, origins)) => {
+            let picking = crate::select::Picking::new(
+                origins,
+                &rendered.solid,
+                &rendered.highlights,
+                &rendered.backgrounds,
+                &rendered.cutters,
+            );
             let scene = Scene {
                 solid: std::mem::take(&mut rendered.solid),
                 highlights: std::mem::take(&mut rendered.highlights),
@@ -368,6 +377,7 @@ fn render_source(
                 parts: Vec::new(),
                 enclosure: 0..0,
                 exploded: exploded.map(Arc::new),
+                picking: Some(Arc::new(picking)),
             };
             (Ok(scene), Some(Shown { rendered, program, source: source.to_string() }))
         }
@@ -471,7 +481,7 @@ pub fn render_part(source: &str, path: &Path, library_paths: &[PathBuf]) -> Part
     });
     let console = circuit::label_lines(console, path);
     match result {
-        Ok((rendered, _)) => PartRender {
+        Ok((rendered, _, _)) => PartRender {
             triangles: rendered.stats.triangles,
             solid: rendered.solid,
             highlights: rendered.highlights,
@@ -564,7 +574,7 @@ fn pipeline(
     t: f64,
     library_paths: &[PathBuf],
     report: Report,
-) -> Result<(Rendered, c2f_eval::Program), Option<usize>> {
+) -> Result<(Rendered, c2f_eval::Program, Vec<c2f_eval::Origin>), Option<usize>> {
     let Report { console, parameters, annotation_error, animated, exploded } = report;
     let mut program = match c2f_eval::Program::load(source, path, library_paths) {
         Ok(program) => program,
@@ -604,7 +614,7 @@ fn pipeline(
         *exploded = c2f_geom::exploded(&output.nodes, base_dir);
     }
     console.extend(rendered.warnings.iter().map(|text| Line::new(Level::Warning, text.clone())));
-    Ok((rendered, program))
+    Ok((rendered, program, output.origins))
 }
 
 fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {

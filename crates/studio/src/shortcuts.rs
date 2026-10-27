@@ -28,6 +28,8 @@ pub enum Action {
     ZoomOut,
     ZoomReset,
     Settings,
+    /// From the Model workspace to the Code one, and back.
+    SwitchWorkspace,
 }
 
 const fn keys(modifiers: Modifiers, key: Key) -> KeyboardShortcut {
@@ -38,7 +40,7 @@ const SHIFT_COMMAND: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND }
 const ALT_COMMAND: Modifiers = Modifiers { alt: true, ..Modifiers::COMMAND };
 
 impl Action {
-    pub const ALL: [Action; 17] = [
+    pub const ALL: [Action; 18] = [
         Action::New,
         Action::Open,
         Action::Save,
@@ -56,6 +58,7 @@ impl Action {
         Action::ZoomOut,
         Action::ZoomReset,
         Action::Settings,
+        Action::SwitchWorkspace,
     ];
 
     /// As `settings.txt` writes it, after `shortcut-`.
@@ -78,6 +81,7 @@ impl Action {
             Action::ZoomOut => "zoom-out",
             Action::ZoomReset => "zoom-reset",
             Action::Settings => "settings",
+            Action::SwitchWorkspace => "workspace",
         }
     }
 
@@ -100,6 +104,7 @@ impl Action {
             Action::ZoomOut => tr("Smaller Interface", "Réduire l'interface"),
             Action::ZoomReset => tr("Interface at 100%", "Interface à 100 %"),
             Action::Settings => tr("Settings…", "Réglages…"),
+            Action::SwitchWorkspace => tr("Switch Model / Code", "Basculer Modèle / Code"),
         }
     }
 
@@ -123,6 +128,7 @@ impl Action {
             Action::ZoomOut => keys(Modifiers::COMMAND, Key::Minus),
             Action::ZoomReset => keys(Modifiers::COMMAND, Key::Num0),
             Action::Settings => keys(Modifiers::COMMAND, Key::Comma),
+            Action::SwitchWorkspace => keys(Modifiers::COMMAND, Key::E),
         }
     }
 }

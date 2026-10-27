@@ -27,6 +27,9 @@ pub struct Editor {
     pub error_line: Option<usize>,
     /// Where the cursor is, 0-based line and column, for the status bar.
     pub cursor: Option<(usize, usize)>,
+    /// The cursor's byte offset in the text, while the editor has the
+    /// focus: the 3D view lights up the statement there.
+    pub focused_offset: Option<usize>,
     /// The selection as last shown, to start a search from.
     selection: Option<CCursorRange>,
     /// A byte offset to scroll into view once laid out.
@@ -121,6 +124,7 @@ impl Editor {
             highlighter: Highlighter::default(),
             error_line: None,
             cursor: None,
+            focused_offset: None,
             selection: None,
             reveal_at: None,
             find: FindBar::default(),
@@ -138,6 +142,12 @@ impl Editor {
     }
 
     /// Gives the editor keyboard focus.
+    /// The id of its text field, which has the keyboard when typing.
+    #[cfg(test)]
+    pub fn id(&self) -> Id {
+        self.id
+    }
+
     pub fn focus(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(self.id));
     }
@@ -234,6 +244,7 @@ impl Editor {
                 }
 
                 let has_focus = output.response.has_focus();
+                self.focused_offset = cursor_range.filter(|_| has_focus).map(|r| byte_index(text, r.primary.index));
                 self.selection = cursor_range;
                 self.cursor = cursor_range.map(|r| line_and_column(text, r.primary.index));
                 let current_line = if has_focus { self.cursor.map(|(line, _)| line) } else { None };

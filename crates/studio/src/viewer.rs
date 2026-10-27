@@ -15,6 +15,7 @@ use crate::camera::Camera;
 use crate::i18n::tr;
 use crate::pause_edit;
 use crate::pick::Ray;
+use crate::select::{Picking, Statement};
 use crate::wiring::{Emphasis, shade};
 use crate::renderer::{self, Grid, Renderer, Section};
 use crate::theme;
@@ -133,9 +134,14 @@ pub struct Viewer {
     /// A double-click frames the view; the app turns it off while the
     /// pointer is over something a double-click opens.
     pub frame_on_double_click: bool,
+    /// The card that names the selection; off while a panel shows it.
+    pub selection_card: bool,
     /// A drag turns or pans the camera; the app turns it off while a drag
     /// rewires a circuit.
     pub orbit_enabled: bool,
+    /// A click selects; the app turns it off while it uses clicks itself,
+    /// as the sketch mode does.
+    pub select_enabled: bool,
     pauses: Vec<PauseMark>,
     /// The text the scene was rendered from.
     scene_source: String,
@@ -154,9 +160,49 @@ pub struct Viewer {
     grid: Grid,
     /// Width over height of the viewport, as last shown.
     aspect: f32,
+    /// What a click picks in a design; `None` for a circuit, which picks
+    /// its own way.
+    picking: Option<Arc<Picking>>,
+    /// The statements selected in the view, in the order they were.
+    selection: Vec<Statement>,
+    /// The statement under the pointer, and the ones at the editor's
+    /// cursor: shown lighter than the selection.
+    hovered: Option<Statement>,
+    at_cursor: Option<Statement>,
+    /// The statement last clicked, for the app to show in the editor.
+    picked: Option<Statement>,
+    /// What to select once the scene rendered from this text arrives: the
+    /// statements an edit of the code left selected, as byte ranges.
+    select_after: Option<(String, Vec<std::ops::Range<usize>>)>,
+    /// The highlight as last sent, not to rebuild it every frame.
+    shown_highlight: (Vec<Statement>, Vec<Statement>),
+    /// Where a handle's drag has the selection, as a transform of its
+    /// highlight, until the design renders again.
+    preview: Option<Mat4>,
+    /// The box around the selection, for the picking and selection it was
+    /// found for: the handles ask for it every frame, and finding it reads
+    /// every triangle of the scene.
+    selection_box: Mutex<Option<SelectionBox>>,
     /// The room the app's bars take over the view's edges: the view's own
     /// badges, gizmo, hints and layer slider keep clear of it.
     pub insets: Insets,
+}
+
+/// [`Viewer::selection_bounds`] as last found.
+struct SelectionBox {
+    picking: Arc<Picking>,
+    selection: Vec<Statement>,
+    bounds: Option<(Vec3, Vec3)>,
+}
+
+/// How a click picks: Shift adds to the selection, Alt reaches the shapes
+/// that are not drawn (what a difference subtracts), and a double-click
+/// goes inside modules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Click {
+    pub add: bool,
+    pub hidden: bool,
+    pub deep: bool,
 }
 
 /// Room taken over the edges of the view, in points.
@@ -206,7 +252,9 @@ impl Viewer {
             section_bounds: None,
             part_colors: Vec::new(),
             frame_on_double_click: true,
+            selection_card: true,
             orbit_enabled: true,
+            select_enabled: true,
             pauses: Vec::new(),
             scene_source: String::new(),
             exploded: None,
@@ -220,6 +268,15 @@ impl Viewer {
             grid,
             aspect: 1.5,
             insets: Insets::default(),
+            picking: None,
+            selection: Vec::new(),
+            hovered: None,
+            at_cursor: None,
+            picked: None,
+            select_after: None,
+            shown_highlight: (Vec::new(), Vec::new()),
+            preview: None,
+            selection_box: Mutex::new(None),
         };
         viewer.reset();
         viewer
@@ -243,7 +300,7 @@ impl Viewer {
                 .collect(),
             None => Vec::new(),
         };
-        self.scene_source = scene.source.clone();
+        let old_source = std::mem::replace(&mut self.scene_source, scene.source.clone());
         self.exploded = scene.exploded.clone();
         self.assembled = if self.exploded.is_some() { scene.solid.clone() } else { RenderMesh::default() };
         // Framed either way the parts come apart.
@@ -274,6 +331,35 @@ impl Viewer {
         if range.is_some_and(|(lo, hi)| !(lo..=hi).contains(&self.section.at)) {
             self.set_section_axis(self.section.axis);
         }
+        // What is still in the new scene stays selected: a statement of
+        // the main file only if its bytes still hold the same text, not
+        // another statement that came to the same place (an undo swapping
+        // two statements of one length).
+        self.picking = scene.picking.clone();
+        match &self.picking {
+            Some(picking) => self.selection.retain(|key| {
+                let same_text = key.range().is_none_or(|r| old_source.get(r.clone()) == scene.source.get(r));
+                same_text && picking.contains(key)
+            }),
+            None => self.selection.clear(),
+        }
+        if let Some((source, ranges)) = self.select_after.take() {
+            if source == scene.source {
+                let keys = ranges.into_iter().map(|r| Statement {
+                    unit: 0,
+                    span: c2f_lang::Span::new(r.start, r.end),
+                });
+                self.selection = keys.filter(|k| self.picking.as_ref().is_some_and(|p| p.contains(k))).collect();
+            } else {
+                // Not rendered yet: wait for that text.
+                self.select_after = Some((source, ranges));
+            }
+        }
+        self.hovered = None;
+        self.at_cursor = None;
+        self.shown_highlight = (Vec::new(), Vec::new());
+        self.preview = None;
+        self.send_preview();
         // Indices into the old pauses mean nothing now.
         self.dragging = None;
         self.menu = None;
@@ -288,6 +374,7 @@ impl Viewer {
         if self.explode > 0.0 {
             self.show_exploded();
         }
+        self.send_highlight(true);
         if frame {
             self.view_all();
         }
@@ -323,6 +410,223 @@ impl Viewer {
                 r.set_solid(solid);
             }
         }
+    }
+
+    // ---- Selection ----
+
+    /// The statements selected in the view.
+    pub fn selection(&self) -> &[Statement] {
+        &self.selection
+    }
+
+    /// Selects the statements at these bytes of `source` once the scene
+    /// rendered from it arrives, as an edit of the code asks; the
+    /// selection shown until then is cleared.
+    pub fn select_after_render(&mut self, source: String, ranges: Vec<std::ops::Range<usize>>) {
+        self.select_after = Some((source, ranges));
+        self.clear_selection();
+    }
+
+    /// What picking knows of the scene shown, for a design.
+    pub fn picking(&self) -> Option<&Arc<Picking>> {
+        self.picking.as_ref()
+    }
+
+    /// The point of the model under `pos`, its normal (facing the eye) and
+    /// the statement a click there picks.
+    pub fn surface_at(&self, rect: Rect, pos: Pos2) -> Option<(Vec3, Vec3, Option<Statement>)> {
+        let picking = self.picking.as_ref()?;
+        let ray = self.ray(rect, pos);
+        let hit = picking.cast(&ray, self.cut(), false)?;
+        let (point, normal) = picking.surface(&ray, &hit);
+        Some((point, normal, hit.origin.and_then(|o| picking.target(o, false))))
+    }
+
+    /// The box around what is selected, found again only when the
+    /// selection or the scene changed.
+    pub fn selection_bounds(&self) -> Option<(Vec3, Vec3)> {
+        let picking = self.picking.as_ref()?;
+        let mut cached = self.selection_box.lock().unwrap_or_else(|e| e.into_inner());
+        match &*cached {
+            Some(c) if Arc::ptr_eq(&c.picking, picking) && c.selection == self.selection => c.bounds,
+            _ => {
+                let bounds = picking.bounds(&self.selection);
+                *cached = Some(SelectionBox { picking: picking.clone(), selection: self.selection.clone(), bounds });
+                bounds
+            }
+        }
+    }
+
+    /// The statement last clicked in the view, once.
+    pub fn take_picked(&mut self) -> Option<Statement> {
+        self.picked.take()
+    }
+
+    /// Lights up the statement holding byte `offset` of the main file, as
+    /// the editor's cursor moves; `None` turns it off.
+    pub fn set_cursor(&mut self, offset: Option<usize>) {
+        let key = offset.zip(self.picking.as_ref()).and_then(|(offset, p)| p.at_offset(offset));
+        if key != self.at_cursor {
+            self.at_cursor = key;
+            self.send_highlight(false);
+        }
+    }
+
+    /// The statement a click at `pos` picks, if any.
+    pub fn pick(&self, rect: Rect, pos: Pos2, click: Click) -> Option<Statement> {
+        let picking = self.picking.as_ref()?;
+        let hit = picking.cast(&self.ray(rect, pos), self.cut(), click.hidden)?;
+        picking.target(hit.origin?, click.deep)
+    }
+
+    /// A click at `pos`, or off the model with `None`: selects what it
+    /// picks.
+    pub fn click(&mut self, picked: Option<Statement>, click: Click) {
+        match picked {
+            Some(key) if click.add => match self.selection.iter().position(|k| *k == key) {
+                Some(i) => {
+                    self.selection.remove(i);
+                }
+                None => self.selection.push(key),
+            },
+            Some(key) => self.selection = vec![key],
+            None if click.add => {}
+            None => self.selection.clear(),
+        }
+        if let Some(key) = picked.filter(|k| self.selection.contains(k)) {
+            self.picked = Some(key);
+        }
+        self.send_highlight(false);
+    }
+
+    /// Selects the statement of the main file holding byte `offset`, as
+    /// if it were clicked.
+    pub fn select_at(&mut self, offset: usize) {
+        let key = self.picking.as_ref().and_then(|p| p.at_offset(offset));
+        self.click(key, Click::default());
+    }
+
+    /// Selects the statement at these bytes of the main file, as a click
+    /// on its row in the tree does: `add` (Shift) adds it to the selection
+    /// or takes it out. A statement the scene has no run of (left out with
+    /// `*`) selects nothing.
+    pub fn select_range(&mut self, range: std::ops::Range<usize>, add: bool) {
+        let key = Statement { unit: 0, span: c2f_lang::Span::new(range.start, range.end) };
+        let key = self.picking.as_ref().filter(|p| p.contains(&key)).map(|_| key);
+        self.click(key, Click { add, ..Click::default() });
+    }
+
+    /// Empties the selection.
+    pub fn clear_selection(&mut self) {
+        if !self.selection.is_empty() {
+            self.selection.clear();
+            self.send_highlight(false);
+        }
+    }
+
+    /// Shows the selection's highlight moved by `transform` (a handle being
+    /// dragged, before the design renders again), or where it is.
+    pub fn preview_selection(&mut self, transform: Option<Mat4>) {
+        if transform != self.preview {
+            self.preview = transform;
+            self.send_preview();
+        }
+    }
+
+    /// Hands the preview's transform to the renderer, which moves the
+    /// highlight already uploaded as it draws it: a drag rebuilds nothing.
+    fn send_preview(&self) {
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_selection_transform(self.preview.unwrap_or(Mat4::IDENTITY));
+            }
+        }
+    }
+
+    /// Hovering and clicks over a design's model.
+    fn select_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
+        if self.picking.is_none() {
+            return;
+        }
+        // The pointer is on something drawn over the view (a handle), or a
+        // sketch is being drawn: it neither hovers nor picks the model.
+        if !self.orbit_enabled || !self.select_enabled {
+            if self.hovered.take().is_some() {
+                self.send_highlight(false);
+            }
+            return;
+        }
+        let modifiers = ui.input(|i| i.modifiers);
+        let click = Click { add: modifiers.shift, hidden: modifiers.alt, deep: false };
+        if !response.dragged() {
+            let hovered = response.hover_pos().and_then(|pos| self.pick(rect, pos, click));
+            if hovered != self.hovered {
+                self.hovered = hovered;
+                self.send_highlight(false);
+            }
+        }
+        if response.clicked_by(PointerButton::Primary) {
+            self.click(self.hovered, click);
+        }
+        // A right-click on an object outside the selection selects it, for
+        // the menu that opens; on the selection, it keeps it whole.
+        if response.secondary_clicked() && self.hovered.is_some_and(|k| !self.selection.contains(&k)) {
+            self.click(self.hovered, Click::default());
+        }
+        // The click before it selected the object around: go inside it.
+        if response.double_clicked_by(PointerButton::Primary) {
+            let deep = response.interact_pointer_pos().and_then(|pos| self.pick(rect, pos, Click { deep: true, ..click }));
+            if let Some(deep) = deep {
+                self.selection.retain(|k| Some(*k) != self.hovered && *k != deep);
+                if !click.add {
+                    self.selection.clear();
+                }
+                self.selection.push(deep);
+                self.picked = Some(deep);
+                self.send_highlight(false);
+            }
+        }
+        let escape = ui.input(|i| i.key_pressed(Key::Escape)) && ui.ctx().memory(|m| m.focused().is_none());
+        if escape {
+            self.clear_selection();
+        }
+    }
+
+    /// Sends the selection's highlight to the renderer when it changed
+    /// (or always, with `force`).
+    fn send_highlight(&mut self, force: bool) {
+        let previewed: Vec<Statement> = self.hovered.or(self.at_cursor).into_iter().collect();
+        let wanted = (self.selection.clone(), previewed);
+        if !force && wanted == self.shown_highlight {
+            return;
+        }
+        // A handle's preview moves it as it is drawn ([`Self::send_preview`]).
+        let mesh = match &self.picking {
+            Some(picking) => picking.highlight(&wanted.0, &wanted.1),
+            None => RenderMesh::default(),
+        };
+        self.shown_highlight = wanted;
+        if let Ok(renderer) = &self.renderer {
+            if let Ok(mut r) = renderer.lock() {
+                r.set_selection(mesh);
+            }
+        }
+    }
+
+    /// The first line of a statement of the main file, shortened, and its
+    /// line number (from 1).
+    pub fn describe(&self, key: Statement) -> (String, Option<usize>) {
+        let Some(range) = key.range().filter(|r| r.end <= self.scene_source.len()) else {
+            return ("A shape from another file".to_string(), None);
+        };
+        let text = &self.scene_source[range.clone()];
+        let head = text.lines().next().unwrap_or("").trim().trim_end_matches(['{', ' ']);
+        let mut head: String = head.chars().take(48).collect();
+        if head.chars().count() < text.trim().chars().count() && !head.ends_with(';') {
+            head.push('…');
+        }
+        let line = self.scene_source[..range.start].matches('\n').count() + 1;
+        (head, Some(line))
     }
 
     /// Shows a circuit's wires and pin dots, or nothing; `bounds` is the
@@ -480,6 +784,11 @@ impl Viewer {
         Ray { origin, direction, slack }
     }
 
+    /// The model's box, without what is drawn over it.
+    pub fn model_bounds(&self) -> Option<(Vec3, Vec3)> {
+        self.bounds
+    }
+
     /// The model's box and the overlay's, together, and the parts' all
     /// the way apart while the view is exploded.
     fn drawn_bounds(&self) -> Option<(Vec3, Vec3)> {
@@ -609,6 +918,8 @@ impl Viewer {
             return response;
         }
         self.aspect = rect.width() / rect.height();
+        // Picked before the camera moves, so the ray matches the frame drawn.
+        self.select_input(ui, rect, &response);
         self.handle_input(ui, rect, &response);
         if self.turntable {
             // Time-based, so the speed holds whatever the frame rate; capped
@@ -670,7 +981,41 @@ impl Viewer {
         }
         self.paint_gizmo(&painter, rect);
         paint_overlays(ui, &painter, rect, status, self.insets);
+        self.paint_selection(&painter, rect, &response);
         response
+    }
+
+    /// What is selected, in a card under the badges, and what is under the
+    /// pointer, in a bubble next to it.
+    fn paint_selection(&self, painter: &egui::Painter, rect: Rect, response: &egui::Response) {
+        if let Some(&key) = self.selection.last().filter(|_| self.selection_card) {
+            let (head, line) = self.describe(key);
+            let title = match self.selection.len() {
+                1 => head,
+                n => format!("{n} objects selected"),
+            };
+            let mut lines = Vec::new();
+            match line {
+                Some(line) if self.selection.len() == 1 => lines.push(format!("Line {line}")),
+                _ => {}
+            }
+            if self.selection.iter().any(|k| !k.editable()) {
+                lines.push("Read-only: written in a library or an included file".to_string());
+            }
+            lines.push("Shift-click: add · Alt-click: hidden shapes · Esc: clear".to_string());
+            crate::inspect::paint_card(painter, rect, &title, &lines);
+        }
+        if let (Some(key), Some(pos)) = (self.hovered, response.hover_pos()) {
+            if !response.dragged() {
+                let (head, line) = self.describe(key);
+                let text = match line {
+                    Some(line) => format!("{head}  ·  line {line}"),
+                    None => format!("{head}  ·  read-only"),
+                };
+                crate::inspect::paint_bubble(painter, rect, pos, &text);
+                response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+        }
     }
 
     fn handle_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
@@ -695,7 +1040,8 @@ impl Viewer {
         if response.dragged() && self.orbit_enabled {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
-        if response.double_clicked() && self.frame_on_double_click {
+        // A double-click on a design's object goes inside it instead.
+        if response.double_clicked() && self.frame_on_double_click && self.hovered.is_none() {
             self.view_all();
         }
         if response.hovered() {
@@ -1186,7 +1532,42 @@ mod tests {
             parts: Vec::new(),
             enclosure: 0..0,
             exploded: None,
+            picking: None,
         }
+    }
+
+    fn statement(range: std::ops::Range<usize>) -> Statement {
+        Statement { unit: 0, span: c2f_lang::Span::new(range.start, range.end) }
+    }
+
+    #[test]
+    fn a_selection_stays_only_on_the_same_text() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design("cube(2);\ncube(3);"), false);
+        viewer.select_range(0..8, false);
+        assert_eq!(viewer.selection(), [statement(0..8)]);
+        // Changed elsewhere: still selected.
+        viewer.set_scene(design("cube(2);\ncube(4);"), false);
+        assert_eq!(viewer.selection(), [statement(0..8)]);
+        // The two statements swapped: the bytes hold another one now.
+        viewer.set_scene(design("cube(4);\ncube(2);"), false);
+        assert!(viewer.selection().is_empty());
+    }
+
+    #[test]
+    fn the_selection_box_follows_the_selection_and_the_scene() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design("m();\nsphere(1);\nmodule m() cube(2);"), false);
+        assert_eq!(viewer.selection_bounds(), None);
+        viewer.select_range(0..4, false);
+        assert_eq!(viewer.selection_bounds(), Some((Vec3::ZERO, Vec3::splat(2.0))));
+        assert_eq!(viewer.selection_bounds(), Some((Vec3::ZERO, Vec3::splat(2.0))));
+        // The same statement, which makes something else now.
+        viewer.set_scene(design("m();\nsphere(1);\nmodule m() cube(4);"), false);
+        assert_eq!(viewer.selection_bounds(), Some((Vec3::ZERO, Vec3::splat(4.0))));
+        viewer.select_range(5..15, false);
+        let (lo, hi) = viewer.selection_bounds().unwrap();
+        assert!(lo.x < -0.5 && hi.x > 0.5 && hi.z < 1.0, "the sphere, not the cube: {lo} {hi}");
     }
 
     /// A 20 mm model in the layer view, with a pause at 10 mm whose height
@@ -1436,5 +1817,108 @@ mod tests {
             frame(&ctx, &mut viewer, vec![egui::Event::PointerMoved(at + Vec2::new(step as f32 * 10.0, 0.0))], 1.0 / 60.0);
         }
         assert_ne!(viewer.camera.yaw, before.yaw);
+    }
+
+    /// A design's scene, rendered as the app renders it.
+    fn design(src: &str) -> Scene {
+        let program = c2f_eval::Program::load(src, std::path::Path::new("t.scad"), &[]).expect("parses");
+        let output = c2f_eval::evaluate(&program);
+        let r = c2f_geom::render(&output.nodes);
+        let picking = Picking::new(output.origins, &r.solid, &r.highlights, &r.backgrounds, &r.cutters);
+        Scene { solid: r.solid, source: src.to_string(), picking: Some(Arc::new(picking)), ..scene(1.0) }
+    }
+
+    /// A frame with `modifiers` held; returns the view's rectangle.
+    fn frame_with(ctx: &egui::Context, viewer: &mut Viewer, events: Vec<egui::Event>, modifiers: egui::Modifiers) -> Rect {
+        // A quarter of a second a frame: no two clicks make a double-click.
+        let time = ctx.input(|i| i.time) + 0.25;
+        let input = egui::RawInput {
+            events,
+            modifiers,
+            time: Some(time),
+            predicted_dt: 1.0 / 60.0,
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            ..Default::default()
+        };
+        let mut rect = Rect::NOTHING;
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| rect = viewer.show(ui, &STATUS).rect);
+        });
+        rect
+    }
+
+    /// Clicks at `at` (pressed and released in one frame, after moving
+    /// there), with `modifiers` held.
+    fn tap(ctx: &egui::Context, viewer: &mut Viewer, at: Pos2, modifiers: egui::Modifiers) {
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers };
+        frame_with(ctx, viewer, vec![egui::Event::PointerMoved(at)], modifiers);
+        frame_with(ctx, viewer, vec![button(true)], modifiers);
+        frame_with(ctx, viewer, vec![button(false)], modifiers);
+    }
+
+    #[test]
+    fn a_click_selects_the_statement_and_tells_the_app() {
+        let src = "cube(10);\ntranslate([20, 0, 0]) cube(10);";
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design(src), true);
+        let rect = frame_with(&ctx, &mut viewer, Vec::new(), egui::Modifiers::NONE);
+        let first = viewer.to_screen(rect, Vec3::new(5.0, 5.0, 10.0)).unwrap();
+        let second = viewer.to_screen(rect, Vec3::new(25.0, 5.0, 10.0)).unwrap();
+        let text = |viewer: &Viewer| -> Vec<&str> { viewer.selection.iter().map(|k| &src[k.range().unwrap()]).collect() };
+
+        tap(&ctx, &mut viewer, first, egui::Modifiers::NONE);
+        assert_eq!(text(&viewer), ["cube(10);"]);
+        assert_eq!(viewer.take_picked().map(|k| &src[k.range().unwrap()]), Some("cube(10);"));
+        assert_eq!(viewer.take_picked(), None);
+
+        tap(&ctx, &mut viewer, second, egui::Modifiers::SHIFT);
+        assert_eq!(text(&viewer), ["cube(10);", "cube(10);"]);
+        assert_ne!(viewer.selection[0], viewer.selection[1]);
+
+        // Escape empties it; a click off the model too.
+        let escape = egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_with(&ctx, &mut viewer, vec![escape], egui::Modifiers::NONE);
+        assert!(viewer.selection.is_empty());
+        tap(&ctx, &mut viewer, first, egui::Modifiers::NONE);
+        tap(&ctx, &mut viewer, rect.left_top() + Vec2::new(5.0, 5.0), egui::Modifiers::NONE);
+        assert!(viewer.selection.is_empty());
+    }
+
+    #[test]
+    fn a_click_the_handles_take_picks_nothing() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design("cube(10);"), true);
+        let rect = frame_with(&ctx, &mut viewer, Vec::new(), egui::Modifiers::NONE);
+        let on_cube = viewer.to_screen(rect, Vec3::new(5.0, 5.0, 10.0)).unwrap();
+        viewer.orbit_enabled = false;
+        tap(&ctx, &mut viewer, on_cube, egui::Modifiers::NONE);
+        assert!(viewer.selection.is_empty() && viewer.hovered.is_none());
+        viewer.orbit_enabled = true;
+        tap(&ctx, &mut viewer, on_cube, egui::Modifiers::NONE);
+        assert_eq!(viewer.selection.len(), 1);
+    }
+
+    #[test]
+    fn the_editors_cursor_lights_up_its_statement_and_a_new_scene_keeps_the_selection() {
+        let src = "cube(10);\nsphere(3);";
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(design(src), true);
+        viewer.set_cursor(Some(src.find("sphere").unwrap()));
+        assert_eq!(viewer.at_cursor.and_then(|k| k.range()), Some(10..20));
+        viewer.click(viewer.at_cursor, Click::default());
+        // Rendered again from the same code: still selected.
+        viewer.set_scene(design(src), false);
+        assert_eq!(viewer.selection.len(), 1);
+        // From code where it no longer is: dropped.
+        viewer.set_scene(design("cube(10);"), false);
+        assert!(viewer.selection.is_empty());
     }
 }

@@ -81,6 +81,13 @@ pub struct Interp<'p> {
     pub rng: crate::math::Mt19937,
     /// The nodes of each part of the circuit `circuit_part()` drew, by name.
     circuit_parts: std::collections::HashMap<String, Vec<Node>>,
+    /// The span of every instance statement of the program, by the address
+    /// of its instance: the scope an instance runs in keeps only the
+    /// instance.
+    statements: std::collections::HashMap<usize, c2f_lang::Span>,
+    pub origins: Vec<crate::Origin>,
+    /// The instantiations being evaluated, innermost last.
+    origin_stack: Vec<u32>,
 }
 
 /// What a function body evaluates to in tail position: a value, or a call
@@ -134,6 +141,9 @@ impl<'p> Interp<'p> {
             pauses: Vec::new(),
             reads_t: false,
             main_pauses: main_pauses(&program.files[0].ast.stmts),
+            statements: statements(program),
+            origins: Vec::new(),
+            origin_stack: Vec::new(),
             pause_call: None,
             module_stack: Vec::new(),
             call_depth: 0,
@@ -168,7 +178,11 @@ impl<'p> Interp<'p> {
                 for message in output.warnings.into_iter().chain(output.error) {
                     self.warn(format!("In circuit part '{}': {message}", part.name));
                 }
-                output.nodes
+                let mut nodes = output.nodes;
+                for node in &mut nodes {
+                    node.clear_origins();
+                }
+                nodes
             }
             Err(err) => {
                 self.warn(format!("Can't load circuit part '{}':\n{}", part.name, err.render()));
@@ -326,11 +340,22 @@ impl<'p> Interp<'p> {
         if claims_root {
             self.root_claimed = true;
         }
+        let origin = self.origins.len() as u32;
+        self.origins.push(crate::Origin {
+            unit: env::unit_of(env),
+            // A statement the map misses (none should) gets a span in no
+            // file, so that it never reads as editable text at 0..0.
+            span: self.statements.get(&(inst as *const Instance as usize)).copied().unwrap_or(NOWHERE),
+            parent: self.origin_stack.last().copied(),
+            kind: call_kind(inst, env),
+        });
+        self.origin_stack.push(origin);
         self.instantiation_depth += 1;
         let node = self.instantiate_inner(inst, env);
         self.instantiation_depth -= 1;
+        self.origin_stack.pop();
         let passthrough = std::mem::take(&mut self.passthrough);
-        let node = match node? {
+        let mut node = match node? {
             Some(node) if !passthrough => node,
             other => {
                 if claims_root {
@@ -339,11 +364,11 @@ impl<'p> Interp<'p> {
                 return Ok(other);
             }
         };
+        node.origin = Some(origin);
         if claims_root {
             // The root is shown as it is, without its own `#` or `%`.
             self.root = Some(node.clone());
         }
-        let mut node = node;
         node.highlight |= inst.modifiers.highlight;
         node.background |= inst.modifiers.background;
         Ok(Some(node))
@@ -1197,6 +1222,61 @@ fn dynamic_parent<'p>(env: &Env<'p>) -> Env<'p> {
         }
     }
     current.clone()
+}
+
+/// What an instance calls, for its [`crate::Origin`].
+fn call_kind(inst: &Instance, env: &Env) -> crate::CallKind {
+    match &inst.kind {
+        InstanceKind::If { .. } => crate::CallKind::Flow,
+        InstanceKind::Call { name, .. } => {
+            let name = name.name.as_str();
+            if env::lookup_module(env, name).is_some() {
+                crate::CallKind::Module
+            } else if matches!(
+                name,
+                "for" | "intersection_for" | "let" | "echo" | "assert" | "children" | "child" | "assign" | "each"
+            ) {
+                crate::CallKind::Flow
+            } else {
+                crate::CallKind::Builtin
+            }
+        }
+    }
+}
+
+/// The span of a statement found in no file: `file` matches none, so
+/// [`crate::Origin::in_main_file`] is false.
+const NOWHERE: c2f_lang::Span = c2f_lang::Span { start: 0, end: 0, file: u32::MAX };
+
+/// The span of every instance statement in the program's files, by the
+/// address of its instance.
+fn statements(program: &Program) -> std::collections::HashMap<usize, c2f_lang::Span> {
+    fn walk(stmts: &[Stmt], out: &mut std::collections::HashMap<usize, c2f_lang::Span>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::Block(inner) => walk(inner, out),
+                StmtKind::Module(def) => walk(std::slice::from_ref(&def.body), out),
+                StmtKind::Instance(inst) => {
+                    out.insert(inst as *const Instance as usize, stmt.span);
+                    match &inst.kind {
+                        InstanceKind::Call { children, .. } => walk(children, out),
+                        InstanceKind::If { then, otherwise, .. } => {
+                            walk(then, out);
+                            if let Some(otherwise) = otherwise {
+                                walk(otherwise, out);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    for file in &program.files {
+        walk(&file.ast.stmts, &mut out);
+    }
+    out
 }
 
 /// The `pause()` calls written in the main file itself (not in a file it

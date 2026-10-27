@@ -149,6 +149,10 @@ struct MeshProgram {
     cut_face: Option<glow::UniformLocation>,
     section: Option<glow::UniformLocation>,
     alpha: Option<glow::UniformLocation>,
+    /// Where the mesh's vertices go in the model's space, and how its
+    /// normals turn: the identity but for a handle's preview.
+    model: Option<glow::UniformLocation>,
+    normal: Option<glow::UniformLocation>,
     default_color: Option<glow::UniformLocation>,
     model_color: Option<glow::UniformLocation>,
 }
@@ -187,11 +191,14 @@ struct Style {
     cap: bool,
     /// Scales the vertices' alpha.
     alpha: f32,
+    /// Moves the vertices, and turns the normals with them: the identity
+    /// but for a handle's preview.
+    model: Mat4,
 }
 
 impl Style {
-    const PLAIN: Style = Style { section: None, cap: false, alpha: 1.0 };
-    const SOLID: Style = Style { section: None, cap: true, alpha: 1.0 };
+    const PLAIN: Style = Style { section: None, cap: false, alpha: 1.0, model: Mat4::IDENTITY };
+    const SOLID: Style = Style { section: None, cap: true, alpha: 1.0, model: Mat4::IDENTITY };
 }
 
 pub struct Renderer {
@@ -201,6 +208,11 @@ pub struct Renderer {
     solid: Option<GpuBuffer>,
     highlights: Option<GpuBuffer>,
     backgrounds: Option<GpuBuffer>,
+    /// The objects selected or hovered in a design, drawn over the model.
+    selection: Option<GpuBuffer>,
+    /// How the selection is moved as drawn: where a handle's drag has it,
+    /// applied on the GPU so that a drag uploads nothing.
+    selection_transform: Mat4,
     pause_planes: Option<GpuBuffer>,
     pause_outlines: Option<GpuBuffer>,
     /// A circuit's wires and pins, drawn over its parts.
@@ -215,6 +227,7 @@ pub struct Renderer {
     pending_scene: Option<Scene>,
     pending_grid: Option<Grid>,
     pending_overlay: Option<(RenderMesh, RenderMesh)>,
+    pending_selection: Option<RenderMesh>,
     /// The solid as uploaded, to upload again in other colors.
     solid_mesh: RenderMesh,
     pending_colors: Option<Vec<[f32; 4]>>,
@@ -269,6 +282,8 @@ impl Renderer {
                     cut_face: gl.get_uniform_location(mesh, "u_cut_face"),
                     section: gl.get_uniform_location(mesh, "u_section"),
                     alpha: gl.get_uniform_location(mesh, "u_alpha"),
+                    model: gl.get_uniform_location(mesh, "u_model"),
+                    normal: gl.get_uniform_location(mesh, "u_normal"),
                     default_color: gl.get_uniform_location(mesh, "u_default_color"),
                     model_color: gl.get_uniform_location(mesh, "u_model_color"),
                     program: mesh,
@@ -292,6 +307,8 @@ impl Renderer {
                 solid: None,
                 highlights: None,
                 backgrounds: None,
+                selection: None,
+                selection_transform: Mat4::IDENTITY,
                 pause_planes: None,
                 pause_outlines: None,
                 wires: None,
@@ -303,6 +320,7 @@ impl Renderer {
                 pending_scene: None,
                 pending_grid: None,
                 pending_overlay: None,
+                pending_selection: None,
                 solid_mesh: RenderMesh::default(),
                 pending_colors: None,
                 pending_positions: None,
@@ -335,6 +353,17 @@ impl Renderer {
     /// the next scene: a design's parts apart in the exploded view.
     pub fn set_solid(&mut self, solid: RenderMesh) {
         self.pending_solid = Some(solid);
+    }
+
+    /// Replaces the highlight of the selected objects on the next paint.
+    pub fn set_selection(&mut self, mesh: RenderMesh) {
+        self.pending_selection = Some(mesh);
+    }
+
+    /// Draws the highlight of the selected objects moved by `transform`,
+    /// as a handle's drag previews it, without uploading it again.
+    pub fn set_selection_transform(&mut self, transform: Mat4) {
+        self.selection_transform = transform;
     }
 
     /// Replaces a circuit's wires and pin dots on the next paint.
@@ -400,6 +429,14 @@ impl Renderer {
                     delete(gl, buffer);
                 }
                 self.solid = upload_mesh(gl, &self.solid_mesh);
+            }
+        }
+        if let Some(mesh) = self.pending_selection.take() {
+            unsafe {
+                if let Some(buffer) = self.selection.take() {
+                    delete(gl, buffer);
+                }
+                self.selection = upload_mesh(gl, &mesh);
             }
         }
         if let Some((wires, pins)) = self.pending_overlay.take() {
@@ -507,6 +544,12 @@ impl Renderer {
                 if let Some(highlights) = &self.highlights {
                     self.draw_mesh(gl, frame, highlights, Pass::All, style);
                 }
+                if let Some(selection) = &self.selection {
+                    gl.polygon_offset(-2.0, -8.0);
+                    // A handle's drag moves it as it is drawn.
+                    self.draw_mesh(gl, frame, selection, Pass::All, Style { model: self.selection_transform, ..style });
+                    gl.polygon_offset(-1.0, -4.0);
+                }
                 gl.disable(glow::POLYGON_OFFSET_FILL);
                 if frame.show_pauses {
                     if let Some(planes) = &self.pause_planes {
@@ -542,7 +585,7 @@ impl Renderer {
                 // Only an opaque enclosure shows its cut face: through a
                 // see-through one, its inner walls would all turn red.
                 let cap = frame.enclosure_opacity >= 0.999;
-                let style = Style { section: frame.section, cap, alpha };
+                let style = Style { section: frame.section, cap, alpha, ..Style::SOLID };
                 self.draw_range(gl, frame, solid, enclosure.clone(), pass, style);
             }
             self.draw_range(gl, frame, solid, enclosure.end..all.end, pass, Style::SOLID);
@@ -569,7 +612,17 @@ impl Renderer {
             return;
         }
         unsafe {
+            // Normals turn by the inverse transpose, for a scale along one
+            // axis to tilt them as it tilts the faces.
+            let model = style.model;
+            let normal = glam::Mat3::from_mat4(model).inverse().transpose();
+            let normal = if normal.is_finite() { normal } else { glam::Mat3::IDENTITY };
+            // Uniforms go to the program in use: set them only once it is
+            // ours, or the background's or the lines' program gets them and
+            // the last selection's move stays on every mesh.
             gl.use_program(Some(self.mesh.program));
+            gl.uniform_matrix_4_f32_slice(self.mesh.model.as_ref(), false, &model.to_cols_array());
+            gl.uniform_matrix_3_f32_slice(self.mesh.normal.as_ref(), false, &normal.to_cols_array());
             gl.uniform_1_f32(self.mesh.cut.as_ref(), frame.cut.map_or(NO_CUT, |z| z + CUT_TOLERANCE));
             let cut = frame.cut.is_some() || style.section.is_some();
             gl.uniform_1_i32(self.mesh.cut_face.as_ref(), i32::from(style.cap && cut));
@@ -606,6 +659,7 @@ impl Renderer {
                 self.solid.take(),
                 self.highlights.take(),
                 self.backgrounds.take(),
+                self.selection.take(),
                 self.pause_planes.take(),
                 self.pause_outlines.take(),
                 self.wires.take(),
@@ -804,6 +858,8 @@ in vec3 a_normal;
 in vec4 a_color;
 uniform mat4 u_view;
 uniform mat4 u_projection;
+uniform mat4 u_model;
+uniform mat3 u_normal;
 uniform vec3 u_default_color;
 uniform vec3 u_model_color;
 out vec3 v_position;
@@ -811,10 +867,11 @@ out vec3 v_normal;
 out vec4 v_color;
 out vec3 v_world;
 void main() {
-    v_world = a_position;
-    vec4 p = u_view * vec4(a_position, 1.0);
+    vec4 world = u_model * vec4(a_position, 1.0);
+    v_world = world.xyz;
+    vec4 p = u_view * world;
     v_position = p.xyz;
-    v_normal = mat3(u_view) * a_normal;
+    v_normal = mat3(u_view) * (u_normal * a_normal);
     // The parts without color() in the color picked in the settings.
     bool plain = all(lessThan(abs(a_color.rgb - u_default_color), vec3(0.002)));
     v_color = plain ? vec4(u_model_color, a_color.a) : a_color;

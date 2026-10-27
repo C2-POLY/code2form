@@ -11,8 +11,12 @@
 //! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
 //! `exploded` draws its part()s apart (`play,exploded` does both;
 //! `exploded,axis` along each part's axis).
+//! In a design, `code:cylinder(h = 7` selects the statement holding the
+//! first match of that text, and `CODE2FORM_SCREENSHOT_HANDLE=turn-z:30`
+//! holds its handles mid-drag (`move-x:12`, `scale-y:1.5`, `scale:2`).
 //! `CODE2FORM_APPEARANCE` picks the theme, `CODE2FORM_LANGUAGE` the
-//! language (`en` or `fr`).
+//! language (`en` or `fr`), and `CODE2FORM_WORKSPACE` the workspace
+//! (`model`, `code`).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
