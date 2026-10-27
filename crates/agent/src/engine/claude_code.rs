@@ -307,6 +307,10 @@ struct Translator {
     streamed: bool,
     /// What went wrong, said before the result that ends the turn.
     error: Option<String>,
+    /// Whether the CLI bills an API key, as its first line says: on a
+    /// subscription (`apiKeySource` is `none`) the cost it reports is what
+    /// the API would have charged, not what the user pays, so it is left out.
+    billed: bool,
 }
 
 impl Translator {
@@ -324,6 +328,10 @@ impl Translator {
             return Vec::new();
         }
         match value["type"].as_str().unwrap_or("") {
+            "system" if value["subtype"] == "init" => {
+                self.billed = value["apiKeySource"].as_str().is_some_and(|source| source != "none");
+                Vec::new()
+            }
             "stream_event" => self.stream_event(&value["event"]),
             "assistant" => self.assistant(&value),
             "user" => tool_results(&value["message"]["content"]),
@@ -395,7 +403,7 @@ impl Translator {
             let input = count("input_tokens") + count("cache_creation_input_tokens") + count("cache_read_input_tokens");
             return Event::Done {
                 usage: usage.is_object().then(|| Usage { input_tokens: input, output_tokens: count("output_tokens") }),
-                cost_usd: value["total_cost_usd"].as_f64(),
+                cost_usd: value["total_cost_usd"].as_f64().filter(|_| self.billed),
                 session_id: session,
             };
         }
@@ -781,8 +789,13 @@ mod tests {
         assert_eq!(text(&events), "The cube's volume is 1000 mm³ (10 × 10 × 10 mm).");
         let Some(Event::Done { usage, cost_usd, session_id }) = events.last() else { panic!("{events:?}") };
         assert_eq!(session_id.as_deref(), Some("2ae90353-7b53-4672-b448-ce02b8b77858"));
-        assert!(cost_usd.unwrap() > 0.0);
+        // On a subscription the API price the CLI reports is not shown.
+        assert_eq!(*cost_usd, None);
         assert_eq!(usage.unwrap(), Usage { input_tokens: 4 + 20535 + 20281, output_tokens: 93 });
+        // Billed to an API key, it is.
+        let billed = RENDER.replace("\"apiKeySource\":\"none\"", "\"apiKeySource\":\"ANTHROPIC_API_KEY\"");
+        let Some(Event::Done { cost_usd, .. }) = translate(&billed).last().cloned() else { panic!() };
+        assert!(cost_usd.unwrap() > 0.0);
         assert_eq!(events.iter().filter(|event| matches!(event, Event::Done { .. })).count(), 1);
     }
 

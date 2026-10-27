@@ -124,7 +124,9 @@ The key is never shown again; Remove forgets it. Without a stored key,
 The API is billed per token to your API account. The default model is
 Claude Opus 5.5; Sonnet 5.5, Haiku 5.5 and Fable 5.1 are in the list. The
 panel shows the tokens of the conversation, in and out, and what they
-cost in dollars when the engine gives it.
+cost in dollars. With Claude Code on a subscription it shows the tokens
+only: the price Claude Code reports there is what the API would have
+charged, not what you pay.
 
 ### Automatic
 
