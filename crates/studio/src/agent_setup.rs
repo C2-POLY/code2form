@@ -73,6 +73,8 @@ pub struct AgentSettings {
     pub allow_export: bool,
     pub allow_save_part: bool,
     pub allow_electrify: bool,
+    /// The agent may search the web and read pages.
+    pub allow_web: bool,
     /// The rounds of tools an answer may take.
     pub max_tool_rounds: u32,
 }
@@ -89,6 +91,7 @@ impl Default for AgentSettings {
             allow_export: true,
             allow_save_part: true,
             allow_electrify: true,
+            allow_web: true,
             max_tool_rounds: TOOL_ROUNDS,
         }
     }
@@ -129,6 +132,7 @@ impl AgentSettings {
             "agent-allow-export" => flag(&mut self.allow_export),
             "agent-allow-save-part" => flag(&mut self.allow_save_part),
             "agent-allow-electrify" => flag(&mut self.allow_electrify),
+            "agent-allow-web" => flag(&mut self.allow_web),
             "agent-max-tool-rounds" => {
                 if let Ok(rounds) = value.parse::<u32>() {
                     self.max_tool_rounds = rounds.clamp(*MAX_TOOL_ROUNDS.start(), *MAX_TOOL_ROUNDS.end());
@@ -155,6 +159,7 @@ impl AgentSettings {
         let _ = writeln!(text, "agent-allow-export = {}", self.allow_export);
         let _ = writeln!(text, "agent-allow-save-part = {}", self.allow_save_part);
         let _ = writeln!(text, "agent-allow-electrify = {}", self.allow_electrify);
+        let _ = writeln!(text, "agent-allow-web = {}", self.allow_web);
         let _ = writeln!(text, "agent-max-tool-rounds = {}", self.max_tool_rounds);
     }
 
@@ -529,6 +534,7 @@ fn claude_code_options(request: &EngineRequest, claude: PathBuf, mcp_command: (P
         resume: request.transcript.session_id.clone(),
         permission: if agent.ask_first { Permission::AskFirst } else { Permission::ApplyDirectly },
         write_files: agent.allow_new_files,
+        web: agent.allow_web,
         max_turns: Some(agent.max_tool_rounds),
     }
 }
@@ -585,6 +591,7 @@ pub fn engine_for(
             let mut options = ApiOptions::new(key, Arc::new(registry));
             options.model = agent.api_model.clone();
             options.max_tool_rounds = agent.max_tool_rounds;
+            options.web = agent.allow_web;
             let history = request.transcript.entries.iter().filter_map(|entry| match entry {
                 Entry::User { message, .. } => Some((true, message.text.clone())),
                 Entry::Assistant { text } => Some((false, text.clone())),
@@ -738,6 +745,13 @@ pub fn page(ui: &mut egui::Ui, ctx: &egui::Context, agent: &mut AgentSettings, p
     ui.checkbox(&mut agent.allow_export, tr("Allow exporting", "Autoriser l'export"));
     ui.checkbox(&mut agent.allow_save_part, tr("Allow saving parts to the library", "Autoriser l'enregistrement de pièces dans la bibliothèque"));
     ui.checkbox(&mut agent.allow_electrify, tr("Allow electrifying a design", "Autoriser l'électrification d'un design"));
+    ui.checkbox(&mut agent.allow_web, tr("Search the web", "Rechercher sur le web"));
+    ui.label(RichText::new(tr(
+        "Pages the agent finds are read by Claude, and treated as information, not instructions.",
+        "Les pages trouvées sont lues par Claude, comme des informations et non comme des instructions.",
+    ))
+    .small()
+    .color(theme::palette().text_dim));
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label(tr("Tool rounds per answer, at most", "Tours d'outils par réponse, au plus"));
@@ -918,6 +932,7 @@ mod tests {
             allow_export: false,
             allow_save_part: true,
             allow_electrify: false,
+            allow_web: false,
             max_tool_rounds: 9,
         };
         let mut text = String::new();

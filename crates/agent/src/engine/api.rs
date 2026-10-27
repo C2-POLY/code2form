@@ -79,12 +79,16 @@ pub struct ApiOptions {
     pub max_tool_rounds: u32,
     /// The API's address, without the `/v1/messages`.
     pub base_url: String,
+    /// The agent may search the web and read pages, with Anthropic's
+    /// server-side web search and web fetch tools: they run on Anthropic's
+    /// side, and their results come back in the reply.
+    pub web: bool,
 }
 
 impl ApiOptions {
     /// The defaults for `key` and the tools of `registry`: the
     /// [`DEFAULT_MODEL`], the [`default_system`] prompt, 25 rounds of tools
-    /// and the Anthropic API itself.
+    /// and the Anthropic API itself, without the web.
     pub fn new(key: impl Into<String>, registry: Arc<Registry>) -> ApiOptions {
         ApiOptions {
             key: key.into(),
@@ -93,6 +97,7 @@ impl ApiOptions {
             system: default_system(),
             max_tool_rounds: 25,
             base_url: DEFAULT_BASE_URL.into(),
+            web: false,
         }
     }
 }
@@ -106,6 +111,7 @@ impl fmt::Debug for ApiOptions {
             .field("system", &format_args!("{} bytes", self.system.len()))
             .field("max_tool_rounds", &self.max_tool_rounds)
             .field("base_url", &self.base_url)
+            .field("web", &self.web)
             .finish()
     }
 }
@@ -281,6 +287,7 @@ impl Turn {
         }
         let mut totals = Totals { usage: Usage::default(), cost: Some(0.0) };
         let end = self.converse(&mut history, &mut totals);
+        drop_dangling_server_calls(&mut history);
         drop(history);
         let _ = self.events.send(match end {
             Ok(()) => Event::Done { usage: Some(totals.usage), cost_usd: totals.cost, session_id: None },
@@ -299,7 +306,8 @@ impl Turn {
 
     /// Requests replies and runs their tools until a reply ends the turn.
     fn converse(&self, history: &mut Vec<Value>, totals: &mut Totals) -> Result<(), String> {
-        let tools = api_tools(&self.options.registry);
+        let web = if self.options.web { web_tools(&self.options.model) } else { Vec::new() };
+        let tools = api_tools(&self.options.registry, web);
         let mut rounds = 0;
         loop {
             let Some(mut reply) = self.request(history, &tools, totals)? else { return Ok(()) };
@@ -311,10 +319,29 @@ impl Turn {
                 }
             }
             if !reply.content.is_empty() {
-                history.push(json!({ "role": "assistant", "content": reply.content }));
+                match history.last_mut() {
+                    // A paused turn's reply goes on in the same message.
+                    Some(last) if last["role"] == "assistant" => {
+                        if let Some(blocks) = last["content"].as_array_mut() {
+                            blocks.extend(reply.content.iter().cloned());
+                        }
+                    }
+                    _ => history.push(json!({ "role": "assistant", "content": reply.content })),
+                }
             }
             match reply.stop_reason.as_str() {
                 "tool_use" => {}
+                // The server's tools (the web) took their rounds: sending the
+                // reply back as it is lets the server go on with it.
+                "pause_turn" => {
+                    rounds += 1;
+                    if rounds >= self.options.max_tool_rounds {
+                        return Err(format!(
+                            "the agent stopped after {rounds} rounds of tool calls: send a message to let it go on"
+                        ));
+                    }
+                    continue;
+                }
                 "max_tokens" => return Err("the reply reached its length limit and was cut short".into()),
                 "refusal" => return Err("Claude declined to answer this request".into()),
                 "model_context_window_exceeded" => {
@@ -422,7 +449,12 @@ impl Turn {
             "messages": history,
         });
         if !self.options.system.trim().is_empty() {
-            body["system"] = json!([{ "type": "text", "text": self.options.system, "cache_control": { "type": "ephemeral" } }]);
+            let system = if self.options.web {
+                format!("{}\n\n{}", self.options.system, super::claude_code::WEB_NOTE)
+            } else {
+                self.options.system.clone()
+            };
+            body["system"] = json!([{ "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }]);
         }
         if !tools.is_empty() {
             body["tools"] = json!(tools);
@@ -549,6 +581,9 @@ impl Stream {
                 if let Some(text) = block["text"].as_str().filter(|text| !text.is_empty()) {
                     let _ = events.send(Event::Text { delta: text.into() });
                 }
+                if let Some(result) = server_result(&block) {
+                    let _ = events.send(result);
+                }
                 self.blocks[index] = block;
             }
             "content_block_delta" => {
@@ -586,6 +621,17 @@ impl Stream {
                             self.invalid.push(block["id"].as_str().unwrap_or_default().to_string());
                         }
                     }
+                } else if block["type"] == "server_tool_use" {
+                    // A call the server runs: shown, never run here.
+                    let text = self.inputs[index].trim();
+                    if let Some(input) = serde_json::from_str::<Value>(text).ok().filter(Value::is_object) {
+                        block["input"] = input;
+                    }
+                    let _ = events.send(Event::ToolCall {
+                        id: block["id"].as_str().unwrap_or_default().to_string(),
+                        name: block["name"].as_str().unwrap_or_default().to_string(),
+                        input: block["input"].clone(),
+                    });
                 }
             }
             "message_delta" => {
@@ -676,10 +722,85 @@ fn keep_after_fallback(content: &mut Vec<Value>) {
     });
 }
 
-/// The registry's tools as the API takes them; the last one ends a cache
-/// breakpoint. Their input streams as it is written.
-fn api_tools(registry: &Registry) -> Vec<Value> {
-    let mut tools: Vec<Value> = registry
+/// Anthropic's server-side web search and web fetch, in the versions
+/// `model` takes: the ones that filter their results (dynamic filtering)
+/// on the models that have it, the basic ones on the others.
+fn web_tools(model: &str) -> Vec<Value> {
+    let filtering = matches!(
+        model,
+        "claude-opus-5-5" | "claude-opus-5" | "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6"
+            | "claude-sonnet-5-5" | "claude-sonnet-5" | "claude-sonnet-4-6"
+    );
+    let (search, fetch) = if filtering { ("web_search_20260209", "web_fetch_20260209") } else { ("web_search_20250305", "web_fetch_20250910") };
+    vec![
+        json!({ "type": search, "name": "web_search", "max_uses": 8 }),
+        json!({ "type": fetch, "name": "web_fetch", "max_uses": 8 }),
+    ]
+}
+
+/// A server tool's result block (web search, web fetch, or the code that
+/// filters their results) as the [`Event::ToolResult`] the panel shows:
+/// the pages found, or what went wrong. None for any other block.
+fn server_result(block: &Value) -> Option<Event> {
+    let kind = block["type"].as_str()?;
+    if kind == "tool_result" || !kind.ends_with("_tool_result") {
+        return None;
+    }
+    let id = block["tool_use_id"].as_str().unwrap_or_default().to_string();
+    let content = &block["content"];
+    // An error comes as an object of its own, not as a failed request.
+    if content["type"].as_str().is_some_and(|kind| kind.ends_with("_error")) {
+        let code = content["error_code"].as_str().unwrap_or("error");
+        return Some(Event::ToolResult { id, content: vec![json!({ "type": "text", "text": format!("failed: {code}") })], is_error: true });
+    }
+    let lines: Vec<String> = match content {
+        // Web search: the pages found.
+        Value::Array(results) => results
+            .iter()
+            .filter_map(|result| {
+                let url = result["url"].as_str()?;
+                Some(match result["title"].as_str().filter(|title| !title.is_empty()) {
+                    Some(title) => format!("{title} — {url}"),
+                    None => url.to_string(),
+                })
+            })
+            .collect(),
+        // Web fetch: the page read; code: what it printed.
+        Value::Object(_) => {
+            let title = content["content"]["title"].as_str().filter(|title| !title.is_empty());
+            match (content["url"].as_str(), content["stdout"].as_str()) {
+                (Some(url), _) => vec![title.map_or_else(|| url.to_string(), |title| format!("{title} — {url}"))],
+                (None, Some(out)) if !out.trim().is_empty() => vec![out.trim().to_string()],
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    };
+    let content = if lines.is_empty() { Vec::new() } else { vec![json!({ "type": "text", "text": lines.join("\n") })] };
+    Some(Event::ToolResult { id, content, is_error: false })
+}
+
+/// A turn stopped while the server's tools were at work leaves calls of
+/// theirs without a result at the end of the history: they go, so that
+/// the next request is valid.
+fn drop_dangling_server_calls(history: &mut Vec<Value>) {
+    let Some(last) = history.last_mut().filter(|last| last["role"] == "assistant") else { return };
+    let Some(blocks) = last["content"].as_array_mut() else { return };
+    let answered: Vec<String> =
+        blocks.iter().filter_map(|block| block["tool_use_id"].as_str().map(str::to_string)).collect();
+    blocks.retain(|block| {
+        block["type"] != "server_tool_use" || block["id"].as_str().is_some_and(|id| answered.iter().any(|a| a == id))
+    });
+    if blocks.is_empty() {
+        history.pop();
+    }
+}
+
+/// The `web` tools, then the registry's tools as the API takes them; the
+/// last one ends a cache breakpoint. Their input streams as it is written.
+fn api_tools(registry: &Registry, web: Vec<Value>) -> Vec<Value> {
+    let mut tools: Vec<Value> = web;
+    tools.extend(registry
         .list()
         .iter()
         .map(|tool| {
@@ -692,8 +813,7 @@ fn api_tools(registry: &Registry) -> Vec<Value> {
                 api["description"] = json!(description);
             }
             api
-        })
-        .collect();
+        }));
     if let Some(last) = tools.last_mut() {
         last["cache_control"] = json!({ "type": "ephemeral" });
     }
@@ -1166,6 +1286,137 @@ mod tests {
         assert!(!shown.contains("sk-ant-secret"), "{shown}");
         assert!(shown.contains("redacted"));
         assert!(models().iter().any(|(id, _)| *id == DEFAULT_MODEL));
+    }
+
+    /// A web search as the API streams it, after the shape of Anthropic's
+    /// web search tool documentation.
+    fn web_search(index: u64, id: &str) -> Vec<Value> {
+        vec![
+            json!({ "type": "content_block_start", "index": index, "content_block": { "type": "server_tool_use", "id": id, "name": "web_search", "input": {} } }),
+            json!({ "type": "content_block_delta", "index": index, "delta": { "type": "input_json_delta", "partial_json": "{\"query\": \"M3 screw" } }),
+            json!({ "type": "content_block_delta", "index": index, "delta": { "type": "input_json_delta", "partial_json": " head height\"}" } }),
+            json!({ "type": "content_block_stop", "index": index }),
+            json!({ "type": "content_block_start", "index": index + 1, "content_block": { "type": "web_search_tool_result", "tool_use_id": id, "content": [
+                { "type": "web_search_result", "title": "ISO 4762 dimensions", "url": "https://example.com/iso4762", "encrypted_content": "EqgfCioIARgB", "page_age": "April 30, 2025" },
+                { "type": "web_search_result", "title": "", "url": "https://example.org/m3", "encrypted_content": "EqgfCioIARgC", "page_age": null },
+            ] } }),
+            json!({ "type": "content_block_stop", "index": index + 1 }),
+        ]
+    }
+
+    fn web_engine(url: &str) -> ApiEngine {
+        let registry = Registry::new().with(Box::new(Fake(Arc::default()))).unwrap();
+        let mut options = ApiOptions::new("sk-ant-test-key", Arc::new(registry));
+        options.base_url = url.into();
+        options.web = true;
+        ApiEngine::new(options)
+    }
+
+    #[test]
+    fn the_web_tools_go_only_when_allowed() {
+        let server = mock(vec![reply(10, vec![text(0, &["Hi"])], "end_turn", 2), reply(10, vec![text(0, &["Hi"])], "end_turn", 2)]);
+        let (mut without, _) = engine(&server.url);
+        turn(&mut without, UserMessage::text("hi"));
+        let mut with = web_engine(&server.url);
+        turn(&mut with, UserMessage::text("hi"));
+        let requests = server.requests.lock().unwrap();
+        let types = |body: &Value| -> Vec<String> {
+            body["tools"].as_array().unwrap().iter().filter_map(|tool| tool["type"].as_str().map(str::to_string)).collect()
+        };
+        assert!(types(&requests[0].1).is_empty(), "{:?}", requests[0].1["tools"]);
+        assert!(!requests[0].1["system"][0]["text"].as_str().unwrap().contains("untrusted"));
+        let with = &requests[1].1;
+        assert_eq!(types(with), ["web_search_20260209", "web_fetch_20260209"]);
+        assert_eq!(with["tools"][0]["name"], "web_search");
+        assert_eq!(with["tools"][1]["name"], "web_fetch");
+        // The breakpoint stays on the last tool, the registry's.
+        assert_eq!(with["tools"][3]["cache_control"]["type"], "ephemeral");
+        assert!(with["system"][0]["text"].as_str().unwrap().contains("untrusted"));
+        // No beta header for the web tools.
+        assert!(!requests[1].0.contains("web-search"), "{}", requests[1].0);
+        assert_eq!(web_tools("claude-haiku-5-5")[0]["type"], "web_search_20250305");
+        assert_eq!(web_tools("claude-haiku-5-5")[1]["type"], "web_fetch_20250910");
+    }
+
+    #[test]
+    fn a_web_search_shows_as_a_tool_row_and_stays_in_the_history() {
+        let server = mock(vec![
+            reply(10, vec![text(0, &["Searching."]), web_search(1, "srvtoolu_1"), text(3, &["5.5 mm or less."])], "end_turn", 9),
+            reply(20, vec![text(0, &["Yes."])], "end_turn", 2),
+        ]);
+        let mut engine = web_engine(&server.url);
+        let events = turn(&mut engine, UserMessage::text("how tall is an M3 head?"));
+        assert_eq!(events[0], Event::Text { delta: "Searching.".into() });
+        assert_eq!(
+            events[1],
+            Event::ToolCall { id: "srvtoolu_1".into(), name: "web_search".into(), input: json!({ "query": "M3 screw head height" }) }
+        );
+        assert_eq!(
+            events[2],
+            Event::ToolResult {
+                id: "srvtoolu_1".into(),
+                content: vec![json!({ "type": "text", "text": "ISO 4762 dimensions — https://example.com/iso4762\nhttps://example.org/m3" })],
+                is_error: false,
+            }
+        );
+        assert_eq!(events[3], Event::Text { delta: "5.5 mm or less.".into() });
+        assert!(matches!(events[4], Event::Done { .. }));
+
+        turn(&mut engine, UserMessage::text("sure?"));
+        let requests = server.requests.lock().unwrap();
+        let messages = requests[1].1["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3, "user, assistant, user: no tool result of ours");
+        let blocks = messages[1]["content"].as_array().unwrap();
+        let kinds: Vec<&str> = blocks.iter().map(|block| block["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["text", "server_tool_use", "web_search_tool_result", "text"]);
+        assert_eq!(blocks[1]["input"], json!({ "query": "M3 screw head height" }));
+        assert_eq!(blocks[2]["content"][0]["encrypted_content"], "EqgfCioIARgB", "kept as it came");
+    }
+
+    #[test]
+    fn a_paused_turn_goes_on_and_errors_show() {
+        let error = vec![
+            json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "server_tool_use", "id": "s2", "name": "web_fetch", "input": {} } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "input_json_delta", "partial_json": "{\"url\": \"https://example.com/a\"}" } }),
+            json!({ "type": "content_block_stop", "index": 0 }),
+            json!({ "type": "content_block_start", "index": 1, "content_block": { "type": "web_fetch_tool_result", "tool_use_id": "s2", "content": { "type": "web_fetch_tool_error", "error_code": "url_not_accessible" } } }),
+            json!({ "type": "content_block_stop", "index": 1 }),
+        ];
+        let server = mock(vec![
+            reply(10, vec![web_search(0, "s1")], "pause_turn", 3),
+            reply(10, vec![error, text(2, &["Could not read it."])], "end_turn", 3),
+        ]);
+        let mut engine = web_engine(&server.url);
+        let events = turn(&mut engine, UserMessage::text("look it up"));
+        assert!(matches!(&events[1], Event::ToolResult { id, is_error: false, .. } if id == "s1"));
+        assert!(matches!(&events[2], Event::ToolCall { name, input, .. } if name == "web_fetch" && input["url"] == "https://example.com/a"));
+        assert_eq!(
+            events[3],
+            Event::ToolResult { id: "s2".into(), content: vec![json!({ "type": "text", "text": "failed: url_not_accessible" })], is_error: true }
+        );
+        let requests = server.requests.lock().unwrap();
+        // The paused reply went back as it was, the last message.
+        let messages = requests[1].1["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"][0]["type"], "server_tool_use");
+    }
+
+    #[test]
+    fn server_calls_left_without_a_result_are_dropped() {
+        let mut history = vec![
+            json!({ "role": "user", "content": [{ "type": "text", "text": "hi" }] }),
+            json!({ "role": "assistant", "content": [
+                { "type": "server_tool_use", "id": "a", "name": "web_search", "input": {} },
+                { "type": "web_search_tool_result", "tool_use_id": "a", "content": [] },
+                { "type": "server_tool_use", "id": "b", "name": "web_search", "input": {} },
+            ] }),
+        ];
+        drop_dangling_server_calls(&mut history);
+        assert_eq!(history[1]["content"].as_array().unwrap().len(), 2);
+        let mut lone = vec![history[0].clone(), json!({ "role": "assistant", "content": [{ "type": "server_tool_use", "id": "c" }] })];
+        drop_dangling_server_calls(&mut lone);
+        assert_eq!(lone.len(), 1);
     }
 
     #[test]

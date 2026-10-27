@@ -91,8 +91,10 @@ your own subscription. It needs:
 The studio never sees a password or a token: your Claude Code logs in.
 It runs it without `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so
 that a key your environment holds does not win over your subscription
-without you knowing. It runs it with `--restricted`, without your own settings, and with
-Code2Form's MCP server alone (`--strict-mcp-config`), served by the app's
+without you knowing. It runs it with `--restricted`, without your own settings, with
+only the tools it needs (`--tools Read,Glob,Grep,Edit,Write`, plus
+`WebSearch,WebFetch` when the web is allowed), and with Code2Form's MCP
+server alone (`--strict-mcp-config`), served by the app's
 own executable as `code2form mcp --studio`. Claude Code starts in the
 active file's folder (an untitled tab's scratch folder, see
 [Limits](#limits)), its file tools reach nothing outside it, and the
@@ -294,6 +296,19 @@ The settings hold the agent to what you allow:
 - **Allow saving parts to the library** (`save_part`).
 - **Allow electrifying a design** (`electrify`, which rewrites the
   design and writes its circuit).
+- **Search the web** (on by default): the agent may search the web and
+  read pages, to look up a part's dimensions or a datasheet. With Claude
+  Code these are its `WebSearch` and `WebFetch` tools, which
+  `--restricted` removes unless they are named; with the API engine,
+  Anthropic's server-side web search and web fetch tools
+  (`web_search_20260209` and `web_fetch_20260209`, the basic
+  `web_search_20250305` and `web_fetch_20250910` on Haiku 5.5 and Fable
+  5.1), which run on Anthropic's side. Each search or page read shows in
+  the panel as a tool row, with its query or address and the pages
+  found. Web content is untrusted input: a page can say anything, so the
+  agent is told to take what it reads as information, never as
+  instructions, and to say where a figure it relies on comes from. Turn
+  it off to keep the agent to your files and the library.
 - **Tool rounds per answer, at most**: 25 by default, from 1 to 100. An
   answer that reaches it stops; send a message to let it go on.
 
