@@ -274,9 +274,9 @@ fn call_name(stmt: &Stmt) -> Option<&str> {
     call(stmt).map(|(name, _, _)| name.name.as_str())
 }
 
-/// Builtins that place, color or extrude their children and that an
+/// Builtins that place, color, name or extrude their children and that an
 /// object's placement climbs through.
-const WRAPPERS: [&str; 11] = [
+const WRAPPERS: [&str; 12] = [
     "translate",
     "rotate",
     "scale",
@@ -284,6 +284,7 @@ const WRAPPERS: [&str; 11] = [
     "multmatrix",
     "resize",
     "color",
+    "part",
     "offset",
     "render",
     "linear_extrude",

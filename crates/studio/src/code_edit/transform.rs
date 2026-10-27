@@ -7,7 +7,7 @@
 //! `translate` then the `rotate`, and the object is the `cube`. The
 //! selection may be the object or any statement of its chain: both name
 //! the same object. The chain runs through `translate`, `rotate`, `scale`,
-//! `mirror`, `multmatrix`, `resize` and `color`, and stops at anything
+//! `mirror`, `multmatrix`, `resize`, `color` and `part`, and stops at anything
 //! else: a wrapper that also has other children is never part of it, and
 //! an extrusion is the object (the transforms inside it are 2D).
 //!
@@ -18,7 +18,7 @@
 
 use std::ops::Range;
 
-use c2f_lang::ast::Stmt;
+use c2f_lang::ast::{BinaryOp, Element, Expr, ExprKind, Stmt};
 
 use super::props::bound_arg;
 use super::{
@@ -66,7 +66,7 @@ fn rank(name: &str) -> Option<u8> {
     }
 }
 
-const CHAIN: [&str; 7] = ["translate", "rotate", "scale", "mirror", "multmatrix", "resize", "color"];
+const CHAIN: [&str; 8] = ["translate", "rotate", "scale", "mirror", "multmatrix", "resize", "color", "part"];
 
 /// An object and the wrappers of its chain, outermost first.
 struct Chain<'a> {
@@ -224,11 +224,79 @@ fn by(
     let chain = chain(&path);
     match chain.find(kind) {
         Some(wrapper) => {
-            let v = current(&doc, wrapper, kind)?.value;
+            let v = match current(&doc, wrapper, kind) {
+                Ok(current) => current.value,
+                Err(why) if kind == Transform::Translate => {
+                    return shift_computed(&doc, wrapper, delta, &range).ok_or(why)?;
+                }
+                Err(why) => return Err(why),
+            };
             let value = [combine(v[0], delta[0]), combine(v[1], delta[1]), combine(v[2], delta[2])];
             rewrite(&doc, wrapper, kind, value, &range)
         }
         None => wrap(&doc, chain.insertion(&doc, kind), kind, delta, &range),
+    }
+}
+
+/// Moves a `translate` whose vector the source computes, keeping its
+/// expressions: `[0, 0, base_h]` moved up by 5 becomes
+/// `[0, 0, base_h + 5]`, and moved again by -5 back to `[0, 0, base_h]`.
+/// `None` when the value is not a vector of up to three expressions.
+fn shift_computed(doc: &Doc, wrapper: &Stmt, delta: [f64; 3], selected: &Range<usize>) -> Option<Result<Edit, String>> {
+    let (name, args, _) = call(wrapper)?;
+    let arg = bound_arg(doc, name, args, "v")?;
+    let ExprKind::Vector(elements) = &arg.value.kind else { return None };
+    let exprs: Vec<&Expr> = elements
+        .iter()
+        .map(|e| match e {
+            Element::Expr(e) => Some(e),
+            Element::Comp(_) => None,
+        })
+        .collect::<Option<_>>()?;
+    if !(1..=3).contains(&exprs.len()) {
+        return None;
+    }
+    let moved = |k: usize| delta[k].abs() >= 5e-4;
+    let components: Vec<String> = (0..3)
+        .map(|k| match exprs.get(k) {
+            Some(e) if moved(k) => shifted(doc.src, e, delta[k]),
+            Some(e) => doc.src[e.span.range()].to_string(),
+            None => number(delta[k]),
+        })
+        .collect();
+    // Components the vector leaves out stay out unless the move sets them.
+    let keep = (exprs.len()..3).rev().find(|&k| moved(k)).map_or(exprs.len(), |k| k + 1);
+    let code = format!("[{}]", components[..keep].join(", "));
+    Some(single(doc.src, Splice::new(arg.value.span.range(), code), selected, true, false))
+}
+
+/// The code of `expr` plus `d`: a number summed, a number already added
+/// or taken away folded with it (`base_h + 5`), else ` + d` written after
+/// it, in parentheses when it binds looser than an addition.
+fn shifted(src: &str, expr: &Expr, d: f64) -> String {
+    let text = |e: &Expr| src[e.span.range()].to_string();
+    if let Some(n) = scalar(expr) {
+        return number(n + d);
+    }
+    let added = |rhs: &Expr| scalar(rhs).unwrap_or_default();
+    // Comparisons and logic bind looser than `+`; arithmetic does not.
+    let loose = |op: &BinaryOp| !matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div)
+        && !matches!(op, BinaryOp::Mod | BinaryOp::Pow);
+    let (base, c) = match &expr.kind {
+        ExprKind::Binary { op: BinaryOp::Add, lhs, rhs } if scalar(rhs).is_some() => (text(lhs), added(rhs) + d),
+        ExprKind::Binary { op: BinaryOp::Sub, lhs, rhs } if scalar(rhs).is_some() => (text(lhs), d - added(rhs)),
+        ExprKind::Binary { op, .. } if loose(op) => (format!("({})", text(expr)), d),
+        ExprKind::Ternary { .. }
+        | ExprKind::Let { .. }
+        | ExprKind::Assert { .. }
+        | ExprKind::Echo { .. }
+        | ExprKind::FunctionLit { .. } => (format!("({})", text(expr)), d),
+        _ => (text(expr), d),
+    };
+    match number(c.abs()).as_str() {
+        "0" => base,
+        n if c < 0.0 => format!("{base} - {n}"),
+        n => format!("{base} + {n}"),
     }
 }
 
@@ -260,6 +328,31 @@ mod tests {
             assert_eq!(&edit.text[edit.selection], selected);
         }
         assert_eq!(transform_of(src, inner, Transform::Translate).unwrap(), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_computed_translate_moves_keeping_its_expressions() {
+        let src = "h = 30;\ntranslate([0, 0, h - 1.6]) cube(2);\n";
+        let range = at(src, "cube(2);", 0);
+        let edit = translate_by(src, range.clone(), [5.0, 0.0, 2.0]).unwrap();
+        assert_eq!(edit.text, src.replace("[0, 0, h - 1.6]", "[5, 0, h + 0.4]"));
+        assert_eq!(&edit.text[edit.selection.clone()], "cube(2);");
+        same_solid(&edit.text, "translate([5, 0, 30.4]) cube(2);");
+        // Moved back, the expression is as it was.
+        let back = translate_by(&edit.text, edit.selection, [-5.0, 0.0, -2.0]).unwrap();
+        assert_eq!(back.text, src);
+        // A name gets the move written after it; a looser expression goes
+        // in parentheses; a short vector grows only as far as it must.
+        let src = "d = 4; up = true;\ntranslate([d, up ? 1 : 2]) cube(1);\n";
+        let range = at(src, "cube(1);", 0);
+        let edit = translate_by(src, range.clone(), [-1.5, 3.0, 0.0]).unwrap();
+        assert!(edit.text.contains("translate([d - 1.5, (up ? 1 : 2) + 3]) cube(1);"), "{}", edit.text);
+        let edit = translate_by(src, range, [0.0, 0.0, 1.0]).unwrap();
+        assert!(edit.text.contains("translate([d, up ? 1 : 2, 1]) cube(1);"), "{}", edit.text);
+        // Through a part, the translate around it moves.
+        let src = "h = 30;\ntranslate([0, 0, h]) part(\"Dome\") color(\"white\") sphere(1);\n";
+        let edit = translate_by(src, at(src, "sphere(1);", 0), [0.0, 0.0, 5.0]).unwrap();
+        assert_eq!(edit.text, src.replace("[0, 0, h]", "[0, 0, h + 5]"));
     }
 
     #[test]
@@ -311,8 +404,11 @@ mod tests {
         let src = "width = 10;\ntranslate([width / 2, 0, 0]) cube(1);";
         let err = set_transform(src, at(src, "cube(1);", 0), Transform::Translate, [0.0; 3]).unwrap_err();
         assert_eq!(err, "The value is computed ([width / 2, 0, 0]): replace it with a number to change it.");
-        assert!(translate_by(src, at(src, "cube(1);", 0), [1.0, 0.0, 0.0]).is_err());
         assert!(transform_of(src, at(src, "cube(1);", 0), Transform::Translate).is_err());
+        // A move keeps the expressions of a vector, not a vector computed
+        // whole.
+        let src = "at = [5, 0, 0];\ntranslate(at) cube(1);";
+        assert!(translate_by(src, at(src, "cube(1);", 0), [1.0, 0.0, 0.0]).is_err());
         let src = "rotate(a = 30, v = [1, 1, 0]) cube(1);";
         assert!(set_transform(src, at(src, "cube(1);", 0), Transform::Rotate, [0.0; 3]).is_err());
     }

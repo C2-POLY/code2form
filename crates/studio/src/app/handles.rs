@@ -76,23 +76,28 @@ impl Default for Settings {
 
 /// Where the code puts the object: its `translate` and its `rotate`, and
 /// how far the statements around it move it, or why they cannot be read.
+/// `around` tells whether they only move it, which a move needs even when
+/// it cannot read how far.
 #[derive(Clone, Debug)]
 struct Pose {
     translate: Result<DVec3, String>,
     rotation: Result<DMat3, String>,
+    around: Result<(), String>,
     parents: Result<DVec3, String>,
 }
 
 impl Pose {
     fn read(src: &str, range: &Range<usize>, picking: Option<&Picking>, key: Statement) -> Pose {
         let read = |kind| code_edit::transform_of(src, range.clone(), kind).map(DVec3::from);
+        let parents = match picking {
+            Some(picking) => parents_offset(src, picking, key),
+            None => Err(String::new()),
+        };
         Pose {
             translate: read(Transform::Translate),
             rotation: read(Transform::Rotate).map(|v| gizmo::rotation(v.to_array())),
-            parents: match picking {
-                Some(picking) => parents_offset(src, picking, key),
-                None => Err(String::new()),
-            },
+            around: parents.as_ref().map(|_| ()).map_err(Clone::clone),
+            parents: parents.and_then(|offset| offset),
         }
     }
 
@@ -106,7 +111,7 @@ impl Pose {
 /// The builtins an object's placement climbs through when it is their only
 /// child, as [`crate::code_edit`] climbs them: the object's own transforms,
 /// or the inside of an extrusion, never transforms around it.
-const WRAPPERS: [&str; 11] = [
+const WRAPPERS: [&str; 12] = [
     "translate",
     "rotate",
     "scale",
@@ -114,6 +119,7 @@ const WRAPPERS: [&str; 11] = [
     "multmatrix",
     "resize",
     "color",
+    "part",
     "offset",
     "render",
     "linear_extrude",
@@ -121,23 +127,25 @@ const WRAPPERS: [&str; 11] = [
 ];
 
 /// Statements around an object that leave it where it is.
-const GROUPS: [&str; 9] =
-    ["union", "difference", "intersection", "hull", "minkowski", "group", "color", "render", "children"];
+const GROUPS: [&str; 10] =
+    ["union", "difference", "intersection", "hull", "minkowski", "group", "color", "render", "children", "part"];
 
 const AROUND: &str = "This object is turned or scaled by the code around it: change it in the code.";
+const MOVED_AROUND: &str = "This object is moved by a computed value around it: only the move handles work on it.";
 const COPIES: &str = "This statement makes several objects (in a loop or a module): change it in the code.";
 
 /// How far the statements around the object at `key` move it, beyond its
 /// own transforms: the sum of the `translate`s it sits in. Refused when one
 /// of them turns or scales it, or when the statement runs more than once
-/// or is the child of a module (which places it as it likes).
-fn parents_offset(src: &str, picking: &Picking, key: Statement) -> Result<DVec3, String> {
+/// or is the child of a module (which places it as it likes); the inner
+/// result refuses only the sum, when a `translate` computes its value.
+fn parents_offset(src: &str, picking: &Picking, key: Statement) -> Result<Result<DVec3, String>, String> {
     let mut runs = picking.origins.iter().enumerate().filter(|(_, o)| o.unit == key.unit && o.span == key.span);
     let Some((first, _)) = runs.next() else { return Err(String::new()) };
     if runs.next().is_some() {
         return Err(COPIES.into());
     }
-    let mut offset = DVec3::ZERO;
+    let mut offset = Ok(DVec3::ZERO);
     let mut climbing = true;
     let own = key.span.range();
     let contains = |outer: &Range<usize>, inner: &Range<usize>| outer.start <= inner.start && inner.end <= outer.end;
@@ -179,13 +187,16 @@ fn parents_offset(src: &str, picking: &Picking, key: Statement) -> Result<DVec3,
         climbing = false;
         match call.name.as_str() {
             "translate" => {
-                let v = match call.args.first().map(|a| &a.value) {
-                    None => Vec::new(),
-                    Some(code_edit::ArgValue::Literal(code_edit::Value::Vector(v))) if v.len() <= 3 => v.clone(),
-                    Some(_) => return Err(AROUND.into()),
-                };
-                for (k, x) in v.iter().enumerate() {
-                    offset[k] += x;
+                match call.args.first().map(|a| &a.value) {
+                    None => {}
+                    Some(code_edit::ArgValue::Literal(code_edit::Value::Vector(v))) if v.len() <= 3 => {
+                        if let Ok(offset) = &mut offset {
+                            for (k, x) in v.iter().enumerate() {
+                                offset[k] += x;
+                            }
+                        }
+                    }
+                    Some(_) => offset = Err(MOVED_AROUND.into()),
                 }
             }
             name if GROUPS.contains(&name) => {}
@@ -242,6 +253,10 @@ struct State {
     bar: Option<Rect>,
     /// The scripted gesture of a screenshot was set up.
     staged: bool,
+    /// A press on a handle that could not start a gesture, and why (empty
+    /// when the drag cannot start from there): it holds the pointer until
+    /// released, for the view neither to turn nor to pick under it.
+    refused: Option<String>,
 }
 
 impl State {
@@ -289,16 +304,22 @@ impl Gesture {
         key: Statement,
         range: Range<usize>,
     ) -> Result<Gesture, String> {
-        // Moving along world axes does without the turn; everything needs
-        // the translate, which a move rewrites and the others shift.
+        // Moving along world axes does without the turn.
         let local = gizmo.axes != WORLD;
         let rotation = match &pose.rotation {
             Ok(r) => *r,
             Err(why) if local || !matches!(handle, Handle::Move(_) | Handle::Plane(_)) => return Err(why.clone()),
             Err(_) => DMat3::IDENTITY,
         };
-        // Where the code turns and scales about, in the model's space.
-        let translate = pose.translate.clone()? + pose.parents.clone()?;
+        // Where the code turns and scales about, in the model's space. A
+        // move writes its delta into the translate, whatever it is, as long
+        // as the code around only moves the object.
+        pose.around.clone()?;
+        let placed = || Ok::<_, String>(pose.translate.clone()? + pose.parents.clone()?);
+        let translate = match handle {
+            Handle::Move(_) | Handle::Plane(_) => placed().unwrap_or(DVec3::ZERO),
+            _ => placed()?,
+        };
         let ray = viewer.ray(rect, press);
         let start = match handle {
             Handle::Move(k) => {
@@ -559,7 +580,11 @@ impl StudioApp {
         let (mut state, settings) = self.handles_load(ctx);
         let rect = self.view_rect;
         state.hot = None;
-        if state.gesture.is_none() {
+        // Held through the frame of the release, which would be a click.
+        if ctx.input(|i| !i.pointer.any_down() && !i.pointer.any_released()) {
+            state.refused = None;
+        }
+        if state.gesture.is_none() && state.refused.is_none() {
             if let Some((key, range)) = self.handles_target() {
                 let (pointer, pressed, press, dragging) = ctx.input(|i| {
                     let p = &i.pointer;
@@ -584,14 +609,18 @@ impl StudioApp {
                     if let (true, Some(handle), Some(gizmo)) = (pressed, state.hot, gizmo) {
                         match Gesture::start(handle, pointer, viewer, rect, gizmo, &pose, key, range) {
                             Ok(gesture) => state.gesture = Some(gesture),
-                            Err(why) if !why.is_empty() => self.doc.console.log(Level::Warning, why),
-                            Err(_) => {}
+                            Err(why) => {
+                                if !why.is_empty() {
+                                    self.doc.console.log(Level::Warning, why.clone());
+                                }
+                                state.refused = Some(why);
+                            }
                         }
                     }
                 }
             }
         }
-        let holds = state.hot.is_some() || state.gesture.is_some();
+        let holds = state.hot.is_some() || state.gesture.is_some() || state.refused.is_some();
         if holds {
             // A double-click on a handle does not frame the view.
             self.doc.viewer.frame_on_double_click = false;
@@ -718,6 +747,13 @@ impl StudioApp {
                 let pos = pos.or(by_handles).unwrap_or_default();
                 crate::inspect::paint_bubble_in(&painter, rect, pos, &gesture.label, theme::palette().text);
                 ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+            (None, _, Some(pos)) if state.refused.is_some() => {
+                let why = state.refused.as_deref().unwrap_or_default();
+                if !why.is_empty() {
+                    crate::inspect::paint_bubble_in(&painter, rect, pos, why, theme::palette().warning);
+                }
+                ctx.set_cursor_icon(egui::CursorIcon::NotAllowed);
             }
             (None, Some(hot), Some(pos)) => {
                 let hint = format!("{} · Shift: no snapping · type a value while dragging", hot.describe());
@@ -946,16 +982,37 @@ mod tests {
     }
 
     #[test]
-    fn computed_values_are_refused_with_the_reason() {
+    fn computed_values_move_but_refuse_a_turn_with_the_reason() {
         let src = "w = 4;\ntranslate([w, 0, 0]) cube(1);";
         let range = src.find("cube").unwrap()..src.len();
         let scene = design(src);
         let picking = scene.picking.as_deref().unwrap();
         let pose = Pose::read(src, &range, Some(picking), picking.at_offset(range.start).unwrap());
         assert!(pose.translate.is_err());
-        let err =
-            write_change(src, range, Change::Move(DVec3::X), DVec3::ZERO, DVec3::ZERO, DMat3::IDENTITY).unwrap_err();
+        let edit = write_change(src, range, Change::Move(DVec3::X), DVec3::ZERO, DVec3::ZERO, DMat3::IDENTITY);
+        assert_eq!(edit.unwrap().text, "w = 4;\ntranslate([w + 1, 0, 0]) cube(1);");
+        // A turn shifts the translate about the pivot, which needs its value.
+        let ctx = egui::Context::default();
+        let (viewer, rect, range) = selected_view(&ctx, src, "cube(1);");
+        let key = viewer.selection()[0];
+        let pose = Pose::read(src, &range, viewer.picking().map(|p| &**p), key);
+        let gizmo = gizmo_for(&viewer, rect, &pose, &Settings::default()).unwrap();
+        let press = viewer.to_screen(rect, gizmo.origin).unwrap();
+        let err = Gesture::start(Handle::Turn(2), press, &viewer, rect, gizmo, &pose, key, range).unwrap_err();
         assert!(err.starts_with("The value is computed"), "{err}");
+    }
+
+    #[test]
+    fn an_arrow_moves_a_part_placed_by_a_parameter() {
+        // As the night light places its dome: a part, at a computed height.
+        let src = "h = 30;\ntranslate([0, 0, h]) part(\"Dome\") color(\"white\") sphere(10);\ncube(5);";
+        for needle in ["sphere(10);", "translate([0, 0, h]) part(\"Dome\") color(\"white\") sphere(10);"] {
+            let gesture = drag(src, needle, Handle::Move(2), Settings::default(), |g, v, rect| {
+                v.to_screen(rect, g.origin + Vec3::Z * (PRESS * g.unit + 5.0)).unwrap()
+            });
+            let edit = gesture.edit(src).unwrap().unwrap();
+            assert!(edit.text.contains("translate([0, 0, h + 5]) part(\"Dome\")"), "{needle}: {}", edit.text);
+        }
     }
 
     #[test]
@@ -967,10 +1024,10 @@ mod tests {
         };
         let src = "translate([0, 0, 5]) {\n    translate([1, 0, 0]) cube(1);\n    sphere(1);\n}";
         // Its own translate is not around it; the group's is.
-        assert_eq!(offset(src, "cube(1);"), Ok(DVec3::new(0.0, 0.0, 5.0)));
-        assert_eq!(offset(src, "translate([1, 0, 0]) cube(1);"), Ok(DVec3::new(0.0, 0.0, 5.0)));
+        assert_eq!(offset(src, "cube(1);"), Ok(Ok(DVec3::new(0.0, 0.0, 5.0))));
+        assert_eq!(offset(src, "translate([1, 0, 0]) cube(1);"), Ok(Ok(DVec3::new(0.0, 0.0, 5.0))));
         let src = "module m() translate([2, 0, 0]) cube(1);\ntranslate([0, 3, 0]) m();";
-        assert_eq!(offset(src, "cube(1);"), Ok(DVec3::new(0.0, 3.0, 0.0)));
+        assert_eq!(offset(src, "cube(1);"), Ok(Ok(DVec3::new(0.0, 3.0, 0.0))));
         let src = "rotate([0, 0, 45]) { cube(1); sphere(1); }";
         assert_eq!(offset(src, "cube(1);"), Err(AROUND.to_string()));
         let src = "for (i = [0 : 2]) translate([i * 5, 0, 0]) cube(1);";
@@ -980,6 +1037,12 @@ mod tests {
         assert_eq!(offset(src, "cube(1);"), Err(AROUND.to_string()));
         let src = "module m() translate([5, 0, 0]) children();\ntranslate([0, 1, 0]) m() translate([1, 0, 0]) cube(1);";
         assert_eq!(offset(src, "cube(1);"), Err(AROUND.to_string()));
+        // A part's translate is its object's own; a computed translate
+        // around it lets a move through, not the sum.
+        let src = "translate([0, 0, 4]) { part(\"A\") cube(1); sphere(1); }\n\
+                   h = 2;\ntranslate([0, 0, h]) { cylinder(1); part(\"B\") cube(2); }";
+        assert_eq!(offset(src, "cube(1);"), Ok(Ok(DVec3::new(0.0, 0.0, 4.0))));
+        assert_eq!(offset(src, "cube(2);"), Ok(Err(MOVED_AROUND.to_string())));
     }
 
     #[test]
