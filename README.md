@@ -447,6 +447,23 @@ the reference app installed in `/Applications`,
 or from the `Contents/Resources` folder that `C2F_REFERENCE_RESOURCES`
 names.
 
+## Website
+
+The website, [c2-poly.github.io/code2form](https://c2-poly.github.io/code2form/),
+is an [Astro](https://astro.build) site in `site/`, in English and French.
+To run it locally (Node 22.12 or later):
+
+```sh
+cd site && npm ci && npm run dev
+```
+
+`npm run build` writes it to `site/dist`, reading the latest release from
+the GitHub API (`SITE_OFFLINE=1` skips that and links to the releases page).
+The frames of its scroll story come from the app's own renderer:
+`site/scripts/frames.sh` renders them again (it needs `ffmpeg` with WebP).
+`.github/workflows/site.yml` builds it on pull requests and publishes it
+to GitHub Pages from `main` and on each release.
+
 ## Layout
 
 | Crate | What it does |
