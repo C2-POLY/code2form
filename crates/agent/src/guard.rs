@@ -364,7 +364,7 @@ mod tests {
         let absolute = folders.root.join("project/sub/../box.c2f");
         assert!(scope.check("render", &json!({ "path": absolute })).is_ok());
         let new = scope.check("export", &json!({ "path": "box.c2f", "output": "out/box.stl" })).unwrap();
-        assert_eq!(new["output"], project.join("out/box.stl").to_string_lossy().as_ref());
+        assert_eq!(new["output"], project.join("out").join("box.stl").to_string_lossy().as_ref());
 
         for outside in [json!({ "path": "../secret.scad" }), json!({ "path": folders.root.join("secret.scad") }), json!({ "working_dir": "/" })] {
             let err = scope.check("render", &outside).unwrap_err();
