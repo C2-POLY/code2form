@@ -301,7 +301,7 @@ impl StudioApp {
             (Some(wiring), Some(hit)) => Some(circuit_context(&wiring.circuit, hit, path, &doc.text)),
             _ => None,
         };
-        let code = if self.arrangement == Arrangement::View { None } else { doc.editor.selected_lines(&doc.text) };
+        let code = if self.arrangement() == Arrangement::View { None } else { doc.editor.selected_lines(&doc.text) };
         let code = code.map(|(first, last)| lines_context(path, &doc.text, first, last));
         self.agent.suggest(view, code);
     }
@@ -325,23 +325,33 @@ impl StudioApp {
             let target = response.interact_pointer_pos().and_then(|pos| self.view_target(response.rect, pos));
             ctx.data_mut(|d| d.insert_temp(target_id(), target));
         }
-        let Some(target) = ctx.data(|d| d.get_temp::<Option<Attachment>>(target_id())).flatten() else { return };
-        response.context_menu(|ui| {
-            ui.label(egui::RichText::new(label(&target)).size(11.5).color(crate::theme::palette().text_dim));
-            let ask = ui.button(tr("Ask the agent…", "Demander à l'agent…"));
-            if ask.on_hover_text(tr("Show the agent with this attached", "Afficher l'agent avec ceci joint")).clicked() {
-                self.agent.ask_about(target.clone());
-                self.open_chat(ui.ctx());
-                ui.close();
-            }
-        });
+        // A design's menu is the selection's, which ends with this entry.
+        if self.doc.is_circuit() {
+            response.context_menu(|ui| self.ask_agent_entry(ui, false));
+        }
+    }
+
+    /// The menu's entry to ask the agent about what was right-clicked,
+    /// under a separator when `after` other entries.
+    pub(super) fn ask_agent_entry(&mut self, ui: &mut egui::Ui, after: bool) {
+        let Some(target) = ui.ctx().data(|d| d.get_temp::<Option<Attachment>>(target_id())).flatten() else { return };
+        if after {
+            ui.separator();
+        }
+        ui.label(egui::RichText::new(label(&target)).size(11.5).color(crate::theme::palette().text_dim));
+        let ask = ui.button(tr("Ask the agent…", "Demander à l'agent…"));
+        if ask.on_hover_text(tr("Show the agent with this attached", "Afficher l'agent avec ceci joint")).clicked() {
+            self.agent.ask_about(target.clone());
+            self.open_chat(ui.ctx());
+            ui.close();
+        }
     }
 
     /// Takes the picture of the view a message waits for: asks for the
     /// window's, then cuts the view from it once it comes.
     pub(super) fn agent_view_shot(&mut self, ctx: &egui::Context) {
         if self.agent.wants_view() {
-            if self.arrangement == Arrangement::Code || self.view_rect.width() < 1.0 {
+            if self.arrangement() == Arrangement::Code || self.view_rect.width() < 1.0 {
                 self.agent.send_with_view(None);
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(AgentShot)));

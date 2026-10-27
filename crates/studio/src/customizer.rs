@@ -21,6 +21,9 @@ fn design_defaults() -> &'static str {
     tr("Design default values", "Valeurs par défaut du fichier")
 }
 
+/// How long a parameter the properties panel opens stays outlined.
+const REVEAL_SECONDS: f64 = 1.5;
+
 #[derive(Default)]
 pub struct Customizer {
     /// The file's parameters, as of the last render that parsed.
@@ -42,6 +45,9 @@ pub struct Customizer {
     new_name: String,
     /// The last problem with presets, until the next action.
     problem: Option<String>,
+    /// The parameter the properties panel asked to show, and when it was
+    /// first scrolled to.
+    revealed: Option<(String, Option<f64>)>,
 }
 
 /// A text field and the value it was last in step with.
@@ -377,6 +383,7 @@ impl Customizer {
         let mut changed = false;
         let value = self.value(parameter).clone();
         let modified = value != parameter.default;
+        let top = ui.cursor().min;
         ui.horizontal(|ui| {
             let mut name = RichText::new(&parameter.name).size(13.0).color(theme::palette().text);
             if modified {
@@ -407,7 +414,41 @@ impl Customizer {
             ui.label(RichText::new(description).size(11.5).color(theme::palette().text_dim));
         }
         changed |= self.control(ui, parameter, value);
+        self.paint_revealed(ui, parameter, top);
         changed
+    }
+
+    /// Scrolls to the parameter [`Self::reveal`] asked for, the first time
+    /// it is drawn, and outlines it for a moment.
+    fn paint_revealed(&mut self, ui: &mut egui::Ui, parameter: &Parameter, top: egui::Pos2) {
+        let Some((name, since)) = &mut self.revealed else { return };
+        if *name != parameter.name {
+            return;
+        }
+        let now = ui.input(|i| i.time);
+        let rect = egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().top())).expand(3.0);
+        if since.is_none() {
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+            *since = Some(now);
+        }
+        if now - since.unwrap_or(now) < REVEAL_SECONDS {
+            ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.5, theme::palette().accent), egui::StrokeKind::Outside);
+            ui.ctx().request_repaint();
+        } else {
+            self.revealed = None;
+        }
+    }
+
+    /// The file's parameters with the values they render with, for the
+    /// properties panel.
+    pub fn parameter_values(&self) -> Vec<(String, Literal)> {
+        self.parameters.iter().map(|p| (p.name.clone(), self.value(p).clone())).collect()
+    }
+
+    /// Scrolls the panel to parameter `name` and outlines it, as the
+    /// properties panel asks for a value that names it.
+    pub fn reveal(&mut self, name: &str) {
+        self.revealed = Some((name.to_string(), None));
     }
 
     fn control(&mut self, ui: &mut egui::Ui, parameter: &Parameter, value: Literal) -> bool {

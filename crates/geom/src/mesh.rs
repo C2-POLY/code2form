@@ -11,6 +11,10 @@ pub struct RenderMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub colors: Vec<[f32; 4]>,
+    /// For each triangle, the node that made it: one more than its
+    /// [`c2f_eval::Node::origin`], 0 when it has none. See
+    /// [`RenderMesh::origin`].
+    pub origins: Vec<u32>,
 }
 
 impl RenderMesh {
@@ -33,7 +37,18 @@ impl RenderMesh {
         }))
     }
 
+    /// The origin of triangle `index`: an index into
+    /// [`c2f_eval::Output::origins`].
+    pub fn origin(&self, index: usize) -> Option<u32> {
+        self.origins.get(index).and_then(|o| o.checked_sub(1))
+    }
+
     pub fn push_triangle(&mut self, corners: [[f32; 3]; 3], colors: [[f32; 4]; 3]) {
+        self.push_triangle_from(corners, colors, None);
+    }
+
+    /// A triangle made by the node of `origin`.
+    pub fn push_triangle_from(&mut self, corners: [[f32; 3]; 3], colors: [[f32; 4]; 3], origin: Option<u32>) {
         let [a, b, c] = corners;
         let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -43,12 +58,14 @@ impl RenderMesh {
         self.positions.extend(corners);
         self.normals.extend([normal; 3]);
         self.colors.extend(colors);
+        self.origins.push(origin.map_or(0, |o| o.saturating_add(1)));
     }
 
     pub fn append(&mut self, other: RenderMesh) {
         self.positions.extend(other.positions);
         self.normals.extend(other.normals);
         self.colors.extend(other.colors);
+        self.origins.extend(other.origins);
     }
 }
 
@@ -67,6 +84,9 @@ pub struct Rendered {
     pub highlights: RenderMesh,
     /// Parts marked `%`, drawn translucent and left out of the model.
     pub backgrounds: RenderMesh,
+    /// What every `difference` subtracts, which is not drawn but can be
+    /// picked (to select the shape that makes a hole).
+    pub cutters: RenderMesh,
     /// The model is 2D (drawn as a thin slab).
     pub is_2d: bool,
     pub stats: Stats,

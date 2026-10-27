@@ -37,9 +37,7 @@ impl StudioApp {
     /// Starts in code: the code beside the view, ready to type in.
     pub(super) fn start_in_code(&mut self, ctx: &egui::Context) {
         self.doc.start = None;
-        if self.arrangement == Arrangement::View {
-            self.arrangement = Arrangement::Split;
-        }
+        self.show_code(ctx);
         self.doc.editor.focus(ctx);
     }
 
@@ -69,7 +67,7 @@ impl StudioApp {
             self.start_in_code(ctx);
             return;
         }
-        let rect = if self.arrangement == Arrangement::Code || !self.view_rect.is_positive() { ctx.screen_rect() } else { self.view_rect };
+        let rect = if self.arrangement() == Arrangement::Code || !self.view_rect.is_positive() { ctx.screen_rect() } else { self.view_rect };
         let mut idea = self.doc.start.take().unwrap_or_default();
         let mut choice = None;
         let palette = theme::palette();

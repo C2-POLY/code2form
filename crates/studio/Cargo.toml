@@ -15,6 +15,7 @@ c2f-lang.workspace = true
 c2f-eval.workspace = true
 c2f-geom.workspace = true
 c2f-circuit.workspace = true
+c2f-sketch.workspace = true
 # The agent's tools, the very ones `c2f mcp` serves.
 c2f-agent.workspace = true
 # The assembly progress saved next to a circuit.

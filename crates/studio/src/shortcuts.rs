@@ -30,6 +30,8 @@ pub enum Action {
     Agent,
     UndoAgent,
     Settings,
+    /// From the Model workspace to the Code one, and back.
+    SwitchWorkspace,
 }
 
 const fn keys(modifiers: Modifiers, key: Key) -> KeyboardShortcut {
@@ -40,7 +42,7 @@ const SHIFT_COMMAND: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND }
 const ALT_COMMAND: Modifiers = Modifiers { alt: true, ..Modifiers::COMMAND };
 
 impl Action {
-    pub const ALL: [Action; 19] = [
+    pub const ALL: [Action; 20] = [
         Action::New,
         Action::Open,
         Action::Save,
@@ -60,6 +62,7 @@ impl Action {
         Action::Agent,
         Action::UndoAgent,
         Action::Settings,
+        Action::SwitchWorkspace,
     ];
 
     /// As `settings.txt` writes it, after `shortcut-`.
@@ -84,6 +87,7 @@ impl Action {
             Action::Agent => "agent",
             Action::UndoAgent => "undo-agent",
             Action::Settings => "settings",
+            Action::SwitchWorkspace => "workspace",
         }
     }
 
@@ -108,6 +112,7 @@ impl Action {
             Action::Agent => tr("Chat with the Agent", "Discussion avec l'agent"),
             Action::UndoAgent => tr("Undo the Agent's Change", "Annuler la modification de l'agent"),
             Action::Settings => tr("Settings…", "Réglages…"),
+            Action::SwitchWorkspace => tr("Switch Model / Code", "Basculer Modèle / Code"),
         }
     }
 
@@ -133,6 +138,7 @@ impl Action {
             Action::Agent => keys(Modifiers::COMMAND, Key::L),
             Action::UndoAgent => keys(ALT_COMMAND, Key::Z),
             Action::Settings => keys(Modifiers::COMMAND, Key::Comma),
+            Action::SwitchWorkspace => keys(Modifiers::COMMAND, Key::E),
         }
     }
 }

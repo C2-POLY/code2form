@@ -33,6 +33,48 @@ pub struct Output {
     /// Whether the program read `$t`, the animation's time: whether it
     /// may change from one frame to the next.
     pub animated: bool,
+    /// Every module instantiation that ran, in order: what [`Node::origin`]
+    /// indexes. A statement in a loop or in a module called twice appears
+    /// once per time it ran, each time with the same span.
+    pub origins: Vec<Origin>,
+}
+
+/// One instantiation of a module call (or of an `if`): where it is
+/// written, and the instantiation it ran in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Origin {
+    /// The file of [`Program::files`] holding it: 0 for the main file and
+    /// the files it includes, which `span.file` then tells apart (0 is the
+    /// main file itself).
+    pub unit: usize,
+    /// The whole statement: its modifiers, its name, its arguments and its
+    /// children, through its `;` or `}`.
+    pub span: c2f_lang::Span,
+    /// The instantiation whose evaluation ran this one: the module call
+    /// whose body holds it, or the call whose children it is.
+    pub parent: Option<u32>,
+    pub kind: CallKind,
+}
+
+/// What an instantiation calls, which a selection uses to pick the object
+/// a click means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallKind {
+    /// A built-in shape or operation: `cube`, `translate`, `difference`...
+    Builtin,
+    /// A module defined in the program or a library.
+    Module,
+    /// Control flow that only groups what it runs: `if`, `for`, `let`,
+    /// `echo`, `assert`, `children`.
+    Flow,
+}
+
+impl Origin {
+    /// Whether the statement is written in the main file itself, where an
+    /// editor can change it.
+    pub fn in_main_file(&self) -> bool {
+        self.unit == 0 && self.span.file == 0
+    }
 }
 
 /// A pause in a 3D print, made once the print is done up to height `z`
@@ -97,5 +139,6 @@ pub(crate) fn evaluate_here(program: &Program) -> Output {
         error,
         pauses: std::mem::take(&mut interp.pauses),
         animated: interp.reads_t,
+        origins: std::mem::take(&mut interp.origins),
     }
 }

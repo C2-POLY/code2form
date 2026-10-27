@@ -1327,7 +1327,7 @@ impl StudioApp {
 
     /// Asks for a picture of the window, to cut the view from.
     fn ask_live_shot(&mut self, ctx: &egui::Context) -> Result<(), String> {
-        if self.arrangement == super::Arrangement::Code || self.view_rect.width() < 1.0 {
+        if self.arrangement() == super::Arrangement::Code || self.view_rect.width() < 1.0 {
             return Err("the 3D view is hidden: ask for a preset `view` (such as `diagonal`) instead".into());
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(Shot)));

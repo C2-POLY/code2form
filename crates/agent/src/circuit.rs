@@ -152,6 +152,7 @@ pub fn assemble(circuit: &Circuit, src: &str, path: &Path) -> Assembly {
                 kind: NodeKind::Transform(instance.matrix()),
                 highlight: false,
                 background: false,
+                origin: None,
                 children: nodes.clone(),
             });
         }
@@ -188,6 +189,7 @@ fn evaluate(
     let mut nodes = output.nodes;
     for node in &mut nodes {
         rebase(node, dir);
+        node.clear_origins();
     }
     Some(nodes)
 }

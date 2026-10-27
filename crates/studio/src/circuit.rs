@@ -135,6 +135,8 @@ pub fn place(out: &mut RenderMesh, mesh: &RenderMesh, matrix: &[[f64; 4]; 4], ti
         Some(tint) if c == UNCOLORED => tint,
         _ => c,
     }));
+    // A part's origins index its own program's table, not the design's.
+    out.origins.resize(out.triangle_count(), 0);
 }
 
 /// A part file rendered once, in its own coordinates.
@@ -466,6 +468,7 @@ pub fn scene(
         enclosure: enclosure_range,
         // A circuit's parts are placed by the circuit, not written in part().
         exploded: None,
+        picking: None,
     }
 }
 

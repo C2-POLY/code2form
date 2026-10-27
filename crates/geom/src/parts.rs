@@ -103,7 +103,7 @@ impl Parts {
         if children.is_empty() && !node.children.is_empty() {
             return None;
         }
-        Some(Node { kind: node.kind.clone(), highlight: node.highlight, background: false, children })
+        Some(Node { kind: node.kind.clone(), highlight: node.highlight, background: false, children, origin: node.origin })
     }
 }
 

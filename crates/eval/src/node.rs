@@ -16,6 +16,11 @@ pub struct Node {
     pub highlight: bool,
     /// `%`: shown transparent in previews and left out of renders.
     pub background: bool,
+    /// The call that made this node, as an index into [`crate::Output::origins`]:
+    /// how a click in a 3D view finds its line in the source. `None` for
+    /// nodes made by the evaluator itself and for those of another program
+    /// (a circuit's parts), which take the origin of the node around them.
+    pub origin: Option<u32>,
     pub children: Vec<Node>,
 }
 
@@ -168,7 +173,27 @@ pub struct TextParams {
 
 impl Node {
     pub fn new(kind: NodeKind, children: Vec<Node>) -> Self {
-        Node { kind, highlight: false, background: false, children }
+        Node { kind, highlight: false, background: false, origin: None, children }
+    }
+
+    /// Forgets the origins of this subtree, for nodes evaluated by another
+    /// program whose origins index another table.
+    pub fn clear_origins(&mut self) {
+        self.origin = None;
+        for child in &mut self.children {
+            child.clear_origins();
+        }
+    }
+
+    /// Whether `other` makes the same geometry: equal but for the
+    /// origins, which differ between two instantiations of one call (in a
+    /// loop, or a module used twice) although their shapes do not.
+    pub fn same_shape(&self, other: &Node) -> bool {
+        self.kind == other.kind
+            && self.highlight == other.highlight
+            && self.background == other.background
+            && self.children.len() == other.children.len()
+            && self.children.iter().zip(&other.children).all(|(a, b)| a.same_shape(b))
     }
 
     pub fn group(children: Vec<Node>) -> Self {

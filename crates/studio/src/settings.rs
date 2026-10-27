@@ -57,6 +57,8 @@ pub struct Settings {
     pub show_grid: bool,
     pub show_axes: bool,
     pub layer_height: f32,
+    /// What the window is laid out for: the mouse or the code.
+    pub workspace: Workspace,
     /// STL exports are binary rather than ASCII.
     pub binary_stl: bool,
     /// The folder Export… opens in; `None` for the design's own folder.
@@ -98,6 +100,48 @@ pub struct Settings {
     pub agent: AgentSettings,
 }
 
+/// What the window is laid out for. Model: the tree, the modelling tools
+/// and the inspector around the view, to make an object with the mouse.
+/// Code: the editor and the file's parameters around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Workspace {
+    Model,
+    #[default]
+    Code,
+}
+
+impl Workspace {
+    /// In the switch's order: the code first.
+    pub const ALL: [Workspace; 2] = [Workspace::Code, Workspace::Model];
+
+    /// As `settings.txt` writes it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Workspace::Model => "model",
+            Workspace::Code => "code",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|w| w.id() == id)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Workspace::Model => "Model",
+            Workspace::Code => "Code",
+        }
+    }
+
+    /// The other one.
+    pub fn other(self) -> Self {
+        match self {
+            Workspace::Model => Workspace::Code,
+            Workspace::Code => Workspace::Model,
+        }
+    }
+}
+
 /// Where the window is, in the screen's points: the top left corner of its
 /// frame, where winit places a window, and the size of its content.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -132,6 +176,7 @@ impl Default for Settings {
             show_grid: true,
             show_axes: true,
             layer_height: LAYER_HEIGHT,
+            workspace: Workspace::default(),
             binary_stl: false,
             export_folder: None,
             gltf_scale: GLTF_SCALES[0],
@@ -195,6 +240,7 @@ impl Settings {
                 "code-size" => set(&mut settings.code_size, finite(value).map(|v| clamp(v, &CODE_SIZES))),
                 "grid" => set(&mut settings.show_grid, value.parse().ok()),
                 "axes" => set(&mut settings.show_axes, value.parse().ok()),
+                "workspace" => set(&mut settings.workspace, Workspace::from_id(value)),
                 "layer-height" => set(&mut settings.layer_height, finite(value).map(|v| clamp(v, &LAYER_HEIGHTS))),
                 "stl" => {
                     set(&mut settings.binary_stl, ["ascii", "binary"].iter().position(|&f| f == value).map(|i| i == 1))
@@ -250,6 +296,7 @@ impl Settings {
         text.push_str(&format!("grid = {}\n", self.show_grid));
         text.push_str(&format!("axes = {}\n", self.show_axes));
         text.push_str(&format!("layer-height = {}\n", self.layer_height));
+        text.push_str(&format!("workspace = {}\n", self.workspace.id()));
         text.push_str(&format!("stl = {}\n", if self.binary_stl { "binary" } else { "ascii" }));
         let export_folder = self.export_folder.as_deref().and_then(Path::to_str);
         if let Some(folder) = export_folder.filter(|f| !f.contains(['\n', '\r'])) {
@@ -368,6 +415,7 @@ mod tests {
             show_grid: false,
             show_axes: true,
             layer_height: 0.12,
+            workspace: Workspace::Model,
             binary_stl: true,
             export_folder: Some(absolute("exports")),
             gltf_scale: 1.0,

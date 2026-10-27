@@ -608,6 +608,15 @@ name = "c2f-lang"
 version = "0.5.0"
 
 [[package]]
+name = "c2f-sketch"
+version = "0.4.0"
+dependencies = [
+ "c2f-eval",
+ "c2f-geom",
+ "c2f-lang",
+]
+
+[[package]]
 name = "calloop"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -720,6 +729,7 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "c2f-sketch",
  "eframe",
  "glam",
  "log",
