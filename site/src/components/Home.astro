@@ -68,7 +68,7 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
           <div class="chips" aria-hidden="true">
             {s.ways.mouse.tools.map((tool, i) => <span class:list={['chip', { on: i === 1 }]}>{tool}</span>)}
           </div>
-          <h3>{s.ways.mouse.title} <span class="tag soon">{s.ways.soon}</span></h3>
+          <h3>{s.ways.mouse.title}</h3>
           <p>{s.ways.mouse.text}</p>
         </div>
       </article>
@@ -258,11 +258,6 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
 
   .ways-grid pre + .card-body {
     padding-top: 4px;
-  }
-
-  .soon {
-    font-size: 12px;
-    font-weight: 400;
   }
 
   .chips {
