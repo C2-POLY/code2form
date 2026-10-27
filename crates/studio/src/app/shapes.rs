@@ -403,7 +403,10 @@ impl StudioApp {
         // Right-click: the menu of the selection, which the click joined.
         let mut command = None;
         let can_paste = state.clipboard.is_some();
-        response.context_menu(|ui| command = object_menu(ui, selected, can_paste));
+        response.context_menu(|ui| {
+            command = object_menu(ui, selected, can_paste);
+            self.ask_agent_entry(ui, true);
+        });
 
         state.selection = (self.doc.id, self.doc.viewer.selection().to_vec());
         state.store(ctx);
@@ -781,7 +784,7 @@ mod tests {
 
     /// The app without a window, nor the user's files, on a blank design.
     fn studio(ctx: &egui::Context) -> StudioApp {
-        let stores = Stores { session: None, settings: None };
+        let stores = Stores { session: None, settings: None, conversations: None };
         StudioApp::with(ctx, None, stores, RecentFiles::default(), Settings::load(None), Vec::new())
     }
 

@@ -3,6 +3,10 @@
 
 #[macro_use]
 mod i18n;
+mod agent_confirm;
+mod agent_markdown;
+mod agent_panel;
+mod agent_setup;
 mod animation;
 mod app;
 mod app_icon;
@@ -43,10 +47,11 @@ mod window;
 mod wiring;
 mod worker;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use c2f_agent::guard::Policy;
 use eframe::egui;
 
 const USAGE: &str = "\
@@ -56,7 +61,8 @@ Opens each file in a tab, the last one shown, in an editor with a live 3D
 preview; the tabs open when the app was last closed come back first.
 
 Set CODE2FORM_SCREENSHOT=out.png to save a picture of the window once
-the first render is shown; the window then opens without taking focus.
+the first render is shown, then quit; the window opens without taking
+focus.
 
 The Open Recent list is kept in the user's settings folder, or in the
 file CODE2FORM_RECENT_FILES names; screenshot runs without that variable
@@ -68,6 +74,14 @@ default, and the workspace CODE2FORM_WORKSPACE names (model or code), the
 Code one by default.";
 
 fn main() -> ExitCode {
+    // An agent run by the studio (or by anyone, with the app's executable
+    // and no c2f installed) serves the tools there, the live ones too, on
+    // stdin and stdout, without a window.
+    // Not `args()`, which panics on an argument that is not UTF-8.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(rest) = studio_server_args(&args) {
+        return mcp(rest);
+    }
     // Old macOS versions add a process serial number to apps the Finder starts.
     let paths: Vec<PathBuf> =
         std::env::args_os().skip(1).filter(|a| !a.to_string_lossy().starts_with("-psn_")).map(PathBuf::from).collect();
@@ -152,6 +166,54 @@ fn main() -> ExitCode {
     if ERRORS.failed.load(Ordering::Relaxed) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
+/// The arguments after `mcp --studio`, when the command line starts so.
+fn studio_server_args(args: &[std::ffi::OsString]) -> Option<&[std::ffi::OsString]> {
+    match args {
+        [mcp, studio, rest @ ..] if mcp == "mcp" && studio == "--studio" => Some(rest),
+        _ => None,
+    }
+}
+
+/// What the server lets the agent do in `folder`: the `--policy` JSON the
+/// engine gives (`args`), else `CODE2FORM_AGENT_POLICY`, else the settings
+/// as `settings.txt` keeps them, as `c2f mcp --studio` reads them.
+fn server_policy(args: &[std::ffi::OsString], folder: &Path) -> Policy {
+    let given = args.iter().position(|a| a == "--policy").and_then(|at| args.get(at + 1)?.to_str().map(str::to_string));
+    let spec = given.or_else(|| std::env::var("CODE2FORM_AGENT_POLICY").ok());
+    match spec.and_then(|spec| agent_setup::AgentSettings::from_policy_json(&spec)) {
+        Some((agent, libraries)) => agent.policy(folder, &libraries),
+        None => Policy::from_settings_file(c2f_agent::guard::settings_file().as_deref(), Some(folder)),
+    }
+}
+
+/// `code2form mcp --studio`: `c2f mcp --studio`, from the app itself.
+fn mcp(args: &[std::ffi::OsString]) -> ExitCode {
+    eprintln!("code2form mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
+    let tools = match c2f_agent::Registry::builtin().with(Box::new(c2f_agent::studio_link::StudioProxy::new())) {
+        Ok(tools) => tools,
+        Err(err) => {
+            eprintln!("code2form mcp: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // What the user lets the agent do: Claude Code starts this server in
+    // the active file's folder (a scratch one for an untitled tab), its
+    // scope; never "anywhere".
+    let folder = std::env::current_dir().unwrap_or_else(|_| {
+        let scratch = agent_setup::scratch_folder("default");
+        let _ = std::fs::create_dir_all(&scratch);
+        scratch
+    });
+    let tools = c2f_agent::guard::Guarded::registry(tools, server_policy(args, &folder));
+    match c2f_agent::Server::new(tools).serve(std::io::stdin().lock(), std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("code2form mcp: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Prints eframe's errors, such as a window it could not open.
 struct Errors {
     failed: AtomicBool,
@@ -172,4 +234,51 @@ impl log::Log for Errors {
     }
 
     fn flush(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    #[test]
+    fn the_server_s_arguments_may_be_any_bytes() {
+        use std::ffi::OsString;
+        let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(super::studio_server_args(&args(&["mcp", "--studio"])), Some(&[][..]));
+        let with = args(&["mcp", "--studio", "--policy", "{}"]);
+        assert_eq!(super::studio_server_args(&with).map(<[_]>::len), Some(2));
+        assert!(super::studio_server_args(&args(&["box.c2f"])).is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            // Not UTF-8: a file to open, no panic.
+            let odd = vec![OsString::from_vec(vec![0x66, 0xff, 0x6f])];
+            assert!(super::studio_server_args(&odd).is_none());
+        }
+    }
+
+    #[test]
+    fn the_server_takes_the_policy_it_is_given() {
+        use std::ffi::OsString;
+        let agent = crate::agent_setup::AgentSettings { allow_export: false, ask_first: true, ..Default::default() };
+        // Absolute on every system: `/libs` has no drive on Windows.
+        let (libs, work) = (std::env::temp_dir().join("libs"), std::env::temp_dir().join("work"));
+        let json = agent.policy_json(std::slice::from_ref(&libs));
+        let args = [OsString::from("--policy"), OsString::from(json)];
+        let policy = super::server_policy(&args, &work);
+        assert!(!policy.export && policy.ask_first);
+        let scope = policy.scope.unwrap();
+        assert_eq!((&scope.folder, &scope.read_only[0]), (&work, &libs));
+    }
+
+    /// The studio's agent calls the very tools `c2f mcp` serves.
+    #[test]
+    fn the_agent_s_tools_render_code() {
+        let tools = c2f_agent::Registry::builtin();
+        let listed = tools.list();
+        assert!(listed.iter().any(|tool| tool["name"] == "render" && tool["inputSchema"]["properties"]["code"].is_object()));
+        let content = tools.call("render", &json!({ "code": "cube([10, 20, 5]);" })).expect("the render tool").expect("a report");
+        let report: Value = serde_json::from_str(content[0]["text"].as_str().expect("a text")).expect("JSON");
+        assert_eq!(report["bounding_box"]["size"], json!([10.0, 20.0, 5.0]));
+    }
 }

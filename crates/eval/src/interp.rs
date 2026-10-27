@@ -172,7 +172,7 @@ impl<'p> Interp<'p> {
         if let Some(nodes) = self.circuit_parts.get(&part.name) {
             return nodes.clone();
         }
-        let nodes = match Program::load_alone(&part.source_with_params(), &part.path, &self.program.library_paths) {
+        let nodes = match Program::load_alone(&part.source_with_params(), &part.path, &self.program.library_paths, self.program.scope.as_ref()) {
             Ok(program) => {
                 let output = crate::evaluate_here(&program);
                 for message in output.warnings.into_iter().chain(output.error) {
@@ -201,7 +201,19 @@ impl<'p> Interp<'p> {
     /// how the CSG names it. Paths resolve against the directory of the
     /// file holding the code (a used library's own), and are named
     /// relative to the main file's directory.
-    pub fn data_path(&self, env: &Env<'p>, file: &str) -> (std::path::PathBuf, String) {
+    ///
+    /// With a scope, a file outside it is a warning, and the path and the
+    /// name are empty: nothing reads it.
+    pub fn data_path(&mut self, env: &Env<'p>, file: &str) -> (std::path::PathBuf, String) {
+        let found = self.data_path_unscoped(env, file);
+        if self.program.scope.as_ref().is_some_and(|scope| !scope.allows(&found.0)) {
+            self.warn(format!("Can't open file: {}", c2f_lang::FileScope::refusal(file)));
+            return (std::path::PathBuf::new(), String::new());
+        }
+        found
+    }
+
+    fn data_path_unscoped(&self, env: &Env<'p>, file: &str) -> (std::path::PathBuf, String) {
         let unit = env::unit_of(env);
         if unit == 0 {
             return (self.base_dir.join(file), file.to_string());

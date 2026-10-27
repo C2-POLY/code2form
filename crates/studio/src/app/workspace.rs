@@ -71,6 +71,15 @@ impl StudioApp {
     /// The code at byte `offset`, in the Code workspace's editor, with the
     /// keyboard.
     pub(super) fn go_to_code(&mut self, ctx: &egui::Context, offset: usize) {
+        self.show_code(ctx);
+        let text = self.doc.text.clone();
+        self.doc.editor.go_to(ctx, &text, offset);
+        self.doc.editor.focus(ctx);
+    }
+
+    /// Puts the code on screen: the Code workspace's editor, beside the
+    /// view if it was alone.
+    pub(super) fn show_code(&mut self, ctx: &egui::Context) {
         if !self.doc.is_circuit() {
             self.set_workspace(ctx, Workspace::Code);
             self.panels.code_tab = CodeTab::Code;
@@ -78,9 +87,6 @@ impl StudioApp {
         if self.arrangement == super::Arrangement::View {
             self.arrangement = super::Arrangement::Split;
         }
-        let text = self.doc.text.clone();
-        self.doc.editor.go_to(ctx, &text, offset);
-        self.doc.editor.focus(ctx);
     }
 
     /// Takes the keyboard, at the end of a frame, from a widget that is not

@@ -1,27 +1,28 @@
-//! `c2f mcp`: a Model Context Protocol server, so that an AI agent can
-//! write a model, render it, look at it and export it. JSON-RPC 2.0, one
-//! message per line on stdin and stdout; logs go to stderr.
+//! A Model Context Protocol server, so that an AI agent can write a model,
+//! render it, look at it and export it, and the built-in tools it serves.
+//! JSON-RPC 2.0, one message per line; `c2f mcp` serves it on stdin and
+//! stdout, its logs on stderr.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 use c2f_eval::customizer::{HIDDEN_GROUP, Literal, Widget, parse_typed};
 use serde_json::{Map, Value, json};
 
-use crate::Export;
+use crate::guard::scoped;
+use crate::{Export, Registry, Tools};
 
 mod brief;
 mod circuit;
 mod mass;
 mod loads;
 mod part;
-mod prompts;
+pub mod prompts;
 
 /// The protocol versions this server speaks, the latest first.
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "\
+pub const INSTRUCTIONS: &str = "\
 Code2Form models parts as programs in the .scad language. Give a tool the \
 program's text (`code`) or a file (`path`). `render` reports errors with \
 their line, echo output, warnings, the triangle count, the volume and the \
@@ -62,62 +63,84 @@ write it again with.";
 const IMAGE_SIZE: (u64, u64) = (800, 600);
 const MAX_IMAGE_SIZE: u64 = 1600;
 
-pub fn serve() -> ExitCode {
-    eprintln!("c2f mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
-    let mut stdout = std::io::stdout().lock();
-    for line in std::io::stdin().lock().lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(err) => {
-                eprintln!("c2f mcp: cannot read stdin: {err}");
-                return ExitCode::FAILURE;
-            }
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Some(reply) = handle(&line) else { continue };
-        if let Err(err) = writeln!(stdout, "{reply}").and_then(|()| stdout.flush()) {
-            eprintln!("c2f mcp: cannot write stdout: {err}");
-            return ExitCode::FAILURE;
-        }
-    }
-    ExitCode::SUCCESS
+/// Serves the tools of a registry, and the prompts.
+pub struct Server {
+    tools: Registry,
 }
 
-/// The reply to one message; none for notifications and responses.
-fn handle(line: &str) -> Option<Value> {
-    let message: Value = match serde_json::from_str(line) {
-        Ok(message) => message,
-        Err(err) => return Some(failure(Value::Null, -32700, format!("parse error: {err}"))),
-    };
-    let id = message.get("id").cloned();
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
-        // This server sends no requests, so it expects no responses.
-        if message.get("result").is_some() || message.get("error").is_some() {
-            return None;
+impl Server {
+    pub fn new(tools: Registry) -> Server {
+        Server { tools }
+    }
+
+    /// Answers each message of `input`, a line each, on `output` until
+    /// `input` ends; the error says what could not be read or written.
+    pub fn serve(&self, input: impl BufRead, mut output: impl Write) -> Result<(), String> {
+        for line in input.lines() {
+            let line = line.map_err(|err| format!("cannot read a message: {err}"))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Some(reply) = self.handle(&line) else { continue };
+            writeln!(output, "{reply}").and_then(|()| output.flush()).map_err(|err| format!("cannot write a reply: {err}"))?;
         }
-        return Some(failure(id.unwrap_or(Value::Null), -32600, "invalid request: no method".into()));
-    };
-    let Some(id) = id else {
-        // Notifications (`notifications/initialized`, `.../cancelled`)
-        // need no answer.
-        return None;
-    };
-    let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
-    let result = match method {
-        "initialize" => Ok(initialize(&params)),
-        "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools() })),
-        "tools/call" => call(&params),
-        "prompts/list" => Ok(prompts::list()),
-        "prompts/get" => prompts::get(&params),
-        _ => Err((-32601, format!("method not found: {method}"))),
-    };
-    Some(match result {
-        Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        Err((code, message)) => failure(id, code, message),
-    })
+        Ok(())
+    }
+
+    /// The reply to one message; none for notifications and responses.
+    pub fn handle(&self, line: &str) -> Option<Value> {
+        let message: Value = match serde_json::from_str(line) {
+            Ok(message) => message,
+            Err(err) => return Some(failure(Value::Null, -32700, format!("parse error: {err}"))),
+        };
+        let id = message.get("id").cloned();
+        let Some(method) = message.get("method").and_then(Value::as_str) else {
+            // This server sends no requests, so it expects no responses.
+            if message.get("result").is_some() || message.get("error").is_some() {
+                return None;
+            }
+            return Some(failure(id.unwrap_or(Value::Null), -32600, "invalid request: no method".into()));
+        };
+        let Some(id) = id else {
+            // Notifications (`notifications/initialized`, `.../cancelled`)
+            // need no answer.
+            return None;
+        };
+        let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
+        let result = match method {
+            "initialize" => Ok(initialize(&params)),
+            "ping" => Ok(json!({})),
+            "tools/list" => Ok(json!({ "tools": self.tools.list() })),
+            "tools/call" => self.call(&params),
+            "prompts/list" => Ok(prompts::list()),
+            "prompts/get" => prompts::get(&params),
+            _ => Err((-32601, format!("method not found: {method}"))),
+        };
+        Some(match result {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err((code, message)) => failure(id, code, message),
+        })
+    }
+
+    /// Runs a tool. Its failures are results marked as errors, which the
+    /// agent reads; only a call that names no known tool is a protocol
+    /// error.
+    fn call(&self, params: &Value) -> Result<Value, (i64, String)> {
+        let name = params.get("name").and_then(Value::as_str).ok_or((-32602, "tools/call needs the tool's `name`".into()))?;
+        let unknown = || (-32602, format!("unknown tool: {name}"));
+        let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        if !args.is_object() {
+            // An unknown tool is said first.
+            if !self.tools.names().iter().any(|known| known == name) {
+                return Err(unknown());
+            }
+            return Err((-32602, "the tool's `arguments` must be an object".into()));
+        }
+        Ok(match self.tools.call(name, &args).ok_or_else(unknown)? {
+            Ok(content) => json!({ "content": content, "isError": false }),
+            Err(message) => json!({ "content": [text(message)], "isError": true }),
+        })
+    }
 }
 
 fn failure(id: Value, code: i64, message: String) -> Value {
@@ -135,6 +158,22 @@ fn initialize(params: &Value) -> Value {
         "serverInfo": { "name": "code2form", "title": "Code2Form", "version": env!("CARGO_PKG_VERSION") },
         "instructions": INSTRUCTIONS,
     })
+}
+
+/// The tools Code2Form gives an agent, those `c2f mcp` serves.
+pub struct Builtin;
+
+impl Tools for Builtin {
+    fn list(&self) -> Vec<Value> {
+        match tools() {
+            Value::Array(tools) => tools,
+            _ => Vec::new(),
+        }
+    }
+
+    fn call(&self, name: &str, args: &Value) -> Option<Result<Vec<Value>, String>> {
+        tool(name).map(|tool| tool(args))
+    }
 }
 
 fn tools() -> Value {
@@ -317,10 +356,8 @@ fn merge(mut a: Value, b: Value) -> Value {
 /// A tool: its content, or the error the agent reads.
 type Tool = fn(&Value) -> Result<Vec<Value>, String>;
 
-/// Runs a tool. Its failures are results marked as errors, which the agent
-/// reads; only a call that names no known tool is a protocol error.
-fn call(params: &Value) -> Result<Value, (i64, String)> {
-    let name = params.get("name").and_then(Value::as_str).ok_or((-32602, "tools/call needs the tool's `name`".into()))?;
+/// The built-in tool named `name`.
+fn tool(name: &str) -> Option<Tool> {
     let tool: Tool = match name {
         "render" => render_tool,
         "parameters" => parameters_tool,
@@ -328,19 +365,9 @@ fn call(params: &Value) -> Result<Value, (i64, String)> {
         "export" => export_tool,
         "section" => section_tool,
         "electrify" => electrify_tool,
-        _ => circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)).ok_or((-32602, format!("unknown tool: {name}")))?,
+        _ => return circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)),
     };
-    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-    if !args.is_object() {
-        return Err((-32602, "the tool's `arguments` must be an object".into()));
-    }
-    // A panic in the geometry ends this call, not the server.
-    let reply = std::panic::catch_unwind(|| tool(&args))
-        .unwrap_or_else(|_| Err(format!("internal error: `{name}` panicked (the server's log says where)")));
-    Ok(match reply {
-        Ok(content) => json!({ "content": content, "isError": false }),
-        Err(message) => json!({ "content": [text(message)], "isError": true }),
-    })
+    Some(tool)
 }
 
 fn text(text: impl Into<String>) -> Value {
@@ -435,7 +462,7 @@ fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
     if circuit_path.exists() {
         return Err(format!("{} exists already: name another with `circuit`", circuit_path.display()));
     }
-    let before = render(&json!({ "path": path }))?.1;
+    let before = render(&scoped(json!({ "path": path }), args))?.1;
     let piece = args.get("piece").and_then(Value::as_str);
     let done = c2f_circuit::electrify::electrify(&src, &design_file, &circuit_file, piece)?;
     std::fs::write(&circuit_path, &done.circuit).map_err(|err| format!("cannot write {}: {err}", circuit_path.display()))?;
@@ -446,7 +473,7 @@ fn electrify_tool(args: &Value) -> Result<Vec<Value>, String> {
         why
     };
     std::fs::write(&path, &done.design).map_err(|err| undo(format!("cannot write {}: {err}", path.display())))?;
-    let after = render(&json!({ "path": path })).map_err(undo)?.1;
+    let after = render(&scoped(json!({ "path": path }), args)).map_err(undo)?.1;
     let report = json!({
         "ok": true,
         "design": path.display().to_string(),
@@ -630,18 +657,24 @@ fn load(args: &Value) -> Result<(c2f_eval::Program, String), String> {
         }
         _ => return Err("give either `code` (the program's text) or `path` (a file)".into()),
     };
-    let mut program = c2f_eval::Program::load(&src, &path, &c2f_eval::default_library_paths()).map_err(|err| {
+    let scope = crate::guard::file_scope(args);
+    let libraries = c2f_eval::default_library_paths();
+    let mut program = c2f_eval::Program::load_in(&src, &path, &libraries, scope.as_ref()).map_err(|err| {
         let file_src = &err.src;
         let offset = (err.diagnostic.span.start as usize).min(file_src.len());
         let (line, column) = c2f_lang::span::LineIndex::new(file_src).line_col(file_src, offset);
-        pretty(&json!({
+        let mut report = json!({
             "ok": false,
             "error": err.diagnostic.message,
             "file": err.path.display().to_string(),
             "line": line + 1,
             "column": column + 1,
-            "diagnostic": err.render(),
-        }))
+        });
+        // The diagnostic quotes the file: never one outside the scope.
+        if scope.as_ref().is_none_or(|scope| scope.allows(&err.path)) {
+            report["diagnostic"] = json!(err.render());
+        }
+        pretty(&report)
     })?;
     if let Some(values) = args.get("parameters") {
         set_parameters(&mut program, &src, values)?;
@@ -752,7 +785,7 @@ fn widget(widget: &Widget) -> Value {
 }
 
 /// Standard base64, with padding.
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -784,5 +817,49 @@ mod tests {
         assert_eq!(version(json!("2025-03-26")), "2025-03-26");
         assert_eq!(version(json!("1999-01-01")), PROTOCOL_VERSIONS[0]);
         assert_eq!(version(Value::Null), PROTOCOL_VERSIONS[0]);
+    }
+
+    /// A host's tool, beside the built-in ones.
+    struct Hello;
+
+    impl Tools for Hello {
+        fn list(&self) -> Vec<Value> {
+            vec![json!({ "name": "hello", "inputSchema": { "type": "object" } })]
+        }
+
+        fn call(&self, name: &str, _: &Value) -> Option<Result<Vec<Value>, String>> {
+            (name == "hello").then(|| Ok(vec![text("hello")]))
+        }
+    }
+
+    #[test]
+    fn the_server_answers_a_line() {
+        let server = Server::new(Registry::builtin().with(Box::new(Hello)).unwrap());
+        let reply = server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
+        let tools = reply["result"]["tools"].as_array().unwrap();
+        assert_eq!((tools[0]["name"].as_str(), tools.len()), (Some("render"), 21));
+        let call = |name: &str, arguments: Value| {
+            let line = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+            server.handle(&line.to_string()).unwrap()
+        };
+        assert_eq!(call("hello", json!({}))["result"]["content"][0]["text"], "hello");
+        let rendered = call("render", json!({ "code": "cube(2);" }));
+        assert_eq!(rendered["result"]["isError"], false, "{rendered}");
+        assert_eq!(call("nothing", json!({}))["error"]["message"], "unknown tool: nothing");
+        assert_eq!(call("nothing", json!(3))["error"]["message"], "unknown tool: nothing");
+        assert_eq!(call("render", json!(3))["error"]["code"], -32602);
+        assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+        assert_eq!(server.handle("{").unwrap()["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn the_server_serves_until_its_input_ends() {
+        let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"prompts/list\"}\n";
+        let mut output = Vec::new();
+        Server::new(Registry::new()).serve(input.as_bytes(), &mut output).unwrap();
+        let replies: Vec<Value> = output.split(|b| *b == b'\n').filter(|l| !l.is_empty()).map(|l| serde_json::from_slice(l).unwrap()).collect();
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0]["result"], json!({}));
+        assert_eq!(replies[1]["result"], crate::prompts());
     }
 }

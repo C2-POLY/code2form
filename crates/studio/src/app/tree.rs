@@ -907,7 +907,7 @@ sphere(2); // Ball
 
     /// The app without a window, settings nor session, on `text`.
     fn studio(ctx: &egui::Context, text: &str) -> StudioApp {
-        let stores = super::super::Stores { session: None, settings: None };
+        let stores = super::super::Stores { session: None, settings: None, conversations: None };
         let settings = crate::settings::Settings::load(None);
         let recent = crate::recent::RecentFiles::default();
         let mut app = StudioApp::with(ctx, None, stores, recent, settings, Vec::new());

@@ -1755,7 +1755,7 @@ mod tests {
     #[test]
     fn one_write_per_frame() {
         let ctx = egui::Context::default();
-        let stores = super::super::Stores { session: None, settings: None };
+        let stores = super::super::Stores { session: None, settings: None, conversations: None };
         let settings = crate::settings::Settings::load(None);
         let recent = crate::recent::RecentFiles::default();
         let mut app = StudioApp::with(&ctx, None, stores, recent, settings, Vec::new());

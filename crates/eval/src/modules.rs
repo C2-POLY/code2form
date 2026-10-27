@@ -566,7 +566,7 @@ fn file_source<'p>(interp: &mut Interp<'p>, p: &Params<'p>, stringify: bool) -> 
 
 /// A data file named by code running in `env`: the name the CSG shows and
 /// its modification time in seconds (0 when it does not exist).
-fn data_file<'p>(interp: &Interp<'p>, env: &Env<'p>, file: &str) -> (String, i64) {
+fn data_file<'p>(interp: &mut Interp<'p>, env: &Env<'p>, file: &str) -> (String, i64) {
     let (path, shown) = interp.data_path(env, file);
     let timestamp = std::fs::metadata(path)
         .and_then(|m| m.modified())

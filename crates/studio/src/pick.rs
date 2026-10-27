@@ -75,6 +75,23 @@ impl Ray {
         let far = t1.max(t2).min_element();
         (far >= near.max(0.0)).then_some(near.max(0.0))
     }
+
+    /// The distance along the ray where it crosses the triangle, from
+    /// either side (Möller–Trumbore).
+    pub fn triangle(&self, [a, b, c]: [Vec3; 3]) -> Option<f32> {
+        let (ab, ac) = (b - a, c - a);
+        let p = self.direction.cross(ac);
+        let det = ab.dot(p);
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let s = self.origin - a;
+        let u = s.dot(p) / det;
+        let q = s.cross(ab);
+        let v = self.direction.dot(q) / det;
+        let t = ac.dot(q) / det;
+        (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.0).then_some(t)
+    }
 }
 
 /// What the ray meets: a pin before a wire before a part, since the
@@ -180,6 +197,12 @@ mod tests {
 
         assert_eq!(r.aabb(Vec3::new(-1.0, -1.0, 0.0), Vec3::new(1.0, 1.0, 3.0)), Some(7.0));
         assert_eq!(r.aabb(Vec3::new(2.0, -1.0, 0.0), Vec3::new(3.0, 1.0, 3.0)), None);
+
+        let flat = [Vec3::new(-1.0, -1.0, 2.0), Vec3::new(1.0, -1.0, 2.0), Vec3::new(0.0, 1.0, 2.0)];
+        assert_eq!(r.triangle(flat), Some(8.0));
+        assert_eq!(r.triangle([flat[0], flat[2], flat[1]]), Some(8.0), "from behind");
+        assert_eq!(r.triangle(flat.map(|p| p + Vec3::X * 3.0)), None);
+        assert_eq!(r.triangle(flat.map(|p| p + Vec3::Z * 20.0)), None, "behind the eye");
     }
 
     #[test]

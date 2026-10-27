@@ -32,7 +32,7 @@ pub use explode::{Explode, Exploded, exploded};
 pub use collide::{Placement, TOUCHING, collisions};
 pub use fit::{CLEARANCE, Crossing, Gap, PartFit, SEARCH, crossings, fit};
 pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
-pub use image::{VIEWS, sheet_png};
+pub use image::{VIEWS, encode_png, sheet_png};
 pub use import::objects as mesh_objects;
 pub use inventory::{PartsOptions, parts_json};
 pub use mass::{

@@ -39,11 +39,13 @@ impl Window {
     fn new(code: &str, workspace: Workspace) -> Self {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
-        let stores = Stores { session: None, settings: None };
+        let stores = Stores { session: None, settings: None, conversations: None };
         let mut settings = Settings::load(None);
         settings.workspace = workspace;
         let app = StudioApp::with(&ctx, None, stores, RecentFiles::default(), settings, Vec::new());
         let mut window = Window { ctx, app, time: 0.0, named: Vec::new() };
+        // A first launch shows a new file's start screen over the view.
+        window.app.doc.start = None;
         window.app.doc.text = code.into();
         window.app.render_now();
         window.rendered();

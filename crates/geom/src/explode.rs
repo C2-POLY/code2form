@@ -47,6 +47,8 @@ pub struct Exploded {
     /// Each part's vertices in `mesh`, and its move all the way exploded,
     /// radially and along its axis.
     pieces: Vec<(Range<usize>, [[f32; 3]; 2])>,
+    /// Each part's name, as `part("name")` gives it, the root excluded.
+    names: Vec<String>,
 }
 
 impl Exploded {
@@ -67,6 +69,13 @@ impl Exploded {
     /// order the model writes them.
     pub fn offsets(&self, how: Explode) -> Vec<[f32; 3]> {
         self.pieces.iter().skip(1).map(|(_, moves)| moves[how as usize]).collect()
+    }
+
+    /// The name of the part the vertex at `index` of `mesh` belongs to;
+    /// `None` for the root, outside any part.
+    pub fn part_at(&self, index: usize) -> Option<&str> {
+        let piece = self.pieces.iter().position(|(range, _)| range.contains(&index))?;
+        self.names.get(piece.checked_sub(1)?).map(String::as_str)
     }
 }
 
@@ -123,7 +132,7 @@ pub fn exploded(nodes: &[Node], base_dir: &Path) -> Option<Exploded> {
         let parent = part.parent.map(|p| world[p]);
         world.push(parent.map_or(part.matrix, |m| multiply(&m, &part.matrix)));
     }
-    let mut exploded = Exploded::default();
+    let mut exploded = Exploded { names: split.parts.iter().map(|p| p.name.clone()).collect(), ..Exploded::default() };
     let mut boxes: Vec<Box3> = Vec::new();
     let mut masses: Vec<Mass> = Vec::new();
     let identity = c2f_eval::node::IDENTITY;
@@ -267,6 +276,14 @@ mod tests {
         let side = &exploded.mesh.positions[36..];
         let lo = side.iter().fold([f32::MAX; 3], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].min(p[2])]);
         assert!(close(lo, [18.0, 0.0, 0.0]), "{lo:?}");
+    }
+
+    #[test]
+    fn a_vertex_tells_its_part() {
+        let exploded = exploded_src("cube(10); translate([20, 0, 0]) part(\"side\") cube([4, 2, 1]);").unwrap();
+        assert_eq!(exploded.part_at(0), None, "the root");
+        assert_eq!(exploded.part_at(36), Some("side"));
+        assert_eq!(exploded.part_at(exploded.mesh.positions.len()), None);
     }
 
     #[test]

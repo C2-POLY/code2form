@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 
 use c2f_lang::annotations::{self, Annotations, Pin};
 use c2f_lang::customizer::Literal;
-use c2f_lang::{Diagnostic, Span};
+use c2f_lang::{Diagnostic, FileScope, Span};
 use serde::Deserialize;
 use toml::Spanned;
 
@@ -59,6 +59,10 @@ pub struct Circuit {
     pub parts: Vec<Instance>,
     /// In the order they are laid.
     pub wires: Vec<Wire>,
+    /// The folders it was read in, when it was read for an agent: its
+    /// parts and its enclosure are there, and their own files are read
+    /// there too.
+    pub scope: Option<FileScope>,
 }
 
 /// A part placed in the circuit.
@@ -106,6 +110,10 @@ pub struct Wire {
     pub span: Span,
     /// Its `to` in the circuit file: the quoted value.
     pub to_span: Span,
+    /// Its `color` and `via` values when written, in the circuit file: for
+    /// editors that change them in place.
+    pub color_span: Option<Span>,
+    pub via_span: Option<Span>,
 }
 
 /// A pin of a part: indices into [`Circuit::parts`] and that part's pins.
@@ -235,8 +243,21 @@ impl Error {
 
 /// Reads the circuit file at `path`.
 pub fn load(path: &Path, library_paths: &[PathBuf]) -> Result<Circuit, Vec<Error>> {
+    load_in(path, library_paths, None)
+}
+
+/// [`load`], its parts and its enclosure found in `scope` alone when there
+/// is one.
+pub fn load_in(path: &Path, library_paths: &[PathBuf], scope: Option<&FileScope>) -> Result<Circuit, Vec<Error>> {
+    if scope.is_some_and(|scope| !scope.allows(path)) {
+        return Err(vec![Error {
+            path: path.to_path_buf(),
+            src: String::new(),
+            diagnostic: Diagnostic::new(FileScope::refusal(&path.display().to_string()), Span::default()),
+        }]);
+    }
     match std::fs::read_to_string(path) {
-        Ok(src) => parse(&src, path, library_paths),
+        Ok(src) => parse_in(&src, path, library_paths, scope),
         Err(err) => Err(vec![Error {
             path: path.to_path_buf(),
             src: String::new(),
@@ -248,8 +269,15 @@ pub fn load(path: &Path, library_paths: &[PathBuf]) -> Result<Circuit, Vec<Error
 /// Reads `src` as the circuit file at `path`, whose folder its part files
 /// are named from. Every problem found is reported, not just the first.
 pub fn parse(src: &str, path: &Path, library_paths: &[PathBuf]) -> Result<Circuit, Vec<Error>> {
+    parse_in(src, path, library_paths, None)
+}
+
+/// [`parse`], its parts and its enclosure found in `scope` alone when
+/// there is one: a file named outside it is an error that does not quote
+/// it.
+pub fn parse_in(src: &str, path: &Path, library_paths: &[PathBuf], scope: Option<&FileScope>) -> Result<Circuit, Vec<Error>> {
     let mut reader =
-        Reader { src, path, library_paths, errors: Vec::new(), files: HashMap::new(), left_out: Vec::new() };
+        Reader { src, path, library_paths, scope, errors: Vec::new(), files: HashMap::new(), left_out: Vec::new() };
     let circuit = reader.circuit();
     match circuit {
         Some(circuit) if reader.errors.is_empty() => Ok(circuit),
@@ -284,7 +312,7 @@ struct PartEntry {
 struct WireEntry {
     from: Spanned<String>,
     to: Spanned<String>,
-    color: Option<String>,
+    color: Option<Spanned<String>>,
     label: Option<String>,
     via: Option<Spanned<Vec<Vec<f64>>>>,
     #[serde(default)]
@@ -302,6 +330,7 @@ struct Reader<'a> {
     src: &'a str,
     path: &'a Path,
     library_paths: &'a [PathBuf],
+    scope: Option<&'a FileScope>,
     errors: Vec<Error>,
     /// By the name the circuit gives; `None` when it was not found.
     files: HashMap<String, Option<PartFile>>,
@@ -345,7 +374,7 @@ impl Reader<'_> {
         let mut entries: Vec<_> = file.parts.into_iter().collect();
         entries.sort_by_key(|(name, _)| name.span().start);
         let parts = entries.into_iter().filter_map(|(name, entry)| self.part(name, entry)).collect();
-        let mut circuit = Circuit { enclosure, parts, wires: Vec::new() };
+        let mut circuit = Circuit { enclosure, parts, wires: Vec::new(), scope: self.scope.cloned() };
         circuit.wires = file.wires.into_iter().filter_map(|entry| self.wire(&circuit, entry)).collect();
         Some(circuit)
     }
@@ -451,16 +480,24 @@ impl Reader<'_> {
         Some(PartFile { path, source, annotations })
     }
 
-    /// A file named next to the circuit, then in the library folders.
+    /// A file named next to the circuit, then in the library folders: in
+    /// the scope, when there is one.
     fn find(&self, name: &str) -> Option<PathBuf> {
+        self.candidates(name).find(|path| self.scope.is_none_or(|scope| scope.allows(path)))
+    }
+
+    fn candidates<'s>(&'s self, name: &'s str) -> impl Iterator<Item = PathBuf> + 's {
         let folder = self.path.parent().unwrap_or(Path::new(""));
         std::iter::once(folder)
             .chain(self.library_paths.iter().map(PathBuf::as_path))
-            .map(|dir| dir.join(name))
-            .find(|path| path.is_file())
+            .map(move |dir| dir.join(name))
+            .filter(|path| path.is_file())
     }
 
     fn not_found(&self, name: &str) -> String {
+        if self.scope.is_some() && self.candidates(name).next().is_some() {
+            return FileScope::refusal(name);
+        }
         format!("cannot find `{name}` next to the circuit or in the library folders")
     }
 
@@ -478,8 +515,10 @@ impl Reader<'_> {
         }
         let via = self.points(entry.via.as_ref(), "via");
         let allow = entry.allow.into_iter().map(Spanned::into_inner).collect();
+        let (color_span, via_span) = (entry.color.as_ref().map(span), entry.via.as_ref().map(span));
         let (span, to_span) = (span(&entry.from), span(&entry.to));
-        Some(Wire { from, to, color: entry.color, label: entry.label, via, allow, span, to_span })
+        let color = entry.color.map(Spanned::into_inner);
+        Some(Wire { from, to, color, label: entry.label, via, allow, span, to_span, color_span, via_span })
     }
 
     fn end(&mut self, circuit: &Circuit, end: &Spanned<String>) -> Option<End> {

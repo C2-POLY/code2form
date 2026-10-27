@@ -121,6 +121,18 @@ fn changed() -> String {
 /// place, or added after its `part` line. One edit, and where to put the
 /// cursor, as a char index.
 pub fn place(src: &str, instance: &Instance, at: Option<[f64; 3]>, turns: u32) -> Result<(String, usize), String> {
+    let turned = (turns > 0).then(|| {
+        let [x, y, z] = instance.rotate;
+        vector([x, y, (z + 90.0 * f64::from(turns)).rem_euclid(360.0)])
+    });
+    set_placement(src, instance, at.map(vector), turned)
+}
+
+/// The circuit's text with part `instance`'s `at` and `rotate` set to the
+/// vectors written `at` and `rotate` (when given): rewritten in place, or
+/// added after its `part` line. One edit, and where to put the cursor, as
+/// a char index.
+pub fn set_placement(src: &str, instance: &Instance, at: Option<String>, rotate: Option<String>) -> Result<(String, usize), String> {
     let range = |s: c2f_lang::Span| s.start as usize..s.end as usize;
     // The part line must still be where it was read.
     let part = range(instance.part_span);
@@ -135,16 +147,14 @@ pub fn place(src: &str, instance: &Instance, at: Option<[f64; 3]>, turns: u32) -
     }
     if let Some(at) = at {
         match instance.at_span {
-            Some(span) => edits.push((range(span), vector(at))),
-            None => added.push_str(&format!("at = {}\n", vector(at))),
+            Some(span) => edits.push((range(span), at)),
+            None => added.push_str(&format!("at = {at}\n")),
         }
     }
-    if turns > 0 {
-        let [x, y, z] = instance.rotate;
-        let turned = [x, y, (z + 90.0 * f64::from(turns)).rem_euclid(360.0)];
+    if let Some(rotate) = rotate {
         match instance.rotate_span {
-            Some(span) => edits.push((range(span), vector(turned))),
-            None => added.push_str(&format!("rotate = {}\n", vector(turned))),
+            Some(span) => edits.push((range(span), rotate)),
+            None => added.push_str(&format!("rotate = {rotate}\n")),
         }
     }
     if added.trim().is_empty() {

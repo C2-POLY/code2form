@@ -1,0 +1,29 @@
+[package]
+name = "c2f-agent"
+description = "Code2Form for AI agents: the tools, prompts and MCP server that c2f mcp and the studio share"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+c2f-lang.workspace = true
+c2f-eval.workspace = true
+c2f-geom.workspace = true
+c2f-circuit.workspace = true
+# The tools' JSON, and the conversation's events.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The Anthropic API engine's HTTP: blocking, and in Rust down to its TLS.
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
+
+[target.'cfg(unix)'.dependencies]
+# Already used by the studio's dependencies: the user's id, which names
+# the folder of the studio's socket.
+libc = "0.2"
+
+# The API key, in the system's secure store: the Keychain on macOS, the
+# Credential Manager on Windows. Linux keeps it in a file only its owner
+# reads, as the secret service would need libdbus to build.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3.6", features = ["apple-native", "windows-native"] }

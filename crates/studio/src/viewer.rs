@@ -151,6 +151,8 @@ pub struct Viewer {
     explode: f32,
     explode_how: c2f_geom::Explode,
     assembled: RenderMesh,
+    /// A design's solid without parts, for picking a face.
+    design_positions: Vec<[f32; 3]>,
     /// The box around the parts all the way apart, framed while exploded.
     exploded_bounds: Option<(Vec3, Vec3)>,
     /// The pause being dragged on the slider, and the layer it is over.
@@ -158,7 +160,7 @@ pub struct Viewer {
     menu: Option<SliderMenu>,
     edit: Option<PauseEdit>,
     grid: Grid,
-    /// Width over height of the viewport, as last shown.
+    /// Width over height of the viewport, and its width, as last shown.
     aspect: f32,
     /// What a click picks in a design; `None` for a circuit, which picks
     /// its own way.
@@ -183,6 +185,10 @@ pub struct Viewer {
     /// found for: the handles ask for it every frame, and finding it reads
     /// every triangle of the scene.
     selection_box: Mutex<Option<SelectionBox>>,
+    width: f32,
+    /// How far the picture is shifted sideways, in NDC, on its way to
+    /// the centre of the room the cards leave free (see [`lens`]).
+    shift: f32,
     /// The room the app's bars take over the view's edges: the view's own
     /// badges, gizmo, hints and layer slider keep clear of it.
     pub insets: Insets,
@@ -205,12 +211,44 @@ pub struct Click {
     pub deep: bool,
 }
 
-/// Room taken over the edges of the view, in points.
+/// A face of a design, picked in the view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceHit {
+    /// In millimeters.
+    pub point: [f32; 3],
+    /// Of unit length, out of the solid as its triangles turn.
+    pub normal: [f32; 3],
+    /// The `part("name")` it belongs to.
+    pub part: Option<String>,
+}
+
+/// Room taken over the edges of the view, in points: the cards floating
+/// over it. The model is framed and centred in the room left between
+/// `left` and `right`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Insets {
     pub top: f32,
     pub bottom: f32,
+    pub left: f32,
     pub right: f32,
+}
+
+/// The room the cards leave free across a view `width` wide: the shift
+/// (in NDC, -1..1 across the view) that brings the view's centre to the
+/// free room's, and the fraction of the width that is free. The cards
+/// never take more than 70% of it: past that, both insets shrink alike.
+pub fn lens(width: f32, insets: Insets) -> (f32, f32) {
+    if width < 1.0 {
+        return (0.0, 1.0);
+    }
+    let (mut left, mut right) = (insets.left.max(0.0), insets.right.max(0.0));
+    let most = width * 0.7;
+    if left + right > most {
+        let scale = most / (left + right);
+        left *= scale;
+        right *= scale;
+    }
+    ((left - right) / width, (width - left - right) / width)
 }
 
 impl Viewer {
@@ -261,12 +299,15 @@ impl Viewer {
             explode: 0.0,
             explode_how: c2f_geom::Explode::default(),
             assembled: RenderMesh::default(),
+            design_positions: Vec::new(),
             exploded_bounds: None,
             dragging: None,
             menu: None,
             edit: None,
             grid,
             aspect: 1.5,
+            width: 0.0,
+            shift: 0.0,
             insets: Insets::default(),
             picking: None,
             selection: Vec::new(),
@@ -313,6 +354,8 @@ impl Viewer {
         self.enclosure = scene.enclosure.clone();
         self.solid_colors = if scene.parts.is_empty() { Vec::new() } else { scene.solid.colors.clone() };
         self.solid_positions = if scene.parts.is_empty() { Vec::new() } else { scene.solid.positions.clone() };
+        let plain = scene.parts.is_empty() && scene.exploded.is_none() && !scene.is_2d;
+        self.design_positions = if plain { scene.solid.positions.clone() } else { Vec::new() };
         self.part_colors = scene
             .parts
             .iter()
@@ -762,7 +805,7 @@ impl Viewer {
 
     /// Where a point shows in the view's `rect`, when in front of the eye.
     pub fn to_screen(&self, rect: Rect, p: Vec3) -> Option<Pos2> {
-        let view_projection = self.camera.projection(self.aspect, self.scene_radius()) * self.camera.view();
+        let view_projection = self.projection() * self.camera.view();
         let clip = view_projection * p.extend(1.0);
         (clip.w > 1e-6).then(|| {
             let ndc = clip.truncate() / clip.w;
@@ -773,7 +816,7 @@ impl Viewer {
     /// The ray from the eye through `pos` in the view's `rect`.
     pub fn ray(&self, rect: Rect, pos: Pos2) -> Ray {
         let ndc = GVec2::new(
-            (pos.x - rect.left()) / rect.width() * 2.0 - 1.0,
+            (pos.x - rect.left()) / rect.width() * 2.0 - 1.0 - self.shift,
             1.0 - (pos.y - rect.top()) / rect.height() * 2.0,
         );
         let origin = self.camera.eye();
@@ -787,6 +830,34 @@ impl Viewer {
     /// The model's box, without what is drawn over it.
     pub fn model_bounds(&self) -> Option<(Vec3, Vec3)> {
         self.bounds
+    }
+
+    /// The face of a design the ray meets first: where, its normal, and
+    /// the `part()` it belongs to, in the model's coordinates even while
+    /// the parts are drawn apart. `None` for a circuit, or nothing there.
+    pub fn pick_face(&self, ray: &Ray) -> Option<FaceHit> {
+        let moved;
+        let positions: &[[f32; 3]] = match &self.exploded {
+            Some(exploded) => {
+                moved = exploded.at(self.explode, self.explode_how).positions;
+                &moved
+            }
+            None => &self.design_positions,
+        };
+        let corners = |t: usize| [0, 1, 2].map(|k| Vec3::from(positions[t * 3 + k]));
+        let (along, triangle) = (0..positions.len() / 3)
+            .filter_map(|t| ray.triangle(corners(t)).map(|along| (along, t)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        let [a, b, c] = corners(triangle);
+        let normal = (b - a).cross(c - a).normalize_or_zero();
+        let mut point = ray.origin + ray.direction * along;
+        let mut part = None;
+        if let Some(exploded) = &self.exploded {
+            // Back where the model puts it.
+            point -= a - Vec3::from(exploded.mesh.positions[triangle * 3]);
+            part = exploded.part_at(triangle * 3).map(String::from);
+        }
+        Some(FaceHit { point: point.to_array(), normal: normal.to_array(), part })
     }
 
     /// The model's box and the overlay's, together, and the parts' all
@@ -861,19 +932,34 @@ impl Viewer {
         self.goal = Some(goal);
     }
 
-    /// Width over height of the view, as last shown.
+    /// Width over height of the room the cards leave free in the view, as
+    /// last shown: what a model is framed in.
     pub fn aspect(&self) -> f32 {
-        self.aspect
+        self.aspect * lens(self.width, self.insets).1
+    }
+
+    /// The projection, the picture shifted to the centre of the free room.
+    fn projection(&self) -> Mat4 {
+        Mat4::from_translation(Vec3::new(self.shift, 0.0, 0.0)) * self.camera.projection(self.aspect, self.scene_radius())
+    }
+
+    /// Turns the camera smoothly to frame the model, at its angle, in the
+    /// room the cards leave free.
+    pub fn fly_to_fit(&mut self) {
+        let (lo, hi) = self.frame_box();
+        let mut goal = self.goal.unwrap_or(self.camera);
+        goal.frame(lo, hi, self.aspect());
+        self.fly_to(goal);
     }
 
     pub fn view_all(&mut self) {
         let (lo, hi) = self.frame_box();
-        self.camera.frame(lo, hi, self.aspect);
+        self.camera.frame(lo, hi, self.aspect());
     }
 
     pub fn reset(&mut self) {
         let (lo, hi) = self.frame_box();
-        self.camera.reset(lo, hi, self.aspect);
+        self.camera.reset(lo, hi, self.aspect());
     }
 
     pub fn look_from(&mut self, yaw: f32, pitch: f32) {
@@ -920,6 +1006,16 @@ impl Viewer {
         self.aspect = rect.width() / rect.height();
         // Picked before the camera moves, so the ray matches the frame drawn.
         self.select_input(ui, rect, &response);
+        self.width = rect.width();
+        // The picture slides to the free room's centre as a card opens.
+        let goal = lens(rect.width(), self.insets).0;
+        if (goal - self.shift).abs() > 1e-4 {
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            self.shift += (goal - self.shift) * (1.0 - (-dt * 12.0).exp());
+            ui.ctx().request_repaint();
+        } else {
+            self.shift = goal;
+        }
         self.handle_input(ui, rect, &response);
         if self.turntable {
             // Time-based, so the speed holds whatever the frame rate; capped
@@ -937,7 +1033,7 @@ impl Viewer {
         }
 
         let view = self.camera.view();
-        let projection = self.camera.projection(self.aspect, self.scene_radius());
+        let projection = self.projection();
         match &self.renderer {
             Ok(renderer) => {
                 let frame = renderer::Frame {
@@ -1050,7 +1146,7 @@ impl Viewer {
                 let factor = (-scroll * 0.0025).exp() / zoom.max(1e-3);
                 let focus = response.hover_pos().map(|pos| {
                     let ndc = GVec2::new(
-                        (pos.x - rect.left()) / rect.width() * 2.0 - 1.0,
+                        (pos.x - rect.left()) / rect.width() * 2.0 - 1.0 - self.shift,
                         1.0 - (pos.y - rect.top()) / rect.height() * 2.0,
                     );
                     self.camera.point_at(ndc, self.aspect)
@@ -1302,7 +1398,7 @@ impl Viewer {
 
     /// A small X/Y/Z compass in the bottom-left corner.
     fn paint_gizmo(&self, painter: &egui::Painter, rect: Rect) {
-        let center = Pos2::new(rect.left() + 46.0, rect.bottom() - self.insets.bottom - 46.0);
+        let center = Pos2::new(rect.left() + self.insets.left + 46.0, rect.bottom() - self.insets.bottom - 46.0);
         let length = 28.0;
         let view = self.camera.view();
         let axes = [
@@ -1343,7 +1439,10 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
         );
         let width = title.size().x.max(hint.size().x) + 48.0;
         let height = title.size().y + hint.size().y + 46.0;
-        let card = Rect::from_center_size(rect.center(), Vec2::new(width, height));
+        // In the room the cards leave free.
+        let free = Rect::from_x_y_ranges(rect.left() + insets.left..=rect.right() - insets.right, rect.y_range());
+        let center = if free.width() >= width { free.center() } else { rect.center() };
+        let card = Rect::from_center_size(center, Vec2::new(width, height));
         painter.rect(
             card,
             CornerRadius::same(12),
@@ -1358,7 +1457,7 @@ fn paint_overlays(ui: &egui::Ui, painter: &egui::Painter, rect: Rect, status: &S
     }
 
     // Badges, top-left.
-    let mut at = rect.left_top() + Vec2::new(margin, margin + insets.top);
+    let mut at = rect.left_top() + Vec2::new(margin + insets.left, margin + insets.top);
     if status.rendering {
         let width = badge(painter, at, tr("Rendering…", "Rendu…"), theme::palette().accent_strong, true);
         let spinner = Rect::from_center_size(at + Vec2::new(14.0, 12.0), Vec2::splat(12.0));
@@ -1499,6 +1598,22 @@ fn pause_label(pause: &c2f_eval::Pause) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_model_centres_in_the_room_the_cards_leave() {
+        let none = Insets::default();
+        assert_eq!(lens(1000.0, none), (0.0, 1.0));
+        // The chat on the left: the picture shifts right, the room narrows.
+        let chat = Insets { left: 400.0, ..none };
+        assert_eq!(lens(1000.0, chat), (0.4, 0.6));
+        // And the parameters on the right.
+        let (shift, free) = lens(1000.0, Insets { left: 400.0, right: 200.0, ..none });
+        assert!((shift - 0.2).abs() < 1e-6 && (free - 0.4).abs() < 1e-6);
+        // Never more than 70% covered.
+        let (shift, free) = lens(500.0, Insets { left: 400.0, right: 300.0, ..none });
+        assert!((free - 0.3).abs() < 1e-6 && (shift - 0.1).abs() < 1e-6, "{shift} {free}");
+        assert_eq!(lens(0.0, chat), (0.0, 1.0), "not drawn yet");
+    }
     use c2f_geom::{RenderMesh, Stats};
 
     const STATUS: Status = Status { rendering: false, failed: false, has_model: true, is_2d: false, empty_hint: "" };
@@ -1649,6 +1764,19 @@ mod tests {
         bare.parts = std::iter::once(0..3).collect();
         viewer.set_scene(bare, false);
         assert!(!viewer.can_section() && viewer.shown_section().is_none());
+    }
+
+    #[test]
+    fn a_face_is_picked_with_its_point_and_normal() {
+        let mut viewer = Viewer::new(None);
+        viewer.set_scene(scene(20.0), false);
+        let down = |x: f32, y: f32| Ray { origin: Vec3::new(x, y, 100.0), direction: Vec3::NEG_Z, slack: 0.0 };
+        let face = viewer.pick_face(&down(16.0, 4.0)).unwrap();
+        assert!(Vec3::from(face.point).distance(Vec3::new(16.0, 4.0, 4.0)) < 1e-3, "{face:?}");
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(Vec3::from(face.normal).distance(Vec3::new(0.0, -half, half)) < 1e-5, "{face:?}");
+        assert_eq!(face.part, None);
+        assert_eq!(viewer.pick_face(&down(4.0, 16.0)), None, "beside it");
     }
 
     #[test]

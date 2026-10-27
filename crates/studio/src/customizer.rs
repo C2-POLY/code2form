@@ -118,6 +118,27 @@ impl Customizer {
         values
     }
 
+    /// The parameters shown, each with the value it renders with.
+    pub fn shown(&self) -> impl Iterator<Item = (&Parameter, &Literal)> {
+        self.parameters.iter().filter(|p| p.group != HIDDEN_GROUP).map(|p| (p, self.value(p)))
+    }
+
+    /// Sets the parameter `name` from `raw`, read as a value of the type
+    /// it has in the file, as the panel's fields read what is typed; the
+    /// error says why it cannot be.
+    pub fn set_typed(&mut self, name: &str, raw: &str) -> Result<(), String> {
+        let parameter = self.parameters.iter().find(|p| p.name == name).ok_or_else(|| format!("no parameter `{name}`"))?;
+        match parse_typed(&parameter.default, raw) {
+            Ok(Some(value)) => {
+                self.drafts.remove(name);
+                self.set(name, value);
+                Ok(())
+            }
+            Ok(None) => Err(format!("`{name}`: {raw} does not have the type of its default, {}", parameter.default.to_source())),
+            Err(why) => Err(format!("`{name}`: {why}")),
+        }
+    }
+
     fn value<'a>(&'a self, parameter: &'a Parameter) -> &'a Literal {
         self.values.get(&parameter.name).unwrap_or(&parameter.default)
     }
@@ -579,9 +600,60 @@ pub fn frame() -> Frame {
         .corner_radius(CornerRadius::ZERO)
 }
 
+/// Below this width, the view is narrow: the card of the parameters,
+/// unfolded, would cover most of it.
+pub const NARROW_VIEW: f32 = 640.0;
+
+/// Whether a view `width` wide is narrow; not before it is first drawn.
+pub fn narrow(width: f32) -> bool {
+    (1.0..NARROW_VIEW).contains(&width)
+}
+
+/// Whether the card of the parameters is unfolded. While the chat with the
+/// agent is open (`chat` is `Some`), it is folded, the agent setting the
+/// values, until the user unfolds it then (`Some(Some(true))`). In a
+/// narrow view, it is folded until the user unfolds it there
+/// (`narrow_choice`); elsewhere, it is as the user last chose (`choice`),
+/// by default unfolded when the file has parameters.
+pub fn unfolded(choice: Option<bool>, narrow_choice: Option<bool>, chat: Option<Option<bool>>, has_parameters: bool, narrow: bool) -> bool {
+    if let Some(chat_choice) = chat {
+        return chat_choice.unwrap_or(false);
+    }
+    if narrow { narrow_choice.unwrap_or(false) } else { choice.unwrap_or(has_parameters) }
+}
+
+/// The width of the unfolded card over a view `view_width` wide: at most
+/// two fifths of it, its rows scrolling within.
+pub fn card_width(view_width: f32) -> f32 {
+    (view_width * 0.4).clamp(200.0, 276.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_card_folds_itself_in_a_narrow_view_and_keeps_the_user_s_choice_elsewhere() {
+        assert!(narrow(500.0));
+        assert!(!narrow(NARROW_VIEW));
+        assert!(!narrow(f32::NEG_INFINITY), "not drawn yet");
+        // Wide: the user's choice, else open when there are parameters.
+        assert!(unfolded(None, None, None, true, false));
+        assert!(!unfolded(None, None, None, false, false));
+        assert!(!unfolded(Some(false), None, None, true, false));
+        assert!(unfolded(Some(true), None, None, false, false));
+        // Narrow: folded, whatever was chosen in a wide view, until unfolded there.
+        assert!(!unfolded(Some(true), None, None, true, true));
+        assert!(unfolded(Some(false), Some(true), None, true, true));
+        // The chat open: folded, until the user unfolds it then.
+        assert!(!unfolded(Some(true), None, Some(None), true, false));
+        assert!(unfolded(Some(false), None, Some(Some(true)), true, false));
+        assert!(!unfolded(Some(true), Some(true), Some(Some(false)), true, true));
+        // Never more than two fifths of the view, nor narrower than its rows need.
+        assert_eq!(card_width(1200.0), 276.0);
+        assert_eq!(card_width(600.0), 240.0);
+        assert_eq!(card_width(300.0), 200.0);
+    }
 
     fn parameter(name: &str, default: Literal) -> Parameter {
         Parameter {

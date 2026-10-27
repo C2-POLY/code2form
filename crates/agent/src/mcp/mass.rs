@@ -93,7 +93,7 @@ fn mass_properties(args: &Value) -> Result<Vec<Value>, String> {
         (None, Some(path)) => (std::fs::read_to_string(path).map_err(|err| format!("cannot read {path}: {err}"))?, PathBuf::from(path)),
         _ => return Err("give either `code` (the circuit's text) or `path` (a .c2fc file)".into()),
     };
-    let circuit = c2f_circuit::parse(&src, &path, &c2f_eval::default_library_paths())
+    let circuit = c2f_circuit::parse_in(&src, &path, &c2f_eval::default_library_paths(), crate::guard::file_scope(args).as_ref())
         .map_err(|errors| errors.iter().map(c2f_circuit::Error::render).collect::<String>())?;
     let report = crate::mass::circuit(&circuit, &src, &path, options)?;
     Ok(vec![text(pretty(&crate::mass::json(&report, Some(&circuit))))])

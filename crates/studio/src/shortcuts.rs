@@ -27,6 +27,8 @@ pub enum Action {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    Agent,
+    UndoAgent,
     Settings,
     /// From the Model workspace to the Code one, and back.
     SwitchWorkspace,
@@ -40,7 +42,7 @@ const SHIFT_COMMAND: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND }
 const ALT_COMMAND: Modifiers = Modifiers { alt: true, ..Modifiers::COMMAND };
 
 impl Action {
-    pub const ALL: [Action; 18] = [
+    pub const ALL: [Action; 20] = [
         Action::New,
         Action::Open,
         Action::Save,
@@ -57,6 +59,8 @@ impl Action {
         Action::ZoomIn,
         Action::ZoomOut,
         Action::ZoomReset,
+        Action::Agent,
+        Action::UndoAgent,
         Action::Settings,
         Action::SwitchWorkspace,
     ];
@@ -80,6 +84,8 @@ impl Action {
             Action::ZoomIn => "zoom-in",
             Action::ZoomOut => "zoom-out",
             Action::ZoomReset => "zoom-reset",
+            Action::Agent => "agent",
+            Action::UndoAgent => "undo-agent",
             Action::Settings => "settings",
             Action::SwitchWorkspace => "workspace",
         }
@@ -103,6 +109,8 @@ impl Action {
             Action::ZoomIn => tr("Larger Interface", "Agrandir l'interface"),
             Action::ZoomOut => tr("Smaller Interface", "Réduire l'interface"),
             Action::ZoomReset => tr("Interface at 100%", "Interface à 100 %"),
+            Action::Agent => tr("Chat with the Agent", "Discussion avec l'agent"),
+            Action::UndoAgent => tr("Undo the Agent's Change", "Annuler la modification de l'agent"),
             Action::Settings => tr("Settings…", "Réglages…"),
             Action::SwitchWorkspace => tr("Switch Model / Code", "Basculer Modèle / Code"),
         }
@@ -127,6 +135,8 @@ impl Action {
             Action::ZoomIn => keys(Modifiers::COMMAND, Key::Plus),
             Action::ZoomOut => keys(Modifiers::COMMAND, Key::Minus),
             Action::ZoomReset => keys(Modifiers::COMMAND, Key::Num0),
+            Action::Agent => keys(Modifiers::COMMAND, Key::L),
+            Action::UndoAgent => keys(ALT_COMMAND, Key::Z),
             Action::Settings => keys(Modifiers::COMMAND, Key::Comma),
             Action::SwitchWorkspace => keys(Modifiers::COMMAND, Key::E),
         }
