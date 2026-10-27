@@ -1,0 +1,14 @@
+---
+import Base from '../layouts/Base.astro';
+import Home from '../components/Home.astro';
+import { t } from '../i18n';
+import { latestRelease } from '../lib/release';
+
+const lang = 'en';
+const s = t(lang);
+const release = await latestRelease();
+---
+
+<Base lang={lang} page="" title={s.meta.title} description={s.meta.description} release={release} progress>
+  <Home lang={lang} release={release} />
+</Base>

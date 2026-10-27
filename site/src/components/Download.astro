@@ -1,0 +1,263 @@
+---
+import { type Lang, t, repo } from '../i18n';
+import { type Release, type ReleaseFile, RELEASES, formatDate, formatSize } from '../lib/release';
+
+interface Props {
+  lang: Lang;
+  release: Release | null;
+}
+
+const { lang, release } = Astro.props;
+const s = t(lang).download;
+const files: { file?: ReleaseFile; title: string; note: string; primary: boolean }[] = release
+  ? [
+      { file: release.app, title: s.app, note: s.appNote, primary: true },
+      { file: release.cli, title: s.cli, note: s.cliNote, primary: false },
+    ]
+  : [];
+const cliName = release?.cli?.name ?? 'c2f-<version>-macos-universal.zip';
+---
+
+<div class="wrap page">
+  <section class="intro" aria-labelledby="dl-title">
+    <h1 id="dl-title">{s.title}</h1>
+    <p class="lead">{s.lead}</p>
+  </section>
+
+  <section class="card release" aria-labelledby="release-title">
+    <div class="card-head">
+      <h2 id="release-title" class="head-title">
+        {release ? <>Code2Form {release.version}</> : s.latest}
+      </h2>
+      {release && (
+        <span>
+          {s.released}{' '}
+          <time datetime={release.date.toISOString()}>{formatDate(release.date, lang)}</time>
+        </span>
+      )}
+    </div>
+    {
+      release ? (
+        <div class="body">
+          <ul class="files">
+            {files.map(
+              (f) =>
+                f.file && (
+                  <li class="file">
+                    <div class="file-text">
+                      <h3>{f.title}</h3>
+                      <p class="dim">{f.note}</p>
+                      {f.file.sha256 && (
+                        <p class="sha mono">
+                          <span class="dim">{s.sha}</span> <code>{f.file.sha256}</code>
+                        </p>
+                      )}
+                    </div>
+                    <a class:list={['btn', f.primary ? 'btn-primary' : 'btn-secondary']} href={f.file.url}>
+                      <span class="mono">{f.file.name}</span>
+                      <span class="size">{formatSize(f.file.size, lang)}</span>
+                    </a>
+                  </li>
+                ),
+            )}
+          </ul>
+          <p class="more">
+            {release.sums && (
+              <>
+                <a href={release.sums.url}>SHA256SUMS.txt</a> <span class="dim">· {s.sumsNote}</span>
+                <span aria-hidden="true"> · </span>
+              </>
+            )}
+            <a href={release.url}>{s.allReleases}</a>
+          </p>
+        </div>
+      ) : (
+        <div class="body">
+          <p>{s.offline}</p>
+          <p>
+            <a class="btn btn-primary" href={RELEASES}>
+              {s.allReleases}
+            </a>
+          </p>
+        </div>
+      )
+    }
+  </section>
+
+  <section class="step" aria-labelledby="first-title">
+    <h2 id="first-title" class="h2">{s.firstTitle}</h2>
+    <p class="lead">{s.firstLead}</p>
+    <ol class="steps">
+      {s.firstSteps.map((step) => <li>{step}</li>)}
+    </ol>
+    <p>{s.firstTerminal}</p>
+    <pre class="term"><code>xattr -dr com.apple.quarantine /Applications/Code2Form.app</code></pre>
+  </section>
+
+  <section class="step" aria-labelledby="mcp-title">
+    <h2 id="mcp-title" class="h2">{s.mcpTitle}</h2>
+    <p class="lead">{s.mcpLead}</p>
+    <ol class="steps">
+      <li>
+        {s.mcpSteps[0]}
+        <pre class="term"><code>{`cd ~/Downloads
+unzip ${cliName} -d c2f-cli
+xattr -cr c2f-cli
+mkdir -p ~/.local/bin && mv c2f-cli/c2f ~/.local/bin/`}</code></pre>
+      </li>
+      <li>
+        {s.mcpSteps[1]}
+        <pre class="term"><code>claude mcp add code2form -- c2f mcp</code></pre>
+      </li>
+    </ol>
+    <p><a href={`${repo}#ai-agents-mcp`}>{s.mcpMore} →</a></p>
+  </section>
+
+  <section class="step" aria-labelledby="source-title">
+    <h2 id="source-title" class="h2">{s.sourceTitle}</h2>
+    <p class="lead">{s.sourceLead}</p>
+    <pre class="term"><code>{`git clone https://github.com/C2-POLY/code2form.git
+cd code2form
+cargo build --release`}</code></pre>
+    <p class="dim">{s.sourceNote}</p>
+    <p><a href={`${repo}#building`}>{s.sourceMore} →</a></p>
+  </section>
+</div>
+
+<style>
+  .mono {
+    font-family: var(--mono);
+  }
+  .dim {
+    color: var(--dim);
+  }
+
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: 48px;
+    padding-top: 56px;
+    padding-bottom: 80px;
+    max-width: 920px;
+  }
+
+  .intro {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .intro h1 {
+    font-size: clamp(36px, 6vw, 56px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+  }
+
+  .release {
+    background: var(--panel);
+  }
+
+  .head-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .body {
+    padding: 8px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .files {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .file {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .file-text {
+    flex: 1 1 320px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .file h3 {
+    font-size: 18px;
+  }
+
+  .sha {
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .sha code {
+    color: var(--dim);
+  }
+
+  .file .btn {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .file .btn .mono {
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+
+  .size {
+    font-weight: 400;
+  }
+
+  .more {
+    font-size: 14px;
+  }
+
+  .step {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .steps {
+    margin: 0;
+    padding-left: 1.4em;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    line-height: 1.6;
+  }
+
+  .steps li::marker {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  .steps .term {
+    margin-top: 10px;
+  }
+
+  .term {
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--editor);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--code-text);
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-x: auto;
+  }
+</style>

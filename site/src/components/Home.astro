@@ -1,0 +1,467 @@
+---
+import Story from './Story.astro';
+import { type Lang, t, pagePath, asset, repo } from '../i18n';
+import type { Release } from '../lib/release';
+
+interface Props {
+  lang: Lang;
+  release: Release | null;
+}
+
+const { lang, release } = Astro.props;
+const s = t(lang);
+const download = pagePath(lang, 'download/');
+const examplesUrl = `${repo}/tree/main/examples`;
+const examples = [
+  { key: 'nightlight', img: 'ex-nightlight', path: 'nightlight', files: s.examples.files },
+  { key: 'winder', img: 'ex-winder', path: 'winder', files: s.examples.files },
+  { key: 'plate', img: 'ex-plate', path: 'nightlight', files: s.examples.plateFiles },
+] as const;
+const hero = (w: number) => asset(`images/hero-${lang}-${w}.webp`);
+---
+
+<section class="hero wrap" aria-labelledby="hero-title">
+  <span class="tag"><span class="dot"></span>{release ? `v${release.version} · ` : ''}{s.hero.badge}</span>
+  <h1 id="hero-title">{s.hero.titleStart} <span class="accent">{s.hero.titleAccent}</span></h1>
+  <p class="lead">{s.hero.lead}</p>
+  <div class="ctas">
+    <a class="btn btn-primary" href={download}>{s.hero.downloadMac}</a>
+    <a class="btn btn-secondary" href="#examples">{s.hero.printExample}</a>
+  </div>
+</section>
+
+<div class="wrap shot-wrap">
+  <figure class="shot">
+    <img
+      src={hero(1600)}
+      srcset={`${hero(800)} 800w, ${hero(1600)} 1600w`}
+      sizes="(min-width: 1240px) 1192px, calc(100vw - 32px)"
+      width="1600"
+      height="776"
+      alt={s.hero.shotAlt}
+      fetchpriority="high"
+    />
+  </figure>
+  <p class="caption"><span class="dot dot-soon"></span>{s.hero.shotCaption}</p>
+</div>
+
+<section class="band" aria-labelledby="ways-title">
+  <div class="wrap section ways">
+    <h2 id="ways-title" class="h2">{s.ways.title}</h2>
+    <div class="ways-grid">
+      <article class="card">
+        <div class="card-head"><span>{s.ways.code.label}</span><span class="mono">lamp.c2f</span></div>
+        <pre class="code"><span class="c-comment">// Height of the shade, in mm.</span>
+height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</span>
+<span class="c-keyword">difference</span>() {'{'}
+  <span class="c-module">cylinder</span>(h = height, d = <span class="c-number">60</span>);
+  <span class="c-module">translate</span>([<span class="c-number">0</span>, <span class="c-number">0</span>, <span class="c-number">2</span>])
+    <span class="c-module">cylinder</span>(h = height, d = <span class="c-number">56</span>);
+{'}'}</pre>
+        <div class="card-body">
+          <h3>{s.ways.code.title}</h3>
+          <p>{s.ways.code.text}</p>
+        </div>
+      </article>
+      <article class="card">
+        <div class="card-body">
+          <div class="chips" aria-hidden="true">
+            {s.ways.mouse.tools.map((tool, i) => <span class:list={['chip', { on: i === 1 }]}>{tool}</span>)}
+          </div>
+          <h3>{s.ways.mouse.title} <span class="tag soon">{s.ways.soon}</span></h3>
+          <p>{s.ways.mouse.text}</p>
+        </div>
+      </article>
+      <article class="card">
+        <div class="card-body">
+          <div class="ask" aria-hidden="true">{s.ways.agent.ask}</div>
+          <div class="trace mono" aria-hidden="true">
+            <span>✓ studio_state</span>
+            <span>✓ edit_code · line 29</span>
+            <span class="ok">✓ rendered · 55.99 → 63.98 mm</span>
+          </div>
+          <h3>{s.ways.agent.title} <span class="tag soon">{s.ways.soon}</span></h3>
+          <p>{s.ways.agent.text}</p>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<Story lang={lang} />
+
+<section class="wrap section split" aria-labelledby="checked-title">
+  <div class="split-text">
+    <h2 id="checked-title" class="h2">{s.checked.title}</h2>
+    <p class="lead">{s.checked.text}</p>
+    <div class="card brief">
+      <div class="card-head"><span class="mono">{s.checked.cardTitle}</span></div>
+      <dl class="brief-rows mono">
+        {
+          s.checked.rows.map(([state, req, value], i) => (
+            <div>
+              <dt>
+                <span class:list={['state', { warn: i === 3 }]}>{state}</span> {req}
+              </dt>
+              <dd>{value}</dd>
+            </div>
+          ))
+        }
+      </dl>
+    </div>
+    <p class="small">{s.checked.how}</p>
+  </div>
+  <figure class="shot split-img">
+    <img src={asset('images/sheet-winder.webp')} width="1200" height="662" alt={s.checked.sheetAlt} loading="lazy" decoding="async" />
+  </figure>
+</section>
+
+<section class="band" aria-labelledby="review-title">
+  <div class="wrap section split reverse">
+    <figure class="shot split-img">
+      <img src={asset('images/review.webp')} width="1000" height="437" alt={s.review.alt} loading="lazy" decoding="async" />
+    </figure>
+    <div class="split-text">
+      <h2 id="review-title" class="h2">{s.review.title}</h2>
+      <p class="lead">{s.review.text}</p>
+      <p class="small"><span class="dot dot-soon"></span>{s.review.soon}</p>
+    </div>
+  </div>
+</section>
+
+<section id="examples" class="wrap section" aria-labelledby="examples-title">
+  <div class="examples-head">
+    <h2 id="examples-title" class="h2">{s.examples.title}</h2>
+    <a href={examplesUrl}>{s.examples.all} →</a>
+  </div>
+  <ul class="examples">
+    {
+      examples.map((ex) => (
+        <li>
+          <a class="example" href={`${examplesUrl}/${ex.path}`}>
+            <img
+              src={asset(`images/${ex.img}.webp`)}
+              width="800"
+              height={ex.key === 'plate' ? 500 : 588}
+              alt={s.examples.items[ex.key].alt}
+              loading="lazy"
+              decoding="async"
+            />
+            <span class="example-foot">
+              <span class="example-name">{s.examples.items[ex.key].name}</span>
+              <span class="mono dim">{ex.files}</span>
+            </span>
+          </a>
+        </li>
+      ))
+    }
+  </ul>
+</section>
+
+<section class="wrap cta-wrap" aria-labelledby="cta-title">
+  <div class="cta">
+    <div class="cta-text">
+      <p class="your-turn">{s.cta.yourTurn}</p>
+      <h2 id="cta-title" class="h2">{s.cta.title}</h2>
+      <p class="dim">{s.cta.text}</p>
+    </div>
+    <a class="btn btn-primary" href={download}>{s.cta.button}{release && ` v${release.version}`}</a>
+  </div>
+</section>
+
+<style>
+  .accent {
+    color: var(--accent);
+  }
+  .mono {
+    font-family: var(--mono);
+  }
+  .dim {
+    color: var(--dim);
+  }
+
+  .hero {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 22px;
+    padding-top: 56px;
+    padding-bottom: 40px;
+  }
+
+  .hero h1 {
+    font-size: clamp(36px, 6.4vw, 64px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    max-width: 920px;
+  }
+
+  .hero .lead {
+    max-width: 680px;
+  }
+
+  .ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .shot-wrap {
+    padding-bottom: 64px;
+  }
+
+  .caption,
+  .small {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    color: var(--dim);
+    font-size: 14px;
+  }
+
+  .ways {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .ways-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+    gap: 16px;
+  }
+
+  .ways-grid .card {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .card-body h3 {
+    font-size: 22px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+  }
+
+  .card-body p {
+    color: var(--dim);
+    line-height: 1.55;
+  }
+
+  .ways-grid pre + .card-body {
+    padding-top: 4px;
+  }
+
+  .soon {
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .chip {
+    padding: 6px 10px;
+    border-radius: var(--radius-s);
+    background: var(--raised);
+    font-size: 13px;
+  }
+
+  .chip.on {
+    background: var(--accent-muted);
+  }
+
+  .ask {
+    align-self: flex-start;
+    background: var(--raised);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .trace {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--dim);
+  }
+
+  .ok {
+    color: var(--success);
+  }
+
+  .split {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 40px 48px;
+    align-items: center;
+  }
+
+  .split-text {
+    flex: 1 1 360px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .split-img {
+    flex: 1 1 520px;
+    min-width: 0;
+    border-color: var(--border);
+  }
+
+  .reverse .split-text {
+    order: 2;
+  }
+
+  .brief {
+    background: var(--card);
+  }
+
+  .brief-rows {
+    margin: 0;
+    padding: 10px 14px;
+    font-size: 14px;
+    line-height: 1.8;
+  }
+
+  .brief-rows div {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .brief-rows dd {
+    margin: 0;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+
+  .state {
+    display: inline-block;
+    min-width: 6ch;
+    color: var(--success);
+  }
+
+  .state.warn {
+    color: var(--warning);
+  }
+
+  .examples-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+
+  .examples {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+    gap: 16px;
+  }
+
+  .example {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    overflow: hidden;
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 0.15s;
+  }
+
+  .example:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .example img {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    background: #16181d;
+  }
+
+  .example-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px;
+  }
+
+  .example-name {
+    font-weight: 500;
+  }
+
+  .example-foot .mono {
+    font-size: 13px;
+  }
+
+  .cta-wrap {
+    padding-bottom: 72px;
+  }
+
+  .cta {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    padding: 32px 24px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .cta-text {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1 1 420px;
+  }
+
+  .your-turn {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 14px;
+  }
+
+  @media (min-width: 900px) {
+    .hero {
+      padding-top: 88px;
+      padding-bottom: 48px;
+    }
+    .shot-wrap {
+      padding-bottom: 88px;
+    }
+    .cta {
+      padding: 40px;
+    }
+    .cta-wrap {
+      padding-bottom: 88px;
+    }
+  }
+</style>

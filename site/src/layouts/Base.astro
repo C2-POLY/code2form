@@ -1,0 +1,80 @@
+---
+import '@fontsource/ubuntu/latin-300.css';
+import '@fontsource/ubuntu/latin-400.css';
+import '@fontsource/ubuntu/latin-500.css';
+import '@fontsource/ubuntu-sans-mono/latin-400.css';
+import '@fontsource/ubuntu-sans-mono/latin-500.css';
+import '../styles/global.css';
+// The three weights the first screen uses, preloaded so that the text
+// does not reflow when they arrive.
+import ubuntu300 from '@fontsource/ubuntu/files/ubuntu-latin-300-normal.woff2?url';
+import ubuntu400 from '@fontsource/ubuntu/files/ubuntu-latin-400-normal.woff2?url';
+import ubuntu500 from '@fontsource/ubuntu/files/ubuntu-latin-500-normal.woff2?url';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { type Lang, t, pagePath, asset } from '../i18n';
+import type { Release } from '../lib/release';
+
+interface Props {
+  lang: Lang;
+  page: '' | 'download/';
+  title: string;
+  description: string;
+  release: Release | null;
+  progress?: boolean;
+}
+
+const { lang, page, title, description, release, progress = false } = Astro.props;
+const s = t(lang);
+const canonical = new URL(pagePath(lang, page), Astro.site).href;
+const alternates = (['en', 'fr'] as Lang[]).map((l) => ({ lang: l, href: new URL(pagePath(l, page), Astro.site).href }));
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    {
+      [ubuntu300, ubuntu400, ubuntu500].map((font) => (
+        <link rel="preload" href={font} as="font" type="font/woff2" crossorigin />
+      ))
+    }
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {alternates.map((a) => <link rel="alternate" hreflang={a.lang} href={a.href} />)}
+    <link rel="alternate" hreflang="x-default" href={alternates[0].href} />
+    <link rel="icon" type="image/png" href={asset('favicon.png')} />
+    <link rel="apple-touch-icon" href={asset('apple-touch-icon.png')} />
+    <meta name="theme-color" content="#16181D" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={new URL(asset('images/hero-en-1600.webp'), Astro.site).href} />
+    <meta property="og:locale" content={lang === 'fr' ? 'fr_FR' : 'en_US'} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script is:inline>
+      // Before the first paint: the theme the toggle chose, and whether
+      // scripts run (the scroll story needs them).
+      (function () {
+        var d = document.documentElement;
+        d.classList.add('js');
+        try {
+          var t = localStorage.getItem('c2f-theme');
+          if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
+    <slot name="head" />
+  </head>
+  <body>
+    <a class="skip" href="#main">{s.a11y.skip}</a>
+    <Header lang={lang} page={page} progress={progress} />
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+    <Footer lang={lang} page={page} release={release} />
+  </body>
+</html>
