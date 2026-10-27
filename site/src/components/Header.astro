@@ -1,0 +1,282 @@
+---
+import { type Lang, t, pagePath, asset, repo } from '../i18n';
+
+interface Props {
+  lang: Lang;
+  page: '' | 'download/';
+  progress: boolean;
+}
+
+const { lang, page, progress } = Astro.props;
+const s = t(lang);
+const home = pagePath(lang);
+const docs = `${repo}#readme`;
+const nav = [
+  { href: home, label: s.nav.overview, current: page === '' },
+  { href: `${home}#examples`, label: s.nav.examples, current: false },
+  { href: docs, label: s.nav.docs, current: false },
+];
+---
+
+<header class="site-header">
+  <nav class="wrap bar" aria-label={s.a11y.mainNav}>
+    <a class="brand" href={home}>
+      <img src={asset('favicon.png')} alt="" width="28" height="28" />
+      <span class="brand-name">Code2Form</span>
+    </a>
+    <div class="segmented">
+      {
+        nav.map((item) => (
+          <a href={item.href} aria-current={item.current ? 'page' : undefined}>
+            {item.label}
+          </a>
+        ))
+      }
+    </div>
+    <div class="actions">
+      <div class="langs" role="group" aria-label={s.a11y.language}>
+        <a href={pagePath('en', page)} hreflang="en" lang="en" aria-current={lang === 'en' ? 'true' : undefined}>EN</a>
+        <span aria-hidden="true">·</span>
+        <a href={pagePath('fr', page)} hreflang="fr" lang="fr" aria-current={lang === 'fr' ? 'true' : undefined}>FR</a>
+      </div>
+      <button class="theme" type="button" aria-label={s.a11y.theme} data-theme-toggle>
+        <svg class="moon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20.7 14.6A8.5 8.5 0 0 1 9.4 3.3a.7.7 0 0 0-.9-.9 10 10 0 1 0 13.1 13.1.7.7 0 0 0-.9-.9z"></path></svg>
+        <svg class="sun" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"></circle><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 1.5v2.5M12 20v2.5M1.5 12H4M20 12h2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"></path></svg>
+      </button>
+      <a class="btn btn-secondary btn-small github" href={repo}>{s.nav.github}</a>
+      <a class="btn btn-primary btn-small" href={pagePath(lang, 'download/')} aria-current={page === 'download/' ? 'page' : undefined}>{s.nav.download}</a>
+    </div>
+  </nav>
+  {
+    progress && (
+      <div class="progress" aria-hidden="true">
+        <div class="progress-bar" />
+      </div>
+    )
+  }
+</header>
+
+<script>
+  // The theme toggle: flips between dark and light and remembers the choice.
+  const button = document.querySelector<HTMLButtonElement>('[data-theme-toggle]');
+  const root = document.documentElement;
+  const current = () =>
+    root.dataset.theme ?? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  const sync = () => button?.setAttribute('aria-pressed', String(current() === 'light'));
+  sync();
+  button?.addEventListener('click', () => {
+    const next = current() === 'light' ? 'dark' : 'light';
+    root.dataset.theme = next;
+    try {
+      localStorage.setItem('c2f-theme', next);
+    } catch {
+      // Private browsing: the choice lasts until the page closes.
+    }
+    sync();
+  });
+</script>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--header-bg);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 17px;
+    white-space: nowrap;
+  }
+
+  .brand:hover {
+    color: var(--text);
+  }
+
+  .segmented {
+    display: none;
+    gap: 2px;
+    padding: 3px;
+    margin-left: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .segmented a {
+    padding: 6px 14px;
+    border-radius: var(--radius-s);
+    color: var(--dim);
+    text-decoration: none;
+    font-size: 14px;
+  }
+
+  .segmented a:hover {
+    color: var(--text);
+  }
+
+  .segmented a[aria-current='page'] {
+    background: var(--accent-muted);
+    color: var(--text);
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  .langs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--dim);
+    font-size: 14px;
+  }
+
+  .langs a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 6px;
+    color: var(--dim);
+    text-decoration: none;
+    border-radius: var(--radius-s);
+  }
+
+  .langs a:hover {
+    color: var(--text);
+  }
+
+  .langs a[aria-current='true'] {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .theme {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--dim);
+    cursor: pointer;
+  }
+
+  .theme:hover {
+    background: var(--raised);
+    color: var(--text);
+  }
+
+  /* The icon shows what a click switches to. */
+  .sun {
+    display: block;
+  }
+  .moon {
+    display: none;
+  }
+
+  :global(:root[data-theme='light']) .sun {
+    display: none;
+  }
+  :global(:root[data-theme='light']) .moon {
+    display: block;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :global(:root:not([data-theme='dark'])) .sun {
+      display: none;
+    }
+    :global(:root:not([data-theme='dark'])) .moon {
+      display: block;
+    }
+  }
+
+  /* On the narrowest phones the icon alone names the site; the name stays for screen readers. */
+  @media (max-width: 379px) {
+    .brand-name {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+  }
+
+  .github {
+    display: none;
+  }
+
+  @media (min-width: 560px) {
+    .github {
+      display: inline-flex;
+    }
+  }
+
+  @media (min-width: 880px) {
+    .segmented {
+      display: flex;
+    }
+    .actions {
+      gap: 8px;
+    }
+  }
+
+  .progress {
+    height: 2px;
+    background: var(--border);
+    margin-bottom: -1px;
+  }
+
+  .progress-bar {
+    height: 2px;
+    background: var(--accent);
+    transform-origin: 0 50%;
+    transform: scaleX(var(--page, 0));
+  }
+
+  @supports (animation-timeline: scroll()) {
+    .progress-bar {
+      animation: grow linear both;
+      animation-timeline: scroll(root block);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .progress {
+      display: none;
+    }
+  }
+
+  @keyframes grow {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+</style>

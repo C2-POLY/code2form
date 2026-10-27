@@ -1,0 +1,371 @@
+/* The app's look (crates/studio/src/theme.rs): its palettes, Ubuntu and
+   Ubuntu Sans Mono, radii of 6 to 10 px. Dark by default; light when the
+   system asks for it, unless the toggle chose otherwise. */
+
+:root {
+  color-scheme: dark;
+  --bg: #16181d;
+  --panel: #1b1e24;
+  --editor: #1e2128;
+  --raised: #262a33;
+  --card: #16191f;
+  --stage: #121419;
+  --border: #2c313b;
+  --border-strong: #3d4452;
+  --text: #d8dce4;
+  --dim: #8b94a5;
+  --accent: #4c8dff;
+  --accent-hover: #6aa2ff;
+  --accent-muted: #264a8c;
+  --button: #2563d6;
+  --button-hover: #1f55ba;
+  --on-button: #ffffff;
+  --success: #5fd08a;
+  --warning: #f2b55b;
+  --code-text: #d4d8e0;
+  --comment: #8b94a5;
+  --keyword: #c68af5;
+  --module: #5fb1ff;
+  --number: #f09e5f;
+  --header-bg: rgba(27, 30, 36, 0.86);
+  --dome: #eceef2;
+  --base: #5c6473;
+
+  --sans: 'Ubuntu', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'Ubuntu Sans Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --radius-s: 6px;
+  --radius: 8px;
+  --radius-l: 10px;
+  --wrap: 1240px;
+  --gutter: 16px;
+  --header-h: 57px;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --gutter: 24px;
+  }
+}
+
+/* Light: the app's light palette. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --bg: #e8ebef;
+    --panel: #f3f4f6;
+    --editor: #ffffff;
+    --raised: #dde1e7;
+    --card: #fafbfc;
+    --stage: #dfe3e8;
+    --border: #cfd4db;
+    --border-strong: #b3bac5;
+    --text: #1f2328;
+    --dim: #4f5864;
+    --accent: #2563d6;
+    --accent-hover: #1a4fb0;
+    --accent-muted: #cfdffa;
+    --success: #1a7336;
+    --warning: #8f5a00;
+    --code-text: #1f2328;
+    --comment: #5b6470;
+    --keyword: #7a3fc8;
+    --module: #0a59b0;
+    --number: #a34a00;
+    --header-bg: rgba(243, 244, 246, 0.88);
+    --dome: #ffffff;
+    --base: #6b7383;
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #e8ebef;
+  --panel: #f3f4f6;
+  --editor: #ffffff;
+  --raised: #dde1e7;
+  --card: #fafbfc;
+  --stage: #dfe3e8;
+  --border: #cfd4db;
+  --border-strong: #b3bac5;
+  --text: #1f2328;
+  --dim: #4f5864;
+  --accent: #2563d6;
+  --accent-hover: #1a4fb0;
+  --accent-muted: #cfdffa;
+  --success: #1a7336;
+  --warning: #8f5a00;
+  --code-text: #1f2328;
+  --comment: #5b6470;
+  --keyword: #7a3fc8;
+  --module: #0a59b0;
+  --number: #a34a00;
+  --header-bg: rgba(243, 244, 246, 0.88);
+  --dome: #ffffff;
+  --base: #6b7383;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: calc(var(--header-h) + 16px);
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 500;
+  margin: 0;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--mono);
+}
+
+.wrap {
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: var(--radius-s);
+  background: var(--button);
+  color: var(--on-button);
+  text-decoration: none;
+}
+
+.skip:focus {
+  top: 8px;
+  color: var(--on-button);
+}
+
+/* Buttons, as the app draws them. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.btn-primary {
+  background: var(--button);
+  color: var(--on-button);
+}
+
+.btn-primary:hover {
+  background: var(--button-hover);
+  color: var(--on-button);
+}
+
+.btn-secondary {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 400;
+}
+
+.btn-secondary:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.btn-small {
+  min-height: 36px;
+  padding: 7px 14px;
+  border-radius: var(--radius-s);
+  font-size: 14px;
+}
+
+/* A panel band across the page, as the app's panels sit on its background. */
+.band {
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.section {
+  padding-top: 64px;
+  padding-bottom: 64px;
+}
+
+@media (min-width: 900px) {
+  .section {
+    padding-top: 88px;
+    padding-bottom: 88px;
+  }
+}
+
+.h2 {
+  font-size: clamp(28px, 4vw, 36px);
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.lead {
+  color: var(--dim);
+  font-size: clamp(17px, 2vw, 19px);
+  line-height: 1.6;
+  font-weight: 300;
+}
+
+.kicker {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--dim);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  flex: none;
+}
+
+.dot-soon {
+  background: var(--warning);
+}
+
+.card {
+  background: var(--editor);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  overflow: hidden;
+}
+
+.card-head {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shot {
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+/* Code, in the app's colors. */
+.code {
+  margin: 0;
+  padding: 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--code-text);
+  overflow-x: auto;
+}
+
+.c-comment {
+  color: var(--comment);
+}
+.c-keyword {
+  color: var(--keyword);
+}
+.c-module {
+  color: var(--module);
+}
+.c-number {
+  color: var(--number);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

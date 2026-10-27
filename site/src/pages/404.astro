@@ -1,0 +1,32 @@
+---
+import Base from '../layouts/Base.astro';
+import { pagePath } from '../i18n';
+import { latestRelease } from '../lib/release';
+
+const release = await latestRelease();
+---
+
+<Base lang="en" page="" title="Page not found · Code2Form" description="This page does not exist." release={release}>
+  <div class="wrap lost">
+    <p class="kicker">404</p>
+    <h1>This page does not exist.</h1>
+    <p lang="fr">Cette page n’existe pas.</p>
+    <p><a class="btn btn-primary" href={pagePath('en')}>Code2Form</a></p>
+  </div>
+</Base>
+
+<style>
+  .lost {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 96px;
+    padding-bottom: 120px;
+  }
+  h1 {
+    font-size: clamp(32px, 5vw, 48px);
+  }
+  p[lang] {
+    color: var(--dim);
+  }
+</style>

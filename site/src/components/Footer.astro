@@ -1,0 +1,78 @@
+---
+import { type Lang, t, pagePath, repo } from '../i18n';
+import { type Release, RELEASES } from '../lib/release';
+
+interface Props {
+  lang: Lang;
+  page: '' | 'download/';
+  release: Release | null;
+}
+
+const { lang, page, release } = Astro.props;
+const s = t(lang);
+const other: Lang = lang === 'en' ? 'fr' : 'en';
+---
+
+<footer class="status">
+  <div class="wrap row">
+    <p class="state">
+      <span class="dot"></span>
+      <span>{s.footer.ready}{release && <> · v{release.version}</>} · {s.footer.ways}</span>
+    </p>
+    <ul class="links">
+      <li><a href={repo}>GitHub</a></li>
+      <li><a href={`${repo}#readme`}>{s.nav.docs}</a></li>
+      <li><a href={RELEASES}>{s.footer.releases}</a></li>
+      <li><a href={`${repo}#licence`}>{s.footer.licence}</a></li>
+      <li>
+        <a href={pagePath(other, page)} hreflang={other} lang={other}>{other === 'fr' ? 'Français' : 'English'}</a>
+      </li>
+    </ul>
+  </div>
+</footer>
+
+<style>
+  .status {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--dim);
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px 16px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .links a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 6px;
+    color: var(--dim);
+  }
+
+  .links a:hover {
+    color: var(--text);
+  }
+</style>

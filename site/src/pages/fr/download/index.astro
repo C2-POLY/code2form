@@ -1,0 +1,14 @@
+---
+import Base from '../../../layouts/Base.astro';
+import Download from '../../../components/Download.astro';
+import { t } from '../../../i18n';
+import { latestRelease } from '../../../lib/release';
+
+const lang = 'fr';
+const s = t(lang);
+const release = await latestRelease();
+---
+
+<Base lang={lang} page="download/" title={s.meta.downloadTitle} description={s.meta.downloadDescription} release={release}>
+  <Download lang={lang} release={release} />
+</Base>

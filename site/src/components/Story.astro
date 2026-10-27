@@ -1,0 +1,616 @@
+---
+// The scroll story (C2F-98): the watch winder turning, coming apart, the
+// agent changing the night light's dome, and what the plan changed.
+//
+// Without scripts, or with reduced motion, it is a plain page: one frame
+// of each sequence, every caption and part listed, the final numbers.
+// With scripts, `html.story` makes each section tall with a sticky stage:
+// the frames follow the scroll (story.ts), and the captions and the parts
+// list fade with CSS scroll-driven animations where the browser has them,
+// or with classes story.ts sets where it does not.
+import { type Lang, t, asset } from '../i18n';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const s = t(lang).story;
+const num = (n: number, digits: number) =>
+  n.toLocaleString(lang, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const frame = (name: string) => asset(`frames/${name}.webp`);
+---
+
+<div class="story" data-story data-frames-base={asset('frames/')}>
+  <div class="s-intro wrap">
+    <div class="s-intro-inner">
+      <span class="tag">{s.intro}</span>
+      <h2 class="s-title">{s.titleStart}<br /><span class="accent">{s.titleAccent}</span></h2>
+      <p class="lead">{s.lead}</p>
+    </div>
+  </div>
+
+  <section class="s-turn" data-seq="turn" data-count="36" aria-label={s.captions[0]}>
+    <div class="stage">
+      <img
+        class="frame"
+        src={frame('turn-00')}
+        alt={s.turnAlt}
+        width="880"
+        height="720"
+        loading="lazy"
+        decoding="async"
+      />
+      <ol class="captions">
+        {s.captions.map((c) => <li class="cap">{c}</li>)}
+      </ol>
+    </div>
+  </section>
+
+  <section class="s-explode" data-seq="explode" data-count="24" aria-labelledby="explode-title">
+    <div class="stage wrap">
+      <div class="side">
+        <p class="kicker">{s.explodeKicker}</p>
+        <h2 id="explode-title" class="s-h2">{s.explodeTitle}</h2>
+        <ul class="parts">
+          {
+            s.parts.map(([name, note]) => (
+              <li>
+                <span>{name}</span>
+                <span class="note">{note}</span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+      <img
+        class="frame"
+        src={frame('explode-23')}
+        alt={s.explodeAlt}
+        width="880"
+        height="720"
+        loading="lazy"
+        decoding="async"
+      />
+    </div>
+  </section>
+
+  <section class="s-edit" data-edit aria-labelledby="edit-title" style="--dome-mm: 34; --tint: 0">
+    <div class="stage wrap">
+      <div class="side">
+        <p class="kicker">{s.editKicker}</p>
+        <h2 id="edit-title" class="s-h2">{s.editTitle}</h2>
+        <div class="card">
+          <div class="card-head"><span class="mono">{s.editFile}</span></div>
+          <pre class="code edit-code"><span class="line c-comment">28  {s.editLineBefore}</span><span class="line hot">29  dome_h = <span class="c-number" data-dome-value>34</span>; <span class="c-comment">// [10:40]</span></span><span class="line c-comment">30  {s.editLineAfter}</span></pre>
+        </div>
+        <p
+          class="report done"
+          data-report
+          data-start={s.reportStart}
+          data-working={s.reportWorking}
+          data-done={s.reportDone}
+          aria-live="off"
+        >
+          {s.reportDone}
+        </p>
+      </div>
+      <figure class="lamp" role="img" aria-label={s.domeAlt}>
+        <div class="lamp-dome"></div>
+        <div class="lamp-base"></div>
+        <figcaption class="mono">{s.heightLabel} <span data-height>{num(63.98, 2)}</span> mm</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="s-numbers band" data-numbers aria-labelledby="numbers-title">
+    <div class="wrap">
+      <h2 id="numbers-title" class="visually-hidden">{s.numbersTitle}</h2>
+      <dl class="numbers">
+        <div>
+          <dt>{s.margin}</dt>
+          <dd class="accent" data-count-from="0.77" data-count-to="9.41" data-digits="2">{num(9.41, 2)}</dd>
+        </div>
+        <div>
+          <dt>{s.load}</dt>
+          <dd><span data-count-from="17.5" data-count-to="0" data-digits="1">{num(0, 1)}</span> N</dd>
+        </div>
+        <div>
+          <dt>{s.tip}</dt>
+          <dd><span data-count-from="0" data-count-to="37" data-digits="0">37</span>°</dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+</div>
+
+<script>
+  import { startStory } from '../scripts/story';
+  startStory();
+</script>
+
+<style>
+  .accent {
+    color: var(--accent);
+  }
+
+  .mono {
+    font-family: var(--mono);
+  }
+
+  /* The intro. */
+  .s-intro {
+    padding-top: 96px;
+    padding-bottom: 72px;
+    text-align: center;
+  }
+
+  .s-intro-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .s-title {
+    font-size: clamp(40px, 8vw, 84px);
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+
+  .s-intro .lead {
+    max-width: 620px;
+  }
+
+  .s-h2 {
+    font-size: clamp(28px, 4.4vw, 44px);
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+  }
+
+  /* Stages, as a plain page. */
+  .stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    padding-top: 32px;
+    padding-bottom: 56px;
+  }
+
+  .frame {
+    width: min(880px, 100%);
+    border-radius: 12px;
+    background: #16181d;
+  }
+
+  .s-turn .stage {
+    padding-left: var(--gutter);
+    padding-right: var(--gutter);
+  }
+
+  .captions {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: center;
+  }
+
+  .cap {
+    font-size: clamp(20px, 3vw, 30px);
+    line-height: 1.25;
+    font-weight: 500;
+    max-width: 640px;
+  }
+
+  .s-explode {
+    background: var(--stage);
+  }
+
+  .s-explode .stage,
+  .s-edit .stage {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .parts {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .parts li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .note {
+    font-family: var(--mono);
+    color: var(--dim);
+    font-size: 14px;
+    text-align: right;
+  }
+
+  .s-explode .frame {
+    align-self: center;
+  }
+
+  /* The agent's edit. */
+  .edit-code {
+    padding: 12px 0;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+
+  .line {
+    display: block;
+    padding: 0 14px;
+    white-space: pre;
+  }
+
+  .hot {
+    background: rgb(76 141 255 / calc(var(--tint) * 0.28));
+  }
+
+  .report {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--dim);
+  }
+
+  .report.done {
+    color: var(--success);
+  }
+
+  .lamp {
+    margin: 0;
+    height: 300px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  .lamp-dome {
+    --h: calc(70px + (var(--dome-mm) - 26) * 6px);
+    width: 180px;
+    height: var(--h);
+    background: var(--dome);
+    border: 1px solid var(--border-strong);
+    border-bottom: 0;
+    border-radius: 90px 90px 0 0 / var(--h) var(--h) 0 0;
+    box-shadow: inset -14px -6px 30px rgb(0 0 0 / 0.12);
+  }
+
+  .lamp-base {
+    width: 300px;
+    max-width: 100%;
+    height: 120px;
+    background: var(--base);
+    border-radius: 0 0 14px 14px;
+  }
+
+  .lamp figcaption {
+    margin-top: 14px;
+    font-size: 14px;
+    color: var(--dim);
+  }
+
+  /* The numbers. */
+  .numbers {
+    margin: 0;
+    padding-top: 72px;
+    padding-bottom: 72px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 32px;
+  }
+
+  .numbers div {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 8px;
+  }
+
+  .numbers dt {
+    color: var(--dim);
+    font-size: 17px;
+  }
+
+  .numbers dd {
+    margin: 0;
+    font-size: clamp(52px, 7vw, 72px);
+    line-height: 1;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (min-width: 900px) {
+    .s-explode .stage,
+    .s-edit .stage {
+      flex-direction: row;
+      align-items: center;
+      justify-content: center;
+      gap: 48px;
+    }
+
+    .s-explode .side {
+      flex: 0 1 380px;
+    }
+
+    .s-explode .frame {
+      flex: 1 1 560px;
+      min-width: 0;
+      max-width: 820px;
+    }
+
+    .s-edit .side {
+      flex: 0 1 520px;
+    }
+
+    .lamp {
+      flex: 0 1 360px;
+      height: 420px;
+    }
+
+    .numbers {
+      padding-top: 120px;
+      padding-bottom: 120px;
+    }
+  }
+
+  /* ---- Story mode: tall sections, sticky stages. ---- */
+
+  :global(html.story) .s-turn {
+    height: 320vh;
+  }
+
+  :global(html.story) .s-explode {
+    height: 300vh;
+  }
+
+  :global(html.story) .s-edit {
+    height: 240vh;
+  }
+
+  :global(html.story) .stage {
+    position: sticky;
+    top: var(--header-h);
+    height: calc(100vh - var(--header-h));
+    height: calc(100svh - var(--header-h));
+    padding-top: 16px;
+    padding-bottom: 16px;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  :global(html.story) .s-turn .stage {
+    position: sticky;
+  }
+
+  :global(html.story) .s-turn .frame {
+    width: auto;
+    max-width: min(880px, 100%);
+    max-height: calc(100% - 120px);
+    object-fit: contain;
+    transform: scale(calc(0.92 + 0.08 * var(--zoom, 1)));
+  }
+
+  :global(html.story) .captions {
+    position: relative;
+    display: block;
+    height: 4.2em;
+    width: 100%;
+    max-width: 640px;
+  }
+
+  :global(html.story) .cap {
+    position: absolute;
+    inset: 0;
+    margin: 0 auto;
+    opacity: 0;
+    transform: translateY(18px);
+    transition:
+      opacity 0.35s,
+      transform 0.35s;
+  }
+
+  :global(html.story) .s-turn[data-step='0'] .cap:nth-child(1),
+  :global(html.story) .s-turn[data-step='1'] .cap:nth-child(2),
+  :global(html.story) .s-turn[data-step='2'] .cap:nth-child(3) {
+    opacity: 1;
+    transform: none;
+  }
+
+  :global(html.story) .parts li {
+    opacity: 0;
+    transform: translateX(-16px);
+    transition:
+      opacity 0.35s,
+      transform 0.35s;
+  }
+
+  :global(html.story) .s-explode[data-shown='1'] .parts li:nth-child(-n + 1),
+  :global(html.story) .s-explode[data-shown='2'] .parts li:nth-child(-n + 2),
+  :global(html.story) .s-explode[data-shown='3'] .parts li:nth-child(-n + 3),
+  :global(html.story) .s-explode[data-shown='4'] .parts li:nth-child(-n + 4) {
+    opacity: 1;
+    transform: none;
+  }
+
+  :global(html.story) .s-explode .frame {
+    max-height: 46svh;
+    width: auto;
+    object-fit: contain;
+  }
+
+  @media (min-width: 900px) {
+    :global(html.story) .s-explode .frame {
+      max-height: calc(100% - 32px);
+    }
+  }
+
+  @media (max-width: 899px) {
+    :global(html.story) .s-explode .side,
+    :global(html.story) .s-edit .side {
+      gap: 8px;
+    }
+    :global(html.story) .parts li {
+      padding: 6px 0;
+      font-size: 15px;
+    }
+    :global(html.story) .lamp {
+      height: 200px;
+      transform: scale(0.7);
+      transform-origin: 50% 100%;
+    }
+  }
+
+  /* Where the browser drives animations by scroll, it fades the captions
+     and the parts itself, exactly with the scroll. */
+  @supports (animation-timeline: view()) {
+    :global(html.story) .s-intro-inner {
+      animation: intro-out linear both;
+      animation-timeline: view();
+      animation-range: exit 0% exit 100%;
+    }
+
+    :global(html.story) .s-turn {
+      view-timeline: --turn block;
+    }
+
+    :global(html.story) .s-explode {
+      view-timeline: --explode block;
+    }
+
+    :global(html.story) .s-turn .cap {
+      transition: none;
+      animation: cap linear both;
+      animation-timeline: --turn;
+    }
+
+    :global(html.story) .s-turn .cap:nth-child(1) {
+      animation-name: cap-first;
+      animation-range: contain 0% contain 34%;
+    }
+
+    :global(html.story) .s-turn .cap:nth-child(2) {
+      animation-range: contain 33% contain 67%;
+    }
+
+    :global(html.story) .s-turn .cap:nth-child(3) {
+      animation-name: cap-last;
+      animation-range: contain 66% contain 100%;
+    }
+
+    :global(html.story) .s-turn .frame {
+      animation: zoom-in linear both;
+      animation-timeline: --turn;
+      animation-range: contain 0% contain 30%;
+    }
+
+    :global(html.story) .parts li {
+      transition: none;
+      animation: part-in linear both;
+      animation-timeline: --explode;
+    }
+
+    :global(html.story) .parts li:nth-child(1) {
+      animation-range: contain 35% contain 50%;
+    }
+    :global(html.story) .parts li:nth-child(2) {
+      animation-range: contain 47% contain 62%;
+    }
+    :global(html.story) .parts li:nth-child(3) {
+      animation-range: contain 59% contain 74%;
+    }
+    :global(html.story) .parts li:nth-child(4) {
+      animation-range: contain 71% contain 86%;
+    }
+  }
+
+  @keyframes intro-out {
+    0% {
+      opacity: 1;
+      transform: none;
+    }
+    60%,
+    100% {
+      opacity: 0;
+      transform: scale(0.94) translateY(-40px);
+    }
+  }
+
+  @keyframes cap {
+    0% {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+    22%,
+    78% {
+      opacity: 1;
+      transform: none;
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-18px);
+    }
+  }
+
+  @keyframes cap-first {
+    0%,
+    78% {
+      opacity: 1;
+      transform: none;
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-18px);
+    }
+  }
+
+  @keyframes cap-last {
+    0% {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+    22%,
+    100% {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes zoom-in {
+    from {
+      transform: scale(0.92);
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+
+  @keyframes part-in {
+    from {
+      opacity: 0;
+      transform: translateX(-16px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+</style>
