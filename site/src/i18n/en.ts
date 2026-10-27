@@ -36,7 +36,6 @@ const en = {
   },
   ways: {
     title: 'One model, three ways in',
-    soon: 'Next release',
     code: {
       label: 'Code',
       title: 'In code',

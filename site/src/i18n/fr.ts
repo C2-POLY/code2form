@@ -38,7 +38,6 @@ const fr: Strings = {
   },
   ways: {
     title: 'Un modèle, trois façons de le faire',
-    soon: 'Prochaine version',
     code: {
       label: 'Code',
       title: 'En code',
