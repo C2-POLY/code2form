@@ -152,7 +152,10 @@ they are. Written in Rust, it renders as you type.
   agent such as Claude Code writes a model, renders it, looks at a
   picture of it and exports it, without a window; and describes a
   circuit from the library's parts, has it checked and looks at it with
-  its wires.
+  its wires. The app has its own agent too, in a chat floating over the
+  3D view (Cmd+L), which edits the open document live (see
+  [the agent in the app](docs/agent.md)). A new file can start with it:
+  describe the idea, and the agent plans the object with you.
 - **Sheet of views**: one PNG of a model from the diagonal, the front,
   the right and the top at one scale, each titled, with its size in
   millimeters (width × depth × height) and a scale bar, and on request a
@@ -170,8 +173,10 @@ to Claude Code, with `c2f` on your `PATH` (or its full path instead):
 claude mcp add code2form -- c2f mcp
 ```
 
-The agent works on files and code it renders, not in the open app. Each
-tool takes the program's text as `code` (its includes resolving from
+These tools work on files and code they render, not in the open app;
+`c2f mcp --studio` adds the open app's live tools (see
+[below](#the-agent-in-the-app)), and holds all its tools to the app's
+settings (Settings › Agent), in the folder it is started in. Each tool takes the program's text as `code` (its includes resolving from
 `working_dir`, by default the server's current directory) or a file as
 `path` (resolving from its folder), and, but for `parameters`, customizer
 values as `parameters`, such as `{"width": 30, "label": "A"}`.
@@ -227,6 +232,32 @@ The picture comes from a small software renderer in `c2f-geom`, needing
 no screen or GPU: the app's colors, lighting and framing, with outlines
 and creases drawn darker. A 2D model shows as the 1 mm slab the app
 draws, best seen from `top`.
+
+### The agent in the app
+
+The chat with the agent (the speech bubble in the top bar, or Cmd+L)
+floats over the 3D view, at its bottom left, the view shown alone while
+it is open and your layout coming back when it closes. It grows with the
+conversation up to the view's height, folds to its message field, and
+shows each edit as a compact diff card that opens the code at its line.
+It runs on your own Claude Code or an Anthropic API key (Settings ›
+Agent). It reads
+the open document, unsaved edits included, and edits it in place, each
+edit one undo step, Cmd+Alt+Z undoing a whole answer; in a circuit it
+places parts and wires them, and the wiring checks refuse a short before
+it is made. Settings keep it to the file's folder, can ask you before
+each change, and turn off writing, exporting and saving parts.
+
+The same live tools reach an agent started elsewhere, such as Claude
+Code in a terminal, while the app is open (macOS and Linux):
+
+```sh
+claude mcp add code2form -- c2f mcp --studio
+```
+
+See [the agent in the app](docs/agent.md): the engines, a walk-through on
+the night light, the review of a change, the guard rails and the live
+tools.
 
 ## Game engines (glTF)
 
@@ -472,6 +503,7 @@ to GitHub Pages from `main` and on each release.
 | `crates/eval` (`c2f-eval`) | Evaluation to a CSG tree, built-in functions and modules, parameters |
 | `crates/geom` (`c2f-geom`) | Meshes, booleans, extrusions, text, imports, STL, 3MF, glTF, OBJ, STEP, URDF, JSON, SVG and DXF exports, PNG pictures |
 | `crates/circuit` (`c2f-circuit`) | Circuit files: parts placed in space and the wires between their pins |
+| `crates/agent` (`c2f-agent`) | The agent's tools and prompts, the MCP server, the app agent's engines and the link to the open studio |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |
 
