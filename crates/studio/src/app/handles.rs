@@ -767,6 +767,26 @@ impl StudioApp {
     }
 }
 
+/// What the end-to-end tests see of the handles.
+#[cfg(test)]
+impl StudioApp {
+    /// The handles on screen, with their marks.
+    pub(super) fn handle_marks(&self, ctx: &egui::Context) -> Vec<(Handle, Mark)> {
+        let (mut state, settings) = self.handles_load(ctx);
+        let Some((key, range)) = self.handles_target() else { return Vec::new() };
+        let pose = state.pose(&self.doc.text, &range, &self.doc.viewer, key);
+        let rect = self.view_rect;
+        gizmo_for(&self.doc.viewer, rect, &pose, &settings)
+            .map(|g| g.marks(|p| self.doc.viewer.to_screen(rect, p)))
+            .unwrap_or_default()
+    }
+
+    /// Why the handle pressed refused to move, while it is held.
+    pub(super) fn handle_refused(&self, ctx: &egui::Context) -> Option<String> {
+        self.handles_load(ctx).0.refused
+    }
+}
+
 /// The bar at the top right of the view: the frame of the handles and the
 /// snapping steps. Returns where it is.
 fn settings_bar(ui: &mut egui::Ui, rect: Rect, settings: &mut Settings) -> Rect {

@@ -1,0 +1,26 @@
+name: Main history
+
+# On 2026-10-22, main was force-pushed back three merges, and the work of
+# #26, #27 and #28 was lost until #41 found it. A rewrite of main fails
+# this run at once, so that what it dropped is looked for that day.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  not-rewritten:
+    name: main is not rewritten
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail on a force push
+        if: github.event.forced
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          echo "::error::main was force-pushed from $BEFORE to $AFTER: the commits of $BEFORE that $AFTER does not have are no longer on main."
+          exit 1

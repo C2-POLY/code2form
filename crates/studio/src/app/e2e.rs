@@ -8,6 +8,7 @@ use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, Rect};
 use glam::Vec3;
 
 use super::{Stores, StudioApp};
+use crate::gizmo::{Handle, Mark};
 use crate::recent::RecentFiles;
 use crate::settings::{Settings, Workspace};
 
@@ -150,6 +151,56 @@ impl Window {
         let lowest = self.named.iter().filter(is).max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()));
         let at = lowest.unwrap_or_else(|| panic!("no control named {label:?}")).rect.center();
         self.click_at(at, PointerButton::Primary, Modifiers::NONE);
+    }
+
+    /// The primary button pressed at `at`, in two frames.
+    fn press(&mut self, at: Pos2) {
+        let press = Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+        self.frame(vec![Event::PointerMoved(at)], Modifiers::NONE);
+        self.frame(vec![press], Modifiers::NONE);
+    }
+
+    /// The pointer, button held, taken to `to` in a few frames.
+    fn move_to(&mut self, to: Pos2) {
+        let from = self.ctx.input(|i| i.pointer.latest_pos()).expect("the pointer in the window");
+        for step in 1..=8 {
+            let at = from + (to - from) * (step as f32 / 8.0);
+            self.frame(vec![Event::PointerMoved(at)], Modifiers::NONE);
+        }
+    }
+
+    /// The primary button released where the pointer is.
+    fn release(&mut self) {
+        let at = self.ctx.input(|i| i.pointer.latest_pos()).expect("the pointer in the window");
+        let release = Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE };
+        self.frame(vec![release], Modifiers::NONE);
+        self.frame(Vec::new(), Modifiers::NONE);
+    }
+
+    /// The middle of the move arrow along `axis`, and the way it points.
+    fn arrow(&self, axis: usize) -> (Pos2, egui::Vec2) {
+        let marks = self.app.handle_marks(&self.ctx);
+        marks
+            .into_iter()
+            .find_map(|(handle, mark)| match (handle, mark) {
+                (Handle::Move(k), Mark::Arrow { from, tip, .. }) if k == axis => {
+                    Some((from + (tip - from) * 0.5, (tip - from).normalized()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no move arrow along axis {axis} on the selection"))
+    }
+
+    /// A point of the turn ring around `axis`, between the other two axes.
+    fn ring(&self, axis: usize) -> Pos2 {
+        let marks = self.app.handle_marks(&self.ctx);
+        marks
+            .into_iter()
+            .find_map(|(handle, mark)| match (handle, mark) {
+                (Handle::Turn(k), Mark::Ring(points)) if k == axis => Some(points[points.len() / 8]),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no turn ring around axis {axis} on the selection"))
     }
 
     fn has(&self, label: &str) -> bool {
@@ -356,4 +407,94 @@ fn a_new_file_with_the_code_hidden() {
     w.frame(Vec::new(), Modifiers::NONE);
     assert_eq!(w.app.shelf.len(), 3);
     assert_eq!(w.ctx.memory(|m| m.focused()), Some(w.app.doc.editor.id()));
+}
+
+/// The number after `prefix` in `code`.
+fn number_after(code: &str, prefix: &str) -> f64 {
+    let at = code.find(prefix).unwrap_or_else(|| panic!("no {prefix:?} in:\n{code}")) + prefix.len();
+    let end = code[at..].find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).map_or(code.len(), |e| at + e);
+    code[at..end].parse().unwrap_or_else(|_| panic!("no number after {prefix:?} in:\n{code}"))
+}
+
+#[test]
+fn an_arrow_dragged_up_moves_the_object_in_one_undo_step() {
+    let mut w = Window::new(TWO_CUBES, Workspace::Model);
+    let top = w.screen([5.0, 5.0, 10.0]);
+    w.click_at(top, PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(w.selected(), ["cube(10);"]);
+    // The inspector slides open on a selection, and the view with it.
+    w.settle();
+    let (at, up) = w.arrow(2);
+    w.press(at);
+    w.move_to(at + up * 60.0);
+    w.release();
+    let code = w.app.doc.text.clone();
+    assert!(number_after(&code, "translate([0, 0, ") > 0.0, "moved up:\n{code}");
+    assert!(code.ends_with("\ntranslate([20, 0, 0]) cube(10);\n"), "the other cube stays:\n{code}");
+    // Once rendered again, the object moved is still the one selected.
+    w.rendered();
+    assert_eq!(w.selected().len(), 1, "still selected");
+    assert!(code.lines().next().unwrap().ends_with(w.selected()[0]), "the cube moved, not another");
+    w.frame(vec![key(Key::Z, Modifiers::COMMAND)], Modifiers::COMMAND);
+    assert_eq!(w.app.doc.text, TWO_CUBES, "one undo step");
+}
+
+#[test]
+fn an_arrow_moves_a_part_placed_by_a_parameter() {
+    // As the night light places its dome: a part, at a computed height.
+    let code = "h = 30;\ntranslate([0, 0, h]) part(\"Dome\") color(\"white\") sphere(10);\ncube(5);\n";
+    let mut w = Window::new(code, Workspace::Model);
+    let dome = w.screen([0.0, 0.0, 30.0]);
+    w.click_at(dome, PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(w.selected(), ["sphere(10);"]);
+    w.settle();
+    let (at, up) = w.arrow(2);
+    w.press(at);
+    w.move_to(at + up * 60.0);
+    assert_eq!(w.app.handle_refused(&w.ctx), None, "the arrow takes a part placed by a parameter");
+    w.release();
+    let code = w.app.doc.text.clone();
+    assert!(code.starts_with("h = 30;\n") && code.ends_with("\ncube(5);\n"), "the rest is kept:\n{code}");
+    assert!(number_after(&code, "translate([0, 0, h + ") > 0.0, "moved up, still following h:\n{code}");
+    assert!(code.contains(") part(\"Dome\") color(\"white\") sphere(10);"), "{code}");
+    w.rendered();
+}
+
+#[test]
+fn an_arrow_moves_an_object_inside_a_part() {
+    let code = "part(\"Base\") {\n    cube(10);\n    translate([20, 0, 0]) cube(10);\n}\n";
+    let mut w = Window::new(code, Workspace::Model);
+    let top = w.screen([25.0, 5.0, 10.0]);
+    w.click_at(top, PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(w.selected(), ["cube(10);"]);
+    w.settle();
+    let (at, up) = w.arrow(2);
+    w.press(at);
+    w.move_to(at + up * 60.0);
+    assert_eq!(w.app.handle_refused(&w.ctx), None, "the arrow takes an object in a part's braces");
+    w.release();
+    let code = w.app.doc.text.clone();
+    assert!(number_after(&code, "translate([20, 0, ") > 0.0, "the second cube moved up:\n{code}");
+    assert!(code.contains("    cube(10);\n    translate([20, 0, "), "the first cube stays:\n{code}");
+    w.rendered();
+}
+
+#[test]
+fn a_refused_turn_says_why_and_selects_nothing_else() {
+    let code = "w = 5;\ntranslate([w, 0, 0]) cube(10);\ntranslate([0, -30, 0]) cube(10);\n";
+    let mut w = Window::new(code, Workspace::Model);
+    let top = w.screen([10.0, 5.0, 10.0]);
+    w.click_at(top, PointerButton::Primary, Modifiers::NONE);
+    let selected = w.app.selected_ranges();
+    assert_eq!(w.selected(), ["cube(10);"]);
+    assert!(selected.as_ref().unwrap()[0].start < code.find('\n').unwrap() + 30, "the first cube");
+    w.settle();
+    let at = w.ring(2);
+    w.press(at);
+    w.move_to(at + egui::vec2(40.0, 0.0));
+    let why = w.app.handle_refused(&w.ctx).expect("the turn refused");
+    assert!(why.contains("computed"), "the reason: {why}");
+    w.release();
+    assert_eq!(w.app.doc.text, code, "nothing written");
+    assert_eq!(w.app.selected_ranges(), selected, "the press picked nothing under the ring");
 }

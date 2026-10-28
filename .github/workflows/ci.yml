@@ -60,3 +60,17 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --no-fail-fast
+
+      # A test deleted with the feature it covers fails nothing: the
+      # features the app must keep have their tests named in a list.
+      - name: The required tests are still there
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo test --workspace --quiet -- --list 2>/dev/null | sed -n 's/: test$//p' | LC_ALL=C sort -u > "$RUNNER_TEMP/tests.txt"
+          missing=$(grep -v -e '^#' -e '^$' .github/required-tests.txt | LC_ALL=C sort -u | LC_ALL=C comm -23 - "$RUNNER_TEMP/tests.txt")
+          if [ -n "$missing" ]; then
+            echo "::error::Tests named in .github/required-tests.txt are gone:"
+            echo "$missing"
+            exit 1
+          fi
