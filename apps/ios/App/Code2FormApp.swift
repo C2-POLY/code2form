@@ -12,6 +12,9 @@ struct Code2FormApp: App {
         DocumentGroup(viewing: Design.self) { file in
             DesignView(source: file.document.source, url: file.fileURL)
         }
+        DocumentGroupLaunchScene("Code2Form") {
+            ScanButton()
+        }
     }
 }
 
