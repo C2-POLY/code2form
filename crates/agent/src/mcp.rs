@@ -57,7 +57,14 @@ approves, written with `save_brief` and read with `read_brief`), \
 `add_electronics` (`electrify` makes the approved design ready for its \
 circuit). To turn a mesh into \
 a design, `section` cuts it with a plane: its outlines give the sizes to \
-write it again with.";
+write it again with. A scan from the Code2Form app on iPhone (an STL \
+named `scan-<date>.stl`, its header `Code2Form scan, millimetres`) is in \
+millimetres with Z up, centred and standing on the XY plane, its open \
+underside filled on import; it is true to a millimetre or two, and loses \
+glossy, black or see-through surfaces (a watch's screen): show it with \
+`%import()`, a reference left out of the model, measure it with \
+`section`, take the user's caliper sizes over it, and leave clearance \
+where a part touches it.";
 
 /// The picture's size when the agent gives none, and the largest it can ask.
 const IMAGE_SIZE: (u64, u64) = (800, 600);
