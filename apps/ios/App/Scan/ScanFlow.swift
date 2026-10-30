@@ -3,7 +3,6 @@
 
 import RealityKit
 import SwiftUI
-import UIKit
 
 import Code2FormCore
 
@@ -12,7 +11,7 @@ struct ScanButton: View {
     var body: some View {
         if ObjectCaptureSession.isSupported {
             Button {
-                ScanFlow.present()
+                Cover.present { close in ScanFlow(dismiss: close) }
             } label: {
                 Label("Scan an object", systemImage: "camera.metering.matrix")
             }
@@ -24,19 +23,6 @@ struct ScanButton: View {
 struct ScanFlow: View {
     /// Closes the scan.
     let dismiss: () -> Void
-
-    /// Shows a scan over the whole app. UIKit presents it: the document
-    /// launch screen, where its button lives, presents no SwiftUI cover.
-    @MainActor
-    static func present() {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard var top = scenes.flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController else { return }
-        while let shown = top.presentedViewController { top = shown }
-        let host = UIHostingController<ScanFlow?>(rootView: nil)
-        host.rootView = ScanFlow { [weak host] in host?.dismiss(animated: true) }
-        host.modalPresentationStyle = .fullScreen
-        top.present(host, animated: true)
-    }
 
     private enum Phase {
         case capturing
