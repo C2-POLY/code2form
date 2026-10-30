@@ -1,0 +1,99 @@
+# The iPad app, described for XcodeGen: `xcodegen` in this folder writes
+# Code2Form.xcodeproj, which is not committed. The engine comes from the
+# Code2FormCore package; build it first with scripts/ios-xcframework.sh.
+name: Code2Form
+options:
+  bundleIdPrefix: com.c2poly
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    # ET Technology Consulting signs the builds for devices.
+    DEVELOPMENT_TEAM: 76MFL7Z625
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  Code2FormCore:
+    path: Code2FormCore
+targets:
+  Code2Form:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      # The fonts and libraries the engine reads, as folders in the bundle.
+      - path: ../../fonts
+        type: folder
+        buildPhase: resources
+      - path: ../../library
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: Code2FormCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.c2poly.code2form
+        # iPad only, for now.
+        TARGETED_DEVICE_FAMILY: "2"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Code2Form
+        UILaunchScreen: {}
+        UIRequiresFullScreen: false
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportsDocumentBrowser: true
+        LSSupportsOpeningDocumentsInPlace: true
+        # The app's folder in Files (On My iPad), which the Mac's Finder
+        # fills over the cable.
+        UIFileSharingEnabled: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Code2Form design
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.c2poly.c2f]
+          - CFBundleTypeName: OpenSCAD design
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [org.openscad.scad]
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.c2poly.c2f
+            UTTypeDescription: Code2Form design
+            UTTypeConformsTo: [public.plain-text, public.source-code]
+            UTTypeTagSpecification:
+              public.filename-extension: [c2f]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.openscad.scad
+            UTTypeDescription: OpenSCAD design
+            UTTypeConformsTo: [public.plain-text, public.source-code]
+            UTTypeTagSpecification:
+              public.filename-extension: [scad]
+  # The engine's tests, run inside the app: a device runs a package's
+  # tests only in a host app.
+  Code2FormTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Code2FormCore/Tests/Code2FormCoreTests
+    dependencies:
+      - target: Code2Form
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.c2poly.code2form.tests
+        TARGETED_DEVICE_FAMILY: "2"
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Code2Form:
+    build:
+      targets:
+        Code2Form: all
+    test:
+      targets:
+        - Code2FormTests
