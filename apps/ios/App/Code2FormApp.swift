@@ -14,6 +14,7 @@ struct Code2FormApp: App {
         }
         DocumentGroupLaunchScene("Code2Form") {
             ScanButton()
+            AcknowledgementsButton()
         }
     }
 }

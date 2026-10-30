@@ -105,6 +105,9 @@ pub enum Layout {
     /// The tile on macOS's icon grid: 824 of 1024 with a margin around it,
     /// as the Dock and the Finder expect.
     MacIcon,
+    /// The tile square and opaque to the edges, without its top rim: iOS
+    /// rounds an app's icon itself and refuses one that is see-through.
+    IosIcon,
 }
 
 /// An RGBA picture, its colors premultiplied by alpha.
@@ -151,9 +154,10 @@ pub fn render(tint: Tint, size: usize, layout: Layout) -> Image {
     let colors = [palette.outer, palette.inner];
     // Design units per pixel, and where pixel (0, 0) falls in the design.
     let (scale, origin) = match layout {
-        Layout::Full => (1024.0 / size as f32, 0.0),
+        Layout::Full | Layout::IosIcon => (1024.0 / size as f32, 0.0),
         Layout::MacIcon => (1024.0 * 1024.0 / 824.0 / size as f32, -100.0 * 1024.0 / 824.0),
     };
+    let (tile_radius, rim_alpha) = if layout == Layout::IosIcon { (0.0, 0.0) } else { (TILE_RADIUS, RIM.0) };
     let mut premultiplied = vec![0u8; size * size * 4];
     let mut layer = [0.0f32; 4];
     for y in 0..size {
@@ -161,12 +165,12 @@ pub fn render(tint: Tint, size: usize, layout: Layout) -> Image {
             let p = (origin + (x as f32 + 0.5) * scale, origin + (y as f32 + 0.5) * scale);
             // Premultiplied color and alpha, built up shape over shape.
             layer.fill(0.0);
-            let tile_distance = rounded_square(p, 1024.0, TILE_RADIUS, 0.0);
+            let tile_distance = rounded_square(p, 1024.0, tile_radius, 0.0);
             let tile = coverage(tile_distance, scale);
             if tile > 0.0 {
                 let (light, dark) = LIGHT[0];
                 over(&mut layer, lit(palette.tile, light, dark, p.1 / 1024.0), tile);
-                let rim = RIM.0 * top_rim(p, (1024.0, TILE_RADIUS, 0.0), tile_distance, RIM.1, scale);
+                let rim = rim_alpha * top_rim(p, (1024.0, tile_radius, 0.0), tile_distance, RIM.1, scale);
                 over(&mut layer, [255; 3], rim);
                 for ((&square, color), &(light, dark)) in SQUARES.iter().zip(colors).zip(&LIGHT[1..]) {
                     let (edge, radius, turn) = square;
@@ -263,6 +267,16 @@ mod tests {
         }
         assert_eq!(Tint::from_id("graphite\n"), Some(Tint::Graphite));
         assert_eq!(Tint::from_id("plaid"), None);
+    }
+
+    #[test]
+    fn draws_the_ios_icon_opaque_to_its_corners() {
+        let image = render(Tint::default(), 64, Layout::IosIcon);
+        assert!(image.premultiplied.chunks_exact(4).all(|p| p[3] == 255));
+        // The corner shows the tile, not the rounded corner's background.
+        let palette = Tint::default().palette();
+        let (light, dark) = LIGHT[0];
+        assert_eq!(pixel(&image, 0, 0)[..3], lit(palette.tile, light, dark, 8.0 / 1024.0));
     }
 
     #[test]

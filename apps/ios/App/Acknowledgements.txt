@@ -1,0 +1,140 @@
+Code2Form is free software under the MIT or Apache 2.0 licence, at its author's choice. Its source: https://github.com/C2-POLY/code2form
+
+It is built with these libraries, each under its own licence:
+
+adler2 2.0.1: 0BSD OR MIT OR Apache-2.0
+  https://github.com/oyvindln/adler2
+anyhow 1.0.104: MIT OR Apache-2.0
+  https://github.com/dtolnay/anyhow
+bitflags 2.13.2: MIT OR Apache-2.0
+  https://github.com/bitflags/bitflags
+bytemuck 1.25.2: Zlib OR Apache-2.0 OR MIT
+  https://github.com/Lokathor/bytemuck
+bytemuck_derive 1.12.1: Zlib OR Apache-2.0 OR MIT
+  https://github.com/Lokathor/bytemuck
+bytes 1.12.1: MIT
+  https://github.com/tokio-rs/bytes
+camino 1.2.6: MIT OR Apache-2.0
+  https://github.com/camino-rs/camino
+cfg-if 1.0.5: MIT OR Apache-2.0
+  https://github.com/rust-lang/cfg-if
+clipper2-rust 1.2.0: BSL-1.0
+  https://github.com/larsbrubaker/clipper2-rust
+core_maths 0.1.1: MIT
+  https://github.com/robertbastian/core_maths
+dashu-base 0.5.1: MIT OR Apache-2.0
+  https://github.com/cmpute/dashu
+dashu-int 0.5.1: MIT OR Apache-2.0
+  https://github.com/cmpute/dashu
+dashu-ratio 0.5.1: MIT OR Apache-2.0
+  https://github.com/cmpute/dashu
+equivalent 1.0.3: Apache-2.0 OR MIT
+  https://github.com/indexmap-rs/equivalent
+errno 0.3.14: MIT OR Apache-2.0
+  https://github.com/lambda-fairy/rust-errno
+fastrand 2.5.0: Apache-2.0 OR MIT
+  https://github.com/smol-rs/fastrand
+foldhash 0.2.0: Zlib
+  https://github.com/orlp/foldhash
+fs-err 3.3.2: MIT OR Apache-2.0
+  https://github.com/andrewhickman/fs-err
+getrandom 0.4.3: MIT OR Apache-2.0
+  https://github.com/rust-random/getrandom
+hashbrown 0.17.1: MIT OR Apache-2.0
+  https://github.com/rust-lang/hashbrown
+heck 0.5.0: MIT OR Apache-2.0
+  https://github.com/withoutboats/heck
+indexmap 2.14.2: Apache-2.0 OR MIT
+  https://github.com/indexmap-rs/indexmap
+itoa 1.0.18: MIT OR Apache-2.0
+  https://github.com/dtolnay/itoa
+libc 0.2.191: MIT OR Apache-2.0
+  https://github.com/rust-lang/libc
+libm 0.2.16: MIT
+  https://github.com/rust-lang/compiler-builtins
+log 0.4.34: MIT OR Apache-2.0
+  https://github.com/rust-lang/log
+manifold-rust 0.18.0: Apache-2.0
+  https://github.com/larsbrubaker/manifold-rust
+memchr 2.8.3: Unlicense OR MIT
+  https://github.com/BurntSushi/memchr
+miniz_oxide 0.8.9: MIT OR Zlib OR Apache-2.0
+  https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
+num-modular 0.6.5: Apache-2.0
+  https://github.com/cmpute/num-modular
+num-traits 0.2.19: MIT OR Apache-2.0
+  https://github.com/rust-num/num-traits
+once_cell 1.21.4: MIT OR Apache-2.0
+  https://github.com/matklad/once_cell
+proc-macro2 1.0.107: MIT OR Apache-2.0
+  https://github.com/dtolnay/proc-macro2
+quote 1.0.47: MIT OR Apache-2.0
+  https://github.com/dtolnay/quote
+rustc-hash 2.1.3: Apache-2.0 OR MIT
+  https://github.com/rust-lang/rustc-hash
+rustix 1.1.5: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  https://github.com/bytecodealliance/rustix
+rustversion 1.0.23: MIT OR Apache-2.0
+  https://github.com/dtolnay/rustversion
+rustybuzz 0.20.1: MIT
+  https://github.com/harfbuzz/rustybuzz
+serde 1.0.229: MIT OR Apache-2.0
+  https://github.com/serde-rs/serde
+serde_core 1.0.229: MIT OR Apache-2.0
+  https://github.com/serde-rs/serde
+serde_derive 1.0.229: MIT OR Apache-2.0
+  https://github.com/serde-rs/serde
+serde_json 1.0.154: MIT OR Apache-2.0
+  https://github.com/serde-rs/json
+serde_spanned 1.1.2: MIT OR Apache-2.0
+  https://github.com/toml-rs/toml
+simd-adler32 0.3.10: MIT
+  https://github.com/mcountryman/simd-adler32
+siphasher 1.0.4: MIT OR Apache-2.0
+  https://github.com/jedisct1/rust-siphash
+smallvec 1.16.3: MIT OR Apache-2.0
+  https://github.com/servo/rust-smallvec
+static_assertions 1.1.0: MIT OR Apache-2.0
+  https://github.com/nvzqz/static-assertions-rs
+syn 2.0.119: MIT OR Apache-2.0
+  https://github.com/dtolnay/syn
+syn 3.0.9: MIT OR Apache-2.0
+  https://github.com/dtolnay/syn
+tempfile 3.27.0: MIT OR Apache-2.0
+  https://github.com/Stebalien/tempfile
+toml 1.1.8+spec-1.1.0: MIT OR Apache-2.0
+  https://github.com/toml-rs/toml
+toml_datetime 1.1.2+spec-1.1.0: MIT OR Apache-2.0
+  https://github.com/toml-rs/toml
+toml_parser 1.1.5+spec-1.1.0: MIT OR Apache-2.0
+  https://github.com/toml-rs/toml
+toml_writer 1.1.3+spec-1.1.0: MIT OR Apache-2.0
+  https://github.com/toml-rs/toml
+ttf-parser 0.25.1: MIT OR Apache-2.0
+  https://github.com/harfbuzz/ttf-parser
+unicode-bidi-mirroring 0.4.0: MIT/Apache-2.0
+  https://github.com/RazrFalcon/unicode-bidi-mirroring
+unicode-ccc 0.4.0: MIT/Apache-2.0
+  https://github.com/RazrFalcon/unicode-ccc
+unicode-ident 1.0.27: (MIT OR Apache-2.0) AND Unicode-3.0
+  https://github.com/dtolnay/unicode-ident
+unicode-properties 0.1.4: MIT/Apache-2.0
+  https://github.com/unicode-rs/unicode-properties
+unicode-script 0.5.8: MIT OR Apache-2.0
+  https://github.com/unicode-rs/unicode-script
+uniffi 0.32.2: MPL-2.0
+  https://github.com/mozilla/uniffi-rs
+uniffi_core 0.32.2: MPL-2.0
+  https://github.com/mozilla/uniffi-rs
+uniffi_internal_macros 0.32.2: MPL-2.0
+  https://github.com/mozilla/uniffi-rs
+uniffi_macros 0.32.2: MPL-2.0
+  https://github.com/mozilla/uniffi-rs
+uniffi_meta 0.32.2: MPL-2.0
+  https://github.com/mozilla/uniffi-rs
+uniffi_pipeline 0.32.2: MPL-2.0
+  https://github.com/mozilla/uniffi-rs
+winnow 1.0.4: MIT
+  https://github.com/winnow-rs/winnow
+zmij 1.0.23: MIT
+  https://github.com/dtolnay/zmij

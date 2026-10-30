@@ -40,10 +40,18 @@ targets:
         # iPhone and iPad.
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
+        # Drawn by scripts/ios-icon.sh.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Code2Form
+        # The workspace's version, and a build number App Store Connect
+        # needs to grow with each upload.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The app uses no encryption of its own: no export papers to file.
+        ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: Code2Form uses the camera to scan objects into meshes you can measure in the studio.
         UILaunchScreen: {}
         UIRequiresFullScreen: false
