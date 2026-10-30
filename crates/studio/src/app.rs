@@ -2012,11 +2012,23 @@ impl StudioApp {
             dialog = dialog.set_directory(dir);
         }
         let Some(file) = dialog.pick_file() else { return };
-        let reference = insert::reference(&file, self.doc.path.as_deref());
+        self.insert_mesh(ctx, &file, false);
+    }
+
+    /// Imports `file` in the design, on the cursor's line: as a
+    /// `background`, a reference drawn see-through and left out of the
+    /// model, to measure and build around, as a scan is.
+    fn insert_mesh(&mut self, ctx: &egui::Context, file: &Path, background: bool) {
+        let reference = insert::reference(file, self.doc.path.as_deref());
         let cursor = self.doc.editor.cursor_char().unwrap_or_else(|| self.doc.text.chars().count());
-        let (text, cursor) = insert::insert_mesh(&self.doc.text, cursor, &reference);
+        let (text, cursor) = insert::insert_mesh(&self.doc.text, cursor, &reference, background);
         self.doc.editor.replace_text(ctx, &mut self.doc.text, text, cursor);
-        self.doc.console.log(Level::Info, tr!("Imported {}", "Importé : {}", reference));
+        let message = if background {
+            tr!("Imported {} as a reference: see-through, left out of the model", "Importé comme référence : {}, transparent, hors du modèle", reference)
+        } else {
+            tr!("Imported {}", "Importé : {}", reference)
+        };
+        self.doc.console.log(Level::Info, message);
         self.render_now();
     }
 
@@ -2517,9 +2529,15 @@ impl StudioApp {
             }
         }
 
+        // A mesh dropped on a design goes in as a reference to build
+        // around, as a scan does; on an empty one, it opens as a design.
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         for path in dropped {
-            self.open(ctx, path);
+            if insert::is_mesh(&path) && path.is_file() && !self.doc.is_blank() && !self.doc.is_circuit() {
+                self.insert_mesh(ctx, &absolute(&path), true);
+            } else {
+                self.open(ctx, path);
+            }
         }
     }
 
@@ -3443,6 +3461,17 @@ impl StudioApp {
                             if ui.add(slider).on_hover_text(hint).changed() {
                                 viewer.set_section_at(value);
                             }
+                        }
+                        // The cut's size, scans marked `%` included: what
+                        // a mesh is measured with before it is drawn again.
+                        if let Some([w, h]) = viewer.section_outline().and_then(|o| o.size()) {
+                            let [u, v] = crate::outline::plane_axes(section.axis).map(|a| renderer::Section::AXES[a]);
+                            ui.add_space(4.0);
+                            let hint = tr!(
+                                "The cut's outline: {w:.1} mm along {u}, {h:.1} mm along {v}",
+                                "Le contour de la coupe : {w:.1} mm selon {u}, {h:.1} mm selon {v}"
+                            );
+                            ui.label(egui::RichText::new(format!("{w:.1} × {h:.1} mm")).monospace()).on_hover_text(hint);
                         }
                         if circuit && viewer.has_enclosure() {
                             ui.add_space(4.0);
