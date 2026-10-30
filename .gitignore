@@ -2,3 +2,8 @@ target/
 .claude/
 .omc/
 demo/
+# Built by scripts/ios-xcframework.sh.
+apps/ios/Code2FormCore/Code2FormCore.xcframework/
+apps/ios/Code2FormCore/Sources/Code2FormCore/Code2FormCore.swift
+apps/ios/Code2FormCore/.build/
+apps/ios/Code2FormCore/.swiftpm/

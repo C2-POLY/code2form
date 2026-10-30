@@ -1,0 +1,30 @@
+[package]
+name = "c2f-mobile"
+description = "Code2Form for the iPad app: the engine, called from Swift through UniFFI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "c2f_mobile"
+# The static library goes into the XCFramework; the host's dynamic one is
+# where uniffi-bindgen reads the Swift bindings from.
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+# The bindings generator, built for the host only by
+# scripts/ios-xcframework.sh: kept out of the library built for iOS. It
+# reads uniffi.toml through cargo metadata, which needs Rust 1.86.
+bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
+
+[dependencies]
+c2f-lang.workspace = true
+c2f-eval.workspace = true
+c2f-geom.workspace = true
+uniffi = { version = "0.32", default-features = false }
