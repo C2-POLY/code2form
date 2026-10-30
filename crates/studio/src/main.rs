@@ -27,6 +27,7 @@ mod icons;
 mod insert;
 mod inspect;
 mod mount;
+mod outline;
 mod open_events;
 mod part_edit;
 mod pause_edit;
