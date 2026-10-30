@@ -22,7 +22,9 @@ targets:
     type: application
     platform: iOS
     sources:
-      - App
+      - path: App
+        # Tool state that may land beside the sources.
+        excludes: [".omc/**", "**/.omc/**"]
       # The fonts and libraries the engine reads, as folders in the bundle.
       - path: ../../fonts
         type: folder
@@ -42,6 +44,7 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Code2Form
+        NSCameraUsageDescription: Code2Form uses the camera to scan objects into meshes you can measure in the studio.
         UILaunchScreen: {}
         UIRequiresFullScreen: false
         UISupportedInterfaceOrientations:
