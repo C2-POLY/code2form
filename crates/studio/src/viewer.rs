@@ -1,6 +1,6 @@
 //! The 3D view: camera controls, the OpenGL paint callback and the
 //! overlays drawn on top (hints, status badges, the axis gizmo, the
-//! labels of the print's pauses, the layer slider).
+//! labels of the print's pauses, the layer slider, the section's outline).
 
 use std::sync::{Arc, Mutex};
 
@@ -13,6 +13,7 @@ use glam::{Mat4, Vec2 as GVec2, Vec3, Vec4};
 
 use crate::camera::Camera;
 use crate::i18n::tr;
+use crate::outline::{self, Outline};
 use crate::pause_edit;
 use crate::pick::Ray;
 use crate::select::{Picking, Statement};
@@ -129,6 +130,13 @@ pub struct Viewer {
     pub section_view: bool,
     section: Section,
     section_bounds: Option<(Vec3, Vec3)>,
+    /// A design's triangles a section outlines: the model's and those of
+    /// the parts marked `%`, such as a scan imported to measure. Empty
+    /// for a circuit or a 2D model.
+    section_soup: Arc<Vec<[f32; 3]>>,
+    /// The outline of the section last asked for, kept until the cut or
+    /// the scene changes.
+    section_outline: Option<(Section, Outline)>,
     /// The color each part of a circuit shows most in.
     part_colors: Vec<[f32; 4]>,
     /// A double-click frames the view; the app turns it off while the
@@ -288,6 +296,8 @@ impl Viewer {
             section_view: false,
             section: Section { axis: 2, at: f32::NAN },
             section_bounds: None,
+            section_soup: Arc::default(),
+            section_outline: None,
             part_colors: Vec::new(),
             frame_on_double_click: true,
             selection_card: true,
@@ -369,6 +379,12 @@ impl Viewer {
         } else {
             points_bounds(scene.solid.positions.get(self.enclosure.clone()).unwrap_or_default())
         };
+        self.section_soup = Arc::new(if scene.is_2d || !scene.parts.is_empty() {
+            Vec::new()
+        } else {
+            [&scene.solid.positions, &scene.backgrounds.positions].into_iter().flatten().copied().collect()
+        });
+        self.section_outline = None;
         // A cut that misses the new model starts again from its middle.
         let range = self.section_range(self.section.axis);
         if range.is_some_and(|(lo, hi)| !(lo..=hi).contains(&self.section.at)) {
@@ -744,6 +760,17 @@ impl Viewer {
         (self.section_view && self.can_section()).then_some(self.section)
     }
 
+    /// Where the section shown crosses a design's model and the parts
+    /// marked `%`, with its size: `None` when no section is shown, the
+    /// parts are drawn apart, or it is a circuit's.
+    pub fn section_outline(&mut self) -> Option<&Outline> {
+        let section = self.shown_section().filter(|_| !self.section_soup.is_empty() && self.explode == 0.0)?;
+        if self.section_outline.as_ref().is_none_or(|(cut, _)| *cut != section) {
+            self.section_outline = Some((section, outline::outline(&self.section_soup, section.axis, section.at)));
+        }
+        self.section_outline.as_ref().map(|(_, outline)| outline)
+    }
+
     /// From where to where along `axis` a section cuts through what it
     /// cuts.
     pub fn section_range(&self, axis: usize) -> Option<(f32, f32)> {
@@ -1069,6 +1096,7 @@ impl Viewer {
         }
 
         let painter = ui.painter_at(rect);
+        self.paint_section_outline(&painter, rect, projection * view);
         if self.show_pauses {
             self.paint_pause_labels(&painter, rect, projection * view);
         }
@@ -1152,6 +1180,26 @@ impl Viewer {
                     self.camera.point_at(ndc, self.aspect)
                 });
                 self.camera.zoom(factor, focus);
+            }
+        }
+    }
+
+    /// The section's outline, drawn over the model where the cut crosses
+    /// it, so that the edge of a `%` scan shows as clearly as the model's.
+    fn paint_section_outline(&mut self, painter: &egui::Painter, rect: Rect, view_projection: Mat4) {
+        let Some(outline) = self.section_outline() else { return };
+        let to_screen = |p: [f32; 3]| {
+            let clip = view_projection * Vec4::new(p[0], p[1], p[2], 1.0);
+            (clip.w > 1e-6).then(|| {
+                let ndc = clip.truncate() / clip.w;
+                Pos2::new(rect.left() + (ndc.x + 1.0) * 0.5 * rect.width(), rect.top() + (1.0 - ndc.y) * 0.5 * rect.height())
+            })
+        };
+        let stroke = Stroke::new(2.0, theme::palette().accent_strong);
+        for line in &outline.lines {
+            let points: Option<Vec<Pos2>> = line.iter().map(|&p| to_screen(p)).collect();
+            if let Some(points) = points.filter(|p| p.len() >= 2) {
+                painter.add(egui::Shape::line(points, stroke));
             }
         }
     }
