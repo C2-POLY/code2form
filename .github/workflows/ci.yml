@@ -94,19 +94,22 @@ jobs:
       - name: Build the XCFramework and its Swift bindings
         run: scripts/ios-xcframework.sh
 
-      - name: Test the engine from Swift on an iPad simulator
+      - name: Test the engine from Swift on iPad and iPhone simulators
         working-directory: apps/ios/Code2FormCore
-        # An iPad of the newest iOS runtime: the package needs iOS 18.
+        # A device of each kind on the newest iOS runtime: the package
+        # needs iOS 18.
         run: |
-          ipad=$(xcrun simctl list devices available --json | jq -r '
-            [.devices | to_entries[]
-              | select(.key | test("SimRuntime\\.iOS-"))
-              | (.key | capture("iOS-(?<major>[0-9]+)-(?<minor>[0-9]+)") | [(.major | tonumber), (.minor | tonumber)]) as $version
-              | select($version[0] >= 18)
-              | .value[] | select(.name | startswith("iPad")) | {version: $version, udid}]
-            | sort_by(.version) | last | .udid // empty')
-          if [ -z "$ipad" ]; then
-            echo "::error::No iPad simulator of iOS 18 or later on this runner"
-            exit 1
-          fi
-          xcodebuild test -scheme Code2FormCore -destination "platform=iOS Simulator,id=$ipad"
+          for kind in iPad iPhone; do
+            udid=$(xcrun simctl list devices available --json | jq -r --arg kind "$kind" '
+              [.devices | to_entries[]
+                | select(.key | test("SimRuntime\\.iOS-"))
+                | (.key | capture("iOS-(?<major>[0-9]+)-(?<minor>[0-9]+)") | [(.major | tonumber), (.minor | tonumber)]) as $version
+                | select($version[0] >= 18)
+                | .value[] | select(.name | startswith($kind)) | {version: $version, udid}]
+              | sort_by(.version) | last | .udid // empty')
+            if [ -z "$udid" ]; then
+              echo "::error::No $kind simulator of iOS 18 or later on this runner"
+              exit 1
+            fi
+            xcodebuild test -scheme Code2FormCore -destination "platform=iOS Simulator,id=$udid"
+          done

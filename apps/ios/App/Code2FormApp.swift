@@ -1,5 +1,5 @@
-// Code2Form on iPad: opens a design from Files and renders it with the
-// engine.
+// Code2Form on iPhone and iPad: opens a design from Files and renders it
+// with the engine.
 
 import SwiftUI
 import UniformTypeIdentifiers

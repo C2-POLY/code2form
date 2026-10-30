@@ -64,6 +64,9 @@ final class Renderer: NSObject, MTKViewDelegate, UIGestureRecognizerDelegate {
     private var camera = Camera()
     /// Framed at the next drawing, once the view has its size.
     private var needsFraming = false
+    /// The camera is as framed: no finger moved it since. Turning the
+    /// device then frames the model again for the new shape of the view.
+    private var untouched = false
 
     /// Shows a new rendering; frames it when its size changed.
     func show(_ rendering: Rendering, in view: MTKView) {
@@ -91,6 +94,7 @@ final class Renderer: NSObject, MTKViewDelegate, UIGestureRecognizerDelegate {
         guard let bounds else { return }
         let size = view.bounds.size
         camera.reset(lo: bounds.lo, hi: bounds.hi, aspect: size.height > 0 ? Float(size.width / size.height) : 1)
+        untouched = true
     }
 
     private func makePipeline(_ view: MTKView) -> MTLRenderPipelineState? {
@@ -107,6 +111,7 @@ final class Renderer: NSObject, MTKViewDelegate, UIGestureRecognizerDelegate {
     // MARK: Drawing
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        if untouched { needsFraming = true }
         view.setNeedsDisplay()
     }
 
@@ -142,6 +147,7 @@ final class Renderer: NSObject, MTKViewDelegate, UIGestureRecognizerDelegate {
         let t = gesture.translation(in: gesture.view)
         gesture.setTranslation(.zero, in: gesture.view)
         camera.orbit(SIMD2(Float(t.x), Float(t.y)))
+        untouched = false
         gesture.view?.setNeedsDisplay()
     }
 
@@ -150,6 +156,7 @@ final class Renderer: NSObject, MTKViewDelegate, UIGestureRecognizerDelegate {
         let t = gesture.translation(in: view)
         gesture.setTranslation(.zero, in: view)
         camera.pan(SIMD2(Float(t.x), Float(t.y)), height: Float(view.bounds.height))
+        untouched = false
         view.setNeedsDisplay()
     }
 
@@ -157,6 +164,7 @@ final class Renderer: NSObject, MTKViewDelegate, UIGestureRecognizerDelegate {
         guard gesture.scale > 0 else { return }
         camera.zoom(Float(1 / gesture.scale))
         gesture.scale = 1
+        untouched = false
         gesture.view?.setNeedsDisplay()
     }
 
