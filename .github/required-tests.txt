@@ -124,6 +124,11 @@ gizmo::tests::euler_angles_go_back_to_the_rotation
 gizmo::tests::local_and_world_turns_compose_on_either_side
 gizmo::tests::snapping_rounds_to_the_step
 gizmo::tests::the_pointer_picks_the_handle_it_is_on
+insert::tests::a_mesh_goes_on_the_cursors_line
+outline::tests::cuts_a_box_into_one_closed_rectangle_of_its_size
+outline::tests::follows_an_open_mesh_from_end_to_end
+outline::tests::keeps_two_separate_solids_apart
+outline::tests::reads_the_size_in_the_planes_own_axes
 select::tests::a_click_finds_the_statement_under_the_pointer
 select::tests::a_highlight_covers_every_run_of_a_statement
 select::tests::an_included_statement_is_read_only
