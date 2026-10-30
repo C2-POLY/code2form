@@ -1,0 +1,4 @@
+[bindings.swift]
+module_name = "Code2FormCore"
+ffi_module_name = "Code2FormCoreFFI"
+ffi_module_filename = "Code2FormCoreFFI"

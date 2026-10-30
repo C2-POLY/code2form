@@ -74,3 +74,39 @@ jobs:
             echo "$missing"
             exit 1
           fi
+
+  # The engine of the iPad app: crates/mobile built for iOS into its
+  # XCFramework, then called from Swift on an iPad simulator.
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Stable rather than the workspace's 1.85: uniffi-bindgen reads
+      # uniffi.toml through cargo metadata, which needs 1.86.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the XCFramework and its Swift bindings
+        run: scripts/ios-xcframework.sh
+
+      - name: Test the engine from Swift on an iPad simulator
+        working-directory: apps/ios/Code2FormCore
+        # An iPad of the newest iOS runtime: the package needs iOS 18.
+        run: |
+          ipad=$(xcrun simctl list devices available --json | jq -r '
+            [.devices | to_entries[]
+              | select(.key | test("SimRuntime\\.iOS-"))
+              | (.key | capture("iOS-(?<major>[0-9]+)-(?<minor>[0-9]+)") | [(.major | tonumber), (.minor | tonumber)]) as $version
+              | select($version[0] >= 18)
+              | .value[] | select(.name | startswith("iPad")) | {version: $version, udid}]
+            | sort_by(.version) | last | .udid // empty')
+          if [ -z "$ipad" ]; then
+            echo "::error::No iPad simulator of iOS 18 or later on this runner"
+            exit 1
+          fi
+          xcodebuild test -scheme Code2FormCore -destination "platform=iOS Simulator,id=$ipad"

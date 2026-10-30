@@ -565,6 +565,15 @@ to GitHub Pages from `main` and on each release.
 | `crates/agent` (`c2f-agent`) | The agent's tools and prompts, the MCP server, the app agent's engines and the link to the open studio |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |
+| `crates/mobile` (`c2f-mobile`) | The engine of the iPad app, called from Swift: parameters, renders, errors at their line, STL and 3MF exports |
+
+`apps/ios/Code2FormCore` is the Swift package of the iPad app's engine.
+`scripts/ios-xcframework.sh` builds it: `crates/mobile` for iOS and its
+simulator, in `Code2FormCore.xcframework`, with the Swift bindings UniFFI
+writes. It needs rustup's Rust (Homebrew's has no iOS targets) with
+`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`. Then, in
+`apps/ios/Code2FormCore`, `xcodebuild test -scheme Code2FormCore
+-destination 'platform=iOS Simulator,name=<an iPad>'` calls it from Swift.
 
 ## Tests
 

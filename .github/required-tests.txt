@@ -136,3 +136,15 @@ select::tests::picking_is_fast_on_half_a_million_triangles
 select::tests::the_cursor_finds_the_innermost_statement
 select::tests::the_cut_of_the_layer_view_hides_what_is_above
 select::tests::the_shape_of_a_hole_is_picked_through_it_or_with_alt
+
+# The iPad app's engine (C2F-100): renders on its own big-stack thread,
+# parameters, errors at their line, exports.
+a_deep_model_renders_when_called_from_a_small_stack
+a_render_gives_up_once_cancelled
+a_syntax_error_is_given_at_its_line_and_column
+a_value_given_to_a_parameter_changes_the_model
+a_value_that_no_longer_applies_is_left_out
+an_error_while_running_keeps_what_was_echoed
+exports_write_stl_and_3mf
+parameters_come_with_their_group_value_and_widget
+the_night_light_renders_as_c2f_renders_it
