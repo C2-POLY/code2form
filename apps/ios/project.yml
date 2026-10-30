@@ -1,4 +1,4 @@
-# The iPad app, described for XcodeGen: `xcodegen` in this folder writes
+# The iPhone and iPad app, described for XcodeGen: `xcodegen` in this folder writes
 # Code2Form.xcodeproj, which is not committed. The engine comes from the
 # Code2FormCore package; build it first with scripts/ios-xcframework.sh.
 name: Code2Form
@@ -35,8 +35,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.c2poly.code2form
-        # iPad only, for now.
-        TARGETED_DEVICE_FAMILY: "2"
+        # iPhone and iPad.
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
     info:
       path: App/Info.plist
@@ -44,6 +44,10 @@ targets:
         CFBundleDisplayName: Code2Form
         UILaunchScreen: {}
         UIRequiresFullScreen: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -51,7 +55,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UISupportsDocumentBrowser: true
         LSSupportsOpeningDocumentsInPlace: true
-        # The app's folder in Files (On My iPad), which the Mac's Finder
+        # The app's folder in Files (On My iPhone or iPad), which the Mac's Finder
         # fills over the cable.
         UIFileSharingEnabled: true
         CFBundleDocumentTypes:
@@ -87,7 +91,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.c2poly.code2form.tests
-        TARGETED_DEVICE_FAMILY: "2"
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
 schemes:
   Code2Form:
