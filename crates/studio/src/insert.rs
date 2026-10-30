@@ -79,11 +79,13 @@ pub fn reference(file: &Path, design: Option<&Path>) -> String {
 }
 
 /// The text with `import("reference");` on a line of its own, at the
-/// start of the line that holds char `cursor`; and the char after it.
-pub fn insert_mesh(text: &str, cursor: usize, reference: &str) -> (String, usize) {
+/// start of the line that holds char `cursor`; and the char after it. As
+/// a `background`, `%import(...)`: a reference to measure and build
+/// around, drawn see-through and left out of the model, as a scan is.
+pub fn insert_mesh(text: &str, cursor: usize, reference: &str, background: bool) -> (String, usize) {
     let at = byte_of(text, cursor);
     let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
-    let line = format!("import(\"{}\");\n", escaped(reference));
+    let line = format!("{}import(\"{}\");\n", if background { "%" } else { "" }, escaped(reference));
     let mut out = String::with_capacity(text.len() + line.len());
     out.push_str(&text[..line_start]);
     out.push_str(&line);
@@ -213,9 +215,11 @@ mod tests {
     fn a_mesh_goes_on_the_cursors_line() {
         let text = "cube(1);\ntranslate([5, 0, 0]) sphere(2);\n";
         // The cursor in the middle of the second line.
-        let (out, cursor) = insert_mesh(text, 15, "motor.stl");
+        let (out, cursor) = insert_mesh(text, 15, "motor.stl", false);
         assert_eq!(out, "cube(1);\nimport(\"motor.stl\");\ntranslate([5, 0, 0]) sphere(2);\n");
         assert_eq!(&out[..cursor], "cube(1);\nimport(\"motor.stl\");\n");
+        let (out, _) = insert_mesh(text, 0, "scans/watch.stl", true);
+        assert_eq!(out, "%import(\"scans/watch.stl\");\ncube(1);\ntranslate([5, 0, 0]) sphere(2);\n");
     }
 
     #[test]
