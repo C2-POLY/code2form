@@ -9,6 +9,9 @@ const fr: Strings = {
     downloadTitle: 'Télécharger Code2Form',
     downloadDescription:
       'Téléchargez Code2Form pour macOS (Apple silicon et Intel), installez son serveur MCP pour Claude Code, ou compilez-le depuis les sources sous Windows et Linux.',
+    privacyTitle: 'Confidentialité : Code2Form',
+    privacyDescription:
+      'Code2Form ne collecte aucune donnée personnelle : ni compte, ni statistiques, ni pistage. Ce que font de vos fichiers les apps iPhone, iPad et Mac, et ce site.',
   },
   a11y: {
     skip: 'Aller au contenu',
@@ -144,6 +147,7 @@ const fr: Strings = {
     ways: 'écrit en Rust, calcule pendant que vous tapez',
     releases: 'Versions',
     licence: 'Licence',
+    privacy: 'Confidentialité',
   },
   download: {
     title: 'Télécharger Code2Form',
@@ -181,6 +185,41 @@ const fr: Strings = {
       'Il n’y a pas encore de téléchargement pour Windows ni Linux, mais l’app et c2f s’y compilent avec Rust 1.85 ou plus récent.',
     sourceNote: 'L’app est alors target/release/code2form, et la ligne de commande target/release/c2f.',
     sourceMore: 'La compilation, dans le README',
+  },
+  privacy: {
+    title: 'Confidentialité',
+    lead: 'Code2Form ne collecte aucune donnée personnelle. Il n’a ni compte, ni statistiques, ni publicité, ni pistage, et ne nous envoie rien.',
+    updated: 'Mise à jour le 3 novembre 2026.',
+    sections: [
+      {
+        title: 'L’app iPhone et iPad',
+        paras: [
+          'L’app ouvre les fichiers que vous choisissez, depuis Fichiers ou iCloud Drive, et les affiche sur l’appareil. Elle n’a pas de serveur et ne fait aucune requête réseau d’elle-même.',
+          'La caméra ne sert qu’à Scanner un objet, pendant la capture. Les photos et le maillage reconstruit restent sur l’appareil : les photos sont effacées dès que le maillage est enregistré ou que la capture est annulée, et le maillage est enregistré en fichier STL dans Code2Form › Scans.',
+          'Un fichier ou un scan ne quitte l’appareil que si vous le partagez vous-même, par AirDrop ou une autre app, avec la feuille de partage du système. Les fichiers gardés dans iCloud Drive sont synchronisés par Apple, selon sa politique de confidentialité.',
+        ],
+      },
+      {
+        title: 'L’app Mac et c2f',
+        paras: [
+          'L’app et la ligne de commande tournent sur votre Mac et ne collectent rien.',
+          'Seule exception, et seulement si vous l’utilisez : l’agent envoie vos messages et votre design à Anthropic, par Claude Code ou la clé d’API que vous avez saisie, selon les conditions d’Anthropic. Le serveur MCP, c2f mcp, ne parle qu’à l’agent qui le lance.',
+        ],
+      },
+      {
+        title: 'Ce site',
+        paras: [
+          'Le site est hébergé par GitHub Pages. Il ne dépose aucun cookie et n’a pas de statistiques ; votre navigateur garde seulement votre choix de thème clair ou sombre. GitHub peut enregistrer l’adresse IP des visiteurs pour la sécurité de son service, selon la déclaration de confidentialité de GitHub.',
+        ],
+      },
+      {
+        title: 'Contact',
+        paras: [
+          'Code2Form est publié par ET Technology Consulting. Pour une question sur cette politique, ouvrez un ticket sur GitHub. Si elle change, cette page le dira, avec sa date.',
+        ],
+      },
+    ],
+    contact: 'Ouvrir un ticket sur GitHub',
   },
 };
 

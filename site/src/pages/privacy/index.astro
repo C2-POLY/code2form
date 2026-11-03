@@ -1,0 +1,14 @@
+---
+import Base from '../../layouts/Base.astro';
+import Privacy from '../../components/Privacy.astro';
+import { t } from '../../i18n';
+import { latestRelease } from '../../lib/release';
+
+const lang = 'en';
+const s = t(lang);
+const release = await latestRelease();
+---
+
+<Base lang={lang} page="privacy/" title={s.meta.privacyTitle} description={s.meta.privacyDescription} release={release}>
+  <Privacy lang={lang} />
+</Base>

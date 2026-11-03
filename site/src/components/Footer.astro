@@ -4,7 +4,7 @@ import { type Release, RELEASES } from '../lib/release';
 
 interface Props {
   lang: Lang;
-  page: '' | 'download/';
+  page: '' | 'download/' | 'privacy/';
   release: Release | null;
 }
 
@@ -24,6 +24,7 @@ const other: Lang = lang === 'en' ? 'fr' : 'en';
       <li><a href={`${repo}#readme`}>{s.nav.docs}</a></li>
       <li><a href={RELEASES}>{s.footer.releases}</a></li>
       <li><a href={`${repo}#licence`}>{s.footer.licence}</a></li>
+      <li><a href={pagePath(lang, 'privacy/')} aria-current={page === 'privacy/' ? 'page' : undefined}>{s.footer.privacy}</a></li>
       <li>
         <a href={pagePath(other, page)} hreflang={other} lang={other}>{other === 'fr' ? 'Français' : 'English'}</a>
       </li>
