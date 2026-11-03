@@ -9,7 +9,7 @@ export function t(lang: Lang) {
   return strings[lang];
 }
 
-/** A page's path under the site's base, in `lang`: `page` is '' for the home page or 'download/'. */
+/** A page's path under the site's base, in `lang`: `page` is '' for the home page, 'download/' or 'privacy/'. */
 export function pagePath(lang: Lang, page = ''): string {
   const base = import.meta.env.BASE_URL.replace(/\/$/, '');
   return `${base}/${lang === 'en' ? '' : `${lang}/`}${page}`;

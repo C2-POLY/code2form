@@ -1,0 +1,57 @@
+---
+import { type Lang, t, repo } from '../i18n';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const s = t(lang).privacy;
+---
+
+<div class="wrap page">
+  <section class="intro" aria-labelledby="privacy-title">
+    <h1 id="privacy-title">{s.title}</h1>
+    <p class="lead">{s.lead}</p>
+    <p class="dim">{s.updated}</p>
+  </section>
+
+  {
+    s.sections.map((section) => (
+      <section class="part">
+        <h2 class="h2">{section.title}</h2>
+        {section.paras.map((para) => <p>{para}</p>)}
+      </section>
+    ))
+  }
+
+  <p><a href={`${repo}/issues`}>{s.contact} →</a></p>
+</div>
+
+<style>
+  .dim {
+    color: var(--dim);
+  }
+
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+    padding-top: 56px;
+    padding-bottom: 80px;
+    max-width: 760px;
+  }
+
+  .intro,
+  .part {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .intro h1 {
+    font-size: clamp(36px, 6vw, 56px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+  }
+</style>

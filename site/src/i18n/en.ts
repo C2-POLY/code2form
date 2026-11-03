@@ -7,6 +7,9 @@ const en = {
     downloadTitle: 'Download Code2Form',
     downloadDescription:
       'Download Code2Form for macOS (Apple silicon and Intel), install its MCP server for Claude Code, or build it from source on Windows and Linux.',
+    privacyTitle: 'Privacy: Code2Form',
+    privacyDescription:
+      'Code2Form collects no personal data: no account, no analytics, no tracking. What the iPhone, iPad and Mac apps and this website do with your files.',
   },
   a11y: {
     skip: 'Skip to content',
@@ -142,6 +145,7 @@ const en = {
     ways: 'made in Rust, renders as you type',
     releases: 'Releases',
     licence: 'Licence',
+    privacy: 'Privacy',
   },
   download: {
     title: 'Download Code2Form',
@@ -179,6 +183,41 @@ const en = {
       'There are no Windows or Linux downloads yet, but the app and c2f build there with Rust 1.85 or later.',
     sourceNote: 'The app is then target/release/code2form, and the command line target/release/c2f.',
     sourceMore: 'Building, in the README',
+  },
+  privacy: {
+    title: 'Privacy',
+    lead: 'Code2Form collects no personal data. It has no account, no analytics, no advertising and no tracking, and it sends nothing to us.',
+    updated: 'Last updated on 3 November 2026.',
+    sections: [
+      {
+        title: 'The iPhone and iPad app',
+        paras: [
+          'The app opens the files you choose, from Files or iCloud Drive, and draws them on the device. It has no server and makes no network request of its own.',
+          'The camera is used only by Scan an object, while you take the capture. Its photos and the mesh rebuilt from them stay on the device: the photos are deleted once the mesh is saved or the capture is cancelled, and the mesh is saved as an STL file in Code2Form › Scans.',
+          'A file or a scan leaves the device only when you share it yourself, by AirDrop or another app, through the system share sheet. Files you keep in iCloud Drive are synced by Apple, under Apple’s privacy policy.',
+        ],
+      },
+      {
+        title: 'The Mac app and c2f',
+        paras: [
+          'The app and the command line run on your Mac and collect nothing.',
+          'The agent is the one exception, and only when you use it: it sends your messages and your design to Anthropic, through Claude Code or the API key you entered, under Anthropic’s terms. The MCP server, c2f mcp, talks only to the agent that starts it.',
+        ],
+      },
+      {
+        title: 'This website',
+        paras: [
+          'The site is hosted on GitHub Pages. It sets no cookie and has no analytics; your browser keeps only your choice of a light or dark theme. GitHub may log visitors’ IP addresses to keep its service secure, under the GitHub Privacy Statement.',
+        ],
+      },
+      {
+        title: 'Contact',
+        paras: [
+          'Code2Form is published by ET Technology Consulting. For a question about this policy, open an issue on GitHub. If it ever changes, this page will say so, with its date.',
+        ],
+      },
+    ],
+    contact: 'Open an issue on GitHub',
   },
 };
 
