@@ -1,0 +1,97 @@
+// TP4056 1 A Li-ion charger module with USB-C and DW01A protection, the
+// common blue board (AZ-Delivery and many others): the board, the USB-C
+// receptacle overhanging one end, the charger, the DW01A and its FS8205A
+// dual MOSFET, the two charge LEDs, the IN + and - pads beside the USB-C
+// and the B+, B-, OUT+ and OUT- pads at the other end. Seen from the
+// parts' side, the USB-C towards -x, the board's corner at the origin.
+// https://dlnmh9ip6v2uc.cloudfront.net/datasheets/Prototyping/TP4056.pdf
+//
+// From AZ-Delivery's sheet: 29 x 17.3 x 4.3 mm with the USB-C, 1.7 g,
+// 4.5 to 5.5 V in, 1 A charge to 4.2 V, red LED charging, blue charged.
+// From the TP4056's datasheet: 4.0 to 8 V in (8 V most), 4.2 V ±1.5%,
+// 1 A with RPROG = 1.2 kohm, trickle charge below 2.9 V. From the DW01A's
+// datasheet: it cuts the cell off at 4.3 V (over-charge), 2.4 V
+// (over-discharge) and on over-current. Estimated, from the sheet's
+// photo: the board 28 mm long and 1.6 mm thick, the USB-C 1 mm over the
+// edge, the pads' places, the chips and the LEDs.
+//
+// The cell goes on B+ and B-; the load on OUT+ and OUT-, which the
+// protection switches off when the cell is flat: power the load from
+// OUT, never from B. OUT- is not B- (the MOSFET is between them); the
+// checks take both as ground. IN + and - are VBUS and ground in parallel
+// with the USB-C, for a 5 V supply soldered on. It has no mount holes.
+//
+// Annotations are plain numbers.
+
+// @description Li-ion charger module TP4056 with USB-C and DW01A protection:
+// @description charges one 3.7 V cell (18650, LiPo) at 1 A to 4.2 V from USB,
+// @description and powers a load from it, cut off when the cell is flat.
+// @spec charger: TP4056, linear, constant current then constant voltage
+// @spec input: 5 V over USB-C (4.5 to 5.5 V; the TP4056 takes 4 to 8 V)
+// @spec charge: 1 A to 4.2 V ±1.5% (RPROG 1.2 kohm)
+// @spec protection: DW01A and FS8205A: cut off at 4.3 V, 2.4 V and on over-current
+// @spec output: the cell's voltage, 2.4 to 4.2 V, on OUT+ and OUT-
+// @spec indicators: red LED charging, blue charged
+// @spec size: 29 x 17.3 x 4.3 mm with the USB-C
+// @spec mass: 1.7 g
+// @source https://dlnmh9ip6v2uc.cloudfront.net/datasheets/Prototyping/TP4056.pdf TP4056 datasheet (NanJing Top Power)
+// @source https://cdn.shopify.com/s/files/1/1509/1638/files/TP4056-TypeC_datasheet.pdf AZ-Delivery, TP4056 Type C with protection
+// @source https://www.best-microcontroller-projects.com/support-files/dw01a.pdf DW01A datasheet (Fortune Semiconductor)
+
+// @pin IN+  [1.6, 15.3, 1.6]  passive 8V "5 V in, the USB-C's VBUS"
+// @pin IN-  [1.6, 2.0, 1.6]   ground "ground in, the USB-C's"
+// @pin OUT+ [26.4, 15.3, 1.6] power_out 4.2V "load +, the cell's voltage when the protection lets it"
+// @pin B+   [26.4, 11.0, 1.6] power_in 4.2V "cell +"
+// @pin B-   [26.4, 6.3, 1.6]  ground "cell -"
+// @pin OUT- [26.4, 2.0, 1.6]  ground "load -, switched by the protection"
+// @port usb_c [-1, 8.65, 3.23] -x [8.94, 3.26] "USB-C, 5 V in"
+
+module tp4056_usbc() {
+    $fn = 16;
+    l = 28;
+    w = 17.3;
+    t = 1.6;
+    blue = [0.10, 0.30, 0.70];
+    tin = [0.82, 0.83, 0.85];
+    metal = [0.80, 0.81, 0.83];
+    body = [0.10, 0.10, 0.11];
+    pads = [[1.6, 15.3], [1.6, 2.0], [26.4, 15.3], [26.4, 11.0], [26.4, 6.3], [26.4, 2.0]];
+
+    color(blue) difference() {
+        cube([l, w, t]);
+        for (p = pads) translate([p[0], p[1], -1]) cylinder(d = 1.1, h = t + 2);
+    }
+    color(tin) for (p = pads) translate([p[0], p[1], t]) difference() {
+        cylinder(d = 2.4, h = 0.02);
+        translate([0, 0, -1]) cylinder(d = 1.1, h = 2);
+    }
+
+    // The USB-C, its mouth towards -x, 1 mm over the edge.
+    color(metal) translate([-1, w / 2 - 8.94 / 2, t]) difference() {
+        hull() for (y = [1.63, 8.94 - 1.63]) translate([0, y, 1.63]) rotate([0, 90, 0]) cylinder(d = 3.26, h = 7.35);
+        hull() for (y = [1.93, 8.94 - 1.93]) translate([-0.1, y, 1.63]) rotate([0, 90, 0]) cylinder(d = 2.66, h = 3);
+    }
+    color(body) translate([-0.5, w / 2 - 3, t + 1.28]) cube([2.5, 6, 0.7]);
+
+    // The TP4056 (SOP-8 with its pad), the DW01A (SOT-23-6) and the
+    // FS8205A (TSSOP-8).
+    color(body) translate([11, 5.5, t]) cube([4.9, 3.9, 1.5]);
+    color(tin) for (i = [0 : 3], y = [5.0, 9.4]) translate([11.4 + i * 1.27, y, t]) cube([0.4, 0.5, 0.3]);
+    color(body) translate([18.5, 12.5, t]) cube([2.9, 1.6, 1.1]);
+    color(body) translate([19, 5.2, t]) cube([3.0, 4.4, 1.0]);
+    // The LEDs, red and blue, and a few passives.
+    color([0.9, 0.2, 0.15]) translate([8, 14.3, t]) cube([1.6, 0.8, 0.6]);
+    color([0.2, 0.4, 0.95]) translate([10.5, 14.3, t]) cube([1.6, 0.8, 0.6]);
+    color(body) for (p = [[8, 3], [13, 12.2], [16.5, 3], [16.5, 12.2], [23, 9.5]]) translate([p[0], p[1], t]) cube([1.6, 0.8, 0.5]);
+
+    // The pads' names.
+    color([0.95, 0.95, 0.95]) translate([0, 0, t]) linear_extrude(0.02) let($fn = 6) {
+        translate([3.6, 15.3]) text("+", size = 1.2, valign = "center");
+        translate([3.6, 2.0]) text("-", size = 1.2, valign = "center");
+        for (n = [["OUT+", 15.3], ["B+", 11.0], ["B-", 6.3], ["OUT-", 2.0]])
+            translate([24.6, n[1]]) text(n[0], size = 1.0, halign = "right", valign = "center");
+        translate([14, 1.0]) text("4056", size = 1.0, halign = "center");
+    }
+}
+
+tp4056_usbc();

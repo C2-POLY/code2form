@@ -12,15 +12,26 @@ use c2f_agent::circuit::{DEFAULT_MARGIN, assemble, bom, fit, load, placed_warnin
 use c2f_circuit::Circuit;
 use c2f_circuit::check::{self, Severity};
 
-const COMMANDS: [&str; 6] = ["check", "wires", "bom", "fit", "stl", "3mf"];
+const COMMANDS: [&str; 7] = ["check", "wires", "bom", "fit", "firmware", "stl", "3mf"];
 
 /// `c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>`.
 pub fn run(args: &[String]) -> ExitCode {
     let csv = args.iter().any(|arg| arg == "--csv");
     let (mut margin, mut clearance) = (None, None);
+    let mut output: Option<&str> = None;
     let mut rest: Vec<&str> = Vec::new();
     let mut args_left = args.iter().map(String::as_str);
     while let Some(arg) = args_left.next() {
+        if arg == "-o" {
+            match args_left.next() {
+                Some(dir) => output = Some(dir),
+                None => {
+                    eprintln!("error: -o takes the folder to write the firmware in");
+                    return ExitCode::from(2);
+                }
+            }
+            continue;
+        }
         let option = ["--margin", "--clearance"].into_iter().find_map(|option| Some((option, arg.strip_prefix(option)?)));
         let (option, value) = match option {
             Some((option, "")) => (option, args_left.next()),
@@ -48,6 +59,10 @@ pub fn run(args: &[String]) -> ExitCode {
     }
     if margin.is_some() && rest.first() != Some(&"wires") {
         eprintln!("error: --margin goes with `c2f circuit wires`");
+        return ExitCode::from(2);
+    }
+    if output.is_some() && rest.first() != Some(&"firmware") {
+        eprintln!("error: -o goes with `c2f circuit firmware`");
         return ExitCode::from(2);
     }
     if clearance.is_some() && rest.first() != Some(&"fit") {
@@ -93,6 +108,10 @@ pub fn run(args: &[String]) -> ExitCode {
         }
         "check" => check(&circuit, &src, path),
         "fit" => fit_command(&circuit, &src, path, clearance.unwrap_or(c2f_geom::CLEARANCE)),
+        "firmware" => {
+            let dir = output.map_or_else(|| path.parent().unwrap_or(Path::new("")).join("firmware"), Into::into);
+            firmware(&circuit, path, &dir)
+        }
         // An export format.
         _ => {
             let assembly = assemble(&circuit, &src, path);
@@ -111,6 +130,37 @@ pub fn run(args: &[String]) -> ExitCode {
                 eprintln!("WARNING: {warning}");
             }
             crate::print_export(&rendered, export, "circuit", None, None)
+        }
+    }
+}
+
+/// Writes the circuit's first firmware into `dir`, and says what each file
+/// became and what was left out.
+fn firmware(circuit: &Circuit, path: &Path, dir: &Path) -> ExitCode {
+    let name = path.file_name().map_or_else(|| "circuit.c2fc".into(), |n| n.to_string_lossy().into_owned());
+    let firmware = match c2f_circuit::firmware::firmware(circuit, &name) {
+        Ok(firmware) => firmware,
+        Err(errors) => {
+            for error in &errors {
+                eprintln!("error: {error}");
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+    match c2f_circuit::firmware::write(&firmware, dir) {
+        Ok(written) => {
+            for file in written {
+                let what = if file.written { "wrote" } else { "kept, yours" };
+                println!("{what}: {}", file.path.display());
+            }
+            for note in &firmware.notes {
+                eprintln!("note: {note}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
         }
     }
 }

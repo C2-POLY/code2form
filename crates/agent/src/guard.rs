@@ -23,7 +23,7 @@ const PATH_KEYS: [&str; 6] = ["path", "working_dir", "output", "brief", "design"
 const LIBRARY_LOOKUPS: [&str; 2] = ["part_pins", "check_part"];
 
 /// The tools that write files.
-const WRITING_TOOLS: [&str; 4] = ["export", "save_brief", "save_part", "electrify"];
+const WRITING_TOOLS: [&str; 5] = ["export", "save_brief", "save_part", "electrify", "firmware"];
 
 /// The argument a [`Guarded`] provider sets to the folders the files a
 /// program names may be read from: the project folder and the libraries,
@@ -93,7 +93,7 @@ impl Policy {
             ));
         }
         let (allowed, what) = match name {
-            "save_brief" => (self.new_files, "Writing new files"),
+            "save_brief" | "firmware" => (self.new_files, "Writing new files"),
             "export" => (self.export, "Exporting"),
             "save_part" => (self.save_part, "Saving parts to the library"),
             "electrify" => (self.electrify, "Electrifying a design"),
@@ -177,7 +177,7 @@ pub fn settings_file() -> Option<PathBuf> {
 
 /// Whether the tool `name` writes the file its argument `key` names.
 fn writes(name: &str, key: &str) -> bool {
-    matches!((name, key), ("export", "output") | ("save_brief", "path") | ("electrify", "path" | "circuit"))
+    matches!((name, key), ("export" | "firmware", "output") | ("save_brief", "path") | ("electrify", "path" | "circuit"))
 }
 
 /// Whether a relative `path` stays where it is put: no `..`, no root.
@@ -225,9 +225,11 @@ impl Scope {
             }
             let full = resolve(&if given.is_relative() { folder.join(given) } else { given.to_path_buf() });
             let inside = full.starts_with(&folder);
-            let readable = !writes(name, key) && self.read_only.iter().any(|dir| full.starts_with(resolve(dir)));
+            // Without an `output`, the firmware goes beside its circuit.
+            let writes = writes(name, key) || (name == "firmware" && key == "path" && args.get("output").is_none());
+            let readable = !writes && self.read_only.iter().any(|dir| full.starts_with(resolve(dir)));
             if !inside && !readable {
-                let how = if writes(name, key) { "write" } else { "read" };
+                let how = if writes { "write" } else { "read" };
                 return Err(format!(
                     "`{key}` = {asked} is outside the project folder, {}: the agent may only {how} there{}",
                     folder.display(),
@@ -387,6 +389,11 @@ mod tests {
         let err = scope.check("export", &json!({ "path": led, "output": output })).unwrap_err();
         assert!(err.contains("may only write"), "{err}");
         assert!(scope.check("save_brief", &json!({ "path": folders.root.join("library/brief.md") })).is_err());
+        // A circuit of the library gets no firmware beside it.
+        let circuit = folders.root.join("library/lamp.c2fc");
+        let err = scope.check("firmware", &json!({ "path": circuit })).unwrap_err();
+        assert!(err.contains("may only write"), "{err}");
+        assert!(scope.check("firmware", &json!({ "path": circuit, "output": "fw" })).is_ok(), "read there, written in the project");
     }
 
     #[test]

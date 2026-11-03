@@ -51,6 +51,26 @@
 //! Their text runs to the end of the line. Several `@description` lines
 //! make one description, so that a long one wraps as the file's other
 //! comments do.
+//!
+//! For its firmware, a board says what PlatformIO calls it and its
+//! platform; a part says, for a framework, the library that drives it
+//! (`builtin` when the framework has it) and the header to include, and
+//! the code that sets it up, in three sections: `global` (declarations),
+//! `setup` (run once) and `test` (a short check of the wiring, run in the
+//! loop). In the code, `{part}` is the part's name in the circuit and
+//! `{pin:NAME}` the constant of the board pin wired to its pin `NAME`.
+//! Several `@init` lines of a section make its code, a line each. A part
+//! whose pins a line needs are not all wired is left out of the firmware,
+//! unless that line is `optional` (`@init setup optional: …`), a line the
+//! rest does not depend on, as a shutdown pin's.
+//!
+//! ```text
+//! // @board seeed_xiao_esp32s3 espressif32
+//! // @driver arduino "adafruit/Adafruit NeoPixel@^1.12" "Adafruit_NeoPixel.h"
+//! // @init global: Adafruit_NeoPixel {part}(12, {pin:DI}, NEO_GRB + NEO_KHZ800);
+//! // @init setup: {part}.begin();
+//! // @init test: {part}.fill(0x202020); {part}.show();
+//! ```
 
 use std::fmt;
 
@@ -71,6 +91,9 @@ pub struct Annotations {
     pub description: Option<Description>,
     pub specs: Vec<Spec>,
     pub sources: Vec<Source>,
+    pub board: Option<Board>,
+    pub drivers: Vec<Driver>,
+    pub inits: Vec<Init>,
 }
 
 impl Annotations {
@@ -82,8 +105,79 @@ impl Annotations {
             && self.description.is_none()
             && self.specs.is_empty()
             && self.sources.is_empty()
+            && self.board.is_none()
+            && self.drivers.is_empty()
+            && self.inits.is_empty()
+    }
+
+    /// The code of a section of the part's set-up, its lines in order.
+    pub fn init(&self, section: InitSection) -> Vec<&str> {
+        self.inits.iter().filter(|i| i.section == section).map(|i| i.code.as_str()).collect()
+    }
+
+    /// The lines of a section of the part's set-up, in order.
+    pub fn init_lines(&self, section: InitSection) -> impl Iterator<Item = &Init> {
+        self.inits.iter().filter(move |i| i.section == section)
     }
 }
+
+/// `// @board seeed_xiao_esp32s3 espressif32`: a board a firmware runs on,
+/// as PlatformIO names it and its platform.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Board {
+    pub board: String,
+    pub platform: String,
+    pub span: Span,
+}
+
+/// `// @driver arduino "adafruit/Adafruit NeoPixel@^1.12" "Adafruit_NeoPixel.h"`:
+/// the library that drives the part in a framework, as PlatformIO's
+/// `lib_deps` names it (`None` when the framework has it built in), and
+/// the header its code includes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Driver {
+    pub framework: String,
+    pub library: Option<String>,
+    pub header: Option<String>,
+    pub span: Span,
+}
+
+/// `// @init setup: {part}.begin();`: a line of the code that sets the
+/// part up, in its section.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Init {
+    pub section: InitSection,
+    /// The rest of the part's code does not depend on it: left out alone
+    /// when its pins are not wired.
+    pub optional: bool,
+    pub code: String,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitSection {
+    /// Declarations, before `setup()`.
+    Global,
+    /// Run once, in `setup()`.
+    Setup,
+    /// A short check that the part answers, run in `loop()`.
+    Test,
+}
+
+impl InitSection {
+    pub const ALL: [InitSection; 3] = [InitSection::Global, InitSection::Setup, InitSection::Test];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            InitSection::Global => "global",
+            InitSection::Setup => "setup",
+            InitSection::Test => "test",
+        }
+    }
+}
+
+/// The frameworks a driver is given for, as PlatformIO names them.
+pub const FRAMEWORKS: [&str; 2] = ["arduino", "espidf"];
 
 /// `// @description ...`: what the part is and does, in a sentence or two.
 #[derive(Clone, Debug, PartialEq)]
@@ -248,6 +342,9 @@ pub fn read(src: &str) -> (Annotations, Vec<Diagnostic>) {
             "description" => reader.description(fields, span),
             "spec" => reader.spec(fields, span),
             "source" => reader.source(fields, fields_start, span),
+            "board" => lex(fields, fields_start).and_then(|items| reader.board(items, span)),
+            "driver" => lex(fields, fields_start).and_then(|items| reader.driver(items, span)),
+            "init" => reader.init(fields, span),
             // Other `@words` belong to someone else.
             _ => continue,
         };
@@ -454,6 +551,89 @@ impl Reader {
         let label = label.strip_prefix('"').and_then(|l| l.strip_suffix('"')).unwrap_or(label);
         let label = (!label.is_empty()).then(|| label.to_string());
         self.annotations.sources.push(Source { url: url.to_string(), label, span });
+        Ok(())
+    }
+
+    fn board(&mut self, items: Vec<Item>, span: Span) -> Result<(), Diagnostic> {
+        if self.annotations.board.is_some() {
+            return Err(Diagnostic::new("the part already names its board", span));
+        }
+        let expected = "expected the board and its platform as PlatformIO names them, as in `@board seeed_xiao_esp32s3 espressif32`";
+        let words: Vec<&str> = items
+            .iter()
+            .map(|item| match item.token {
+                Token::Word(word) => Ok(word),
+                _ => Err(Diagnostic::new(expected, item.span)),
+            })
+            .collect::<Result<_, _>>()?;
+        let [board, platform] = words[..] else { return Err(Diagnostic::new(expected, span)) };
+        self.annotations.board = Some(Board { board: board.to_string(), platform: platform.to_string(), span });
+        Ok(())
+    }
+
+    fn driver(&mut self, items: Vec<Item>, span: Span) -> Result<(), Diagnostic> {
+        let expected = "expected a framework (arduino, espidf), the library as PlatformIO names it in quotes or builtin, \
+                        and the header in quotes, as in `@driver arduino \"madhephaestus/ESP32Servo@^3.0\" \"ESP32Servo.h\"`";
+        let mut items = items.into_iter();
+        let framework = match items.next() {
+            Some(Item { token: Token::Word(word), span: at }) => {
+                if !FRAMEWORKS.contains(&word) {
+                    return Err(Diagnostic::new(format!("unknown framework `{word}`: give arduino or espidf"), at));
+                }
+                word.to_string()
+            }
+            Some(item) => return Err(Diagnostic::new(expected, item.span)),
+            None => return Err(Diagnostic::new(expected, span)),
+        };
+        if self.annotations.drivers.iter().any(|d| d.framework == framework) {
+            return Err(Diagnostic::new(format!("the part already gives its {framework} driver"), span));
+        }
+        let library = match items.next() {
+            Some(Item { token: Token::Word("builtin"), .. }) => None,
+            Some(Item { token: Token::Str(library), .. }) if !library.trim().is_empty() => Some(library),
+            Some(item) => return Err(Diagnostic::new(expected, item.span)),
+            None => return Err(Diagnostic::new(expected, span)),
+        };
+        let header = match items.next() {
+            None => None,
+            Some(Item { token: Token::Str(header), .. }) if !header.trim().is_empty() => Some(header),
+            Some(item) => return Err(Diagnostic::new(expected, item.span)),
+        };
+        if let Some(item) = items.next() {
+            return Err(Diagnostic::new(expected, item.span));
+        }
+        self.annotations.drivers.push(Driver { framework, library, header, span });
+        Ok(())
+    }
+
+    fn init(&mut self, text: &str, span: Span) -> Result<(), Diagnostic> {
+        let expected = "expected a section (global, setup or test) and its code, as in `@init setup: {part}.begin();`";
+        let (section, code) = text.split_once(':').ok_or_else(|| Diagnostic::new(expected, span))?;
+        let mut words = section.split_whitespace();
+        let section = words.next().unwrap_or("");
+        let optional = match (words.next(), words.next()) {
+            (None, _) => false,
+            (Some("optional"), None) => true,
+            _ => return Err(Diagnostic::new(format!("expected `{section}` or `{section} optional` before the colon"), span)),
+        };
+        let section = InitSection::ALL
+            .into_iter()
+            .find(|s| s.name() == section)
+            .ok_or_else(|| Diagnostic::new(format!("unknown section `{section}`: give global, setup or test"), span))?;
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(Diagnostic::new(expected, span));
+        }
+        // `{pin:NAME}` must be closed, or it would reach the code as is.
+        let mut rest = code;
+        while let Some(open) = rest.find("{pin:") {
+            let close = rest[open..].find('}').ok_or_else(|| Diagnostic::new("unclosed `{pin:`", span))?;
+            if rest[open + 5..open + close].trim().is_empty() {
+                return Err(Diagnostic::new("expected a pin's name in `{pin:NAME}`", span));
+            }
+            rest = &rest[open + close..];
+        }
+        self.annotations.inits.push(Init { section, optional, code: code.to_string(), span });
         Ok(())
     }
 
@@ -704,6 +884,32 @@ impl fmt::Display for Spec {
     }
 }
 
+impl fmt::Display for Board {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "@board {} {}", self.board, self.platform)
+    }
+}
+
+impl fmt::Display for Driver {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.library {
+            Some(library) => write!(f, "@driver {} {}", self.framework, string(library))?,
+            None => write!(f, "@driver {} builtin", self.framework)?,
+        }
+        if let Some(header) = &self.header {
+            write!(f, " {}", string(header))?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Init {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let optional = if self.optional { " optional" } else { "" };
+        write!(f, "@init {}{optional}: {}", self.section.name(), self.code)
+    }
+}
+
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "@source {}", self.url)?;
@@ -750,6 +956,9 @@ mod tests {
         printed.extend(annotations.description.iter().map(|a| (a.span, a.to_string())));
         printed.extend(annotations.specs.iter().map(|a| (a.span, a.to_string())));
         printed.extend(annotations.sources.iter().map(|a| (a.span, a.to_string())));
+        printed.extend(annotations.board.iter().map(|a| (a.span, a.to_string())));
+        printed.extend(annotations.drivers.iter().map(|a| (a.span, a.to_string())));
+        printed.extend(annotations.inits.iter().map(|a| (a.span, a.to_string())));
         printed.sort_by_key(|(span, _)| span.start);
         let lines = LineIndex::new(src);
         let errors = errors
@@ -948,6 +1157,70 @@ cube(1);
         );
         let (_, errors) = read(src);
         assert_eq!(&src[errors[6].span.range()], "www.ti.com");
+    }
+
+    #[test]
+    fn a_board_drivers_and_set_up_code_for_the_firmware() {
+        let src = "\
+// @board seeed_xiao_esp32s3 espressif32
+// @driver arduino \"adafruit/Adafruit NeoPixel@^1.12\" \"Adafruit_NeoPixel.h\"
+// @driver espidf builtin
+// @init global: Adafruit_NeoPixel {part}(12, {pin:DI}, NEO_GRB + NEO_KHZ800);
+// @init setup: {part}.begin();
+// @init setup optional:   {part}.setBrightness(20);
+// @init test: {part}.fill(0x202020); {part}.show();
+";
+        let (printed, errors) = read_text(src);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            printed,
+            [
+                "@board seeed_xiao_esp32s3 espressif32",
+                "@driver arduino \"adafruit/Adafruit NeoPixel@^1.12\" \"Adafruit_NeoPixel.h\"",
+                "@driver espidf builtin",
+                "@init global: Adafruit_NeoPixel {part}(12, {pin:DI}, NEO_GRB + NEO_KHZ800);",
+                "@init setup: {part}.begin();",
+                "@init setup optional: {part}.setBrightness(20);",
+                "@init test: {part}.fill(0x202020); {part}.show();",
+            ]
+        );
+        let (annotations, _) = read(src);
+        assert_eq!(annotations.init(InitSection::Setup), ["{part}.begin();", "{part}.setBrightness(20);"]);
+        assert_eq!(annotations.drivers[1].library, None);
+        // Printed back, they read the same.
+        let again: String = printed.iter().flat_map(|line| ["// ", line.as_str(), "\n"]).collect();
+        assert_eq!(read(&again).0.drivers, annotations.drivers);
+    }
+
+    #[test]
+    fn badly_written_firmware_annotations_give_errors_with_their_line() {
+        let src = "\
+// @board seeed_xiao_esp32s3
+// @board a b
+// @board c d
+// @driver
+// @driver micropython builtin
+// @driver arduino
+// @driver arduino Servo.h
+// @driver arduino builtin \"Servo.h\" extra
+// @driver arduino builtin
+// @driver arduino builtin
+// @init begin();
+// @init loop: begin();
+// @init setup:
+// @init setup: x = {pin:IN1;
+// @init setup: x = {pin:};
+// @init setup maybe: x();
+";
+        let (_, errors) = read_text(src);
+        let lines: Vec<&str> = errors.iter().map(|e| e.split(':').next().unwrap()).collect();
+        assert_eq!(lines, ["1", "3", "4", "5", "6", "7", "8", "10", "11", "12", "13", "14", "15", "16"], "{errors:#?}");
+        assert!(errors[13].ends_with("expected `setup` or `setup optional` before the colon"));
+        assert!(errors[1].ends_with("the part already names its board"));
+        assert!(errors[3].ends_with("unknown framework `micropython`: give arduino or espidf"));
+        assert!(errors[7].ends_with("the part already gives its arduino driver"));
+        assert!(errors[9].ends_with("unknown section `loop`: give global, setup or test"));
+        assert!(errors[11].ends_with("unclosed `{pin:`"));
     }
 
     #[test]

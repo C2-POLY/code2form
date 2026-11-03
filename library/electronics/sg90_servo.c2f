@@ -1,0 +1,110 @@
+// TowerPro SG90 micro servo, 9 g: the blue case with its two mounting
+// tabs, the gear tower and its splined output shaft, a horn on it, and
+// its three wires (brown, red, orange) shown cut short into the 3-pin
+// plug (2.54 mm pitch) that goes onto a header. The output shaft's axis
+// at x = y = 0 along +z, the case's bottom at z = 0, the case running
+// along +x away from the shaft, the wires leaving its far end.
+// https://static.rapidonline.com/pdf/37-1330t.pdf
+//
+// From the drawing on Rapid's sheet (TowerPro SG90, 37-1330): the case
+// 22.2 x 11.8 mm, 32.2 mm across the tabs, the tabs' underside 16 mm up,
+// 31 mm from the bottom to the top of the horn; 9 g, 1.8 kgf·cm stalled
+// and 0.1 s/60° at 4.8 V, a dead band of 10 µs. From ServoDatabase: 4.8
+// to 6 V, 2.5 kgf·cm at 6 V, pulses of 500 to 2400 µs every 20 ms (1500
+// µs centered), about 180° of travel, the shaft's spline 4.9 mm.
+// Estimated, from photos: the tabs 2.5 mm thick and their 2 mm holes 27.6 mm
+// apart, the gear tower's height (the case's top at 22.7 mm, the tower's
+// at 26.7), the horns' shapes and length, the wire's exit and the plug,
+// drawn 8 mm off the case where the real wire is about 25 cm long.
+//
+// Wiring: brown to ground, red to 4.8 to 6 V (not the board's 3.3 V: the
+// motor draws up to 0.7 A stalled), orange to a GPIO; 3.3 V pulses drive
+// it. The ESP32Servo library makes the pulses on an ESP32's LEDC timers.
+
+// @description Micro servo TowerPro SG90, 9 g: turns its horn to an angle
+// @description from 0 to 180°, 1.8 kgf·cm at 4.8 V, set by a 50 Hz pulse on
+// @description one wire: a pointer, a latch, a small arm.
+// @spec motor: positional RC servo, plastic gears, potentiometer feedback
+// @spec supply: 4.8 to 6 V (red wire)
+// @spec stall torque: 1.8 kgf·cm at 4.8 V (2.5 kgf·cm at 6 V)
+// @spec speed: 100 rpm at 4.8 V (0.1 s/60°)
+// @spec travel: about 180°
+// @spec control: pulse of 500 to 2400 µs every 20 ms, 1500 µs centered; 3.3 V or 5 V logic
+// @spec current: up to 0.7 A stalled, about 10 mA idle
+// @spec size: 22.2 x 11.8 x 31 mm, 32.2 mm across the tabs
+// @spec mass: 9 g
+// @source https://static.rapidonline.com/pdf/37-1330t.pdf TowerPro SG90 sheet and drawing (Rapid)
+// @source https://servodatabase.com/servo/towerpro/sg90 ServoDatabase, TowerPro SG90
+// @source https://github.com/madhephaestus/ESP32Servo ESP32Servo library
+// @driver arduino "madhephaestus/ESP32Servo@^3.0.6" "ESP32Servo.h"
+// @init global: Servo {part};
+// @init setup: {part}.setPeriodHertz(50); {part}.attach({pin:SIGNAL}, 500, 2400);
+// @init test: {part}.write(0); delay(600); {part}.write(90); delay(600); {part}.write(0); delay(600);
+
+/* [Horn] */
+// The horn on the shaft.
+horn = "double"; // [single, double, cross, none]
+
+// @pin GND    [38.3, -2.54, 4] +x ground "brown wire"
+// @pin 5V     [38.3, 0, 4]     +x power_in 6V "red wire, 4.8 to 6 V"
+// @pin SIGNAL [38.3, 2.54, 4]  +x input 6V "orange wire, the pulse (PWM)"
+// @mount_hole [-8.6, 0, 18.4] d=2 +z
+// @mount_hole [19.0, 0, 18.4] d=2 +z
+// @port shaft [0, 0, 29] +z d=4.9 "splined output shaft, 4.9 mm"
+
+module sg90_servo(horn = "double") {
+    $fn = 32;
+    blue = [0.18, 0.35, 0.75];
+    white = [0.95, 0.95, 0.93];
+    dark = [0.10, 0.10, 0.11];
+    x0 = -5.9;
+    len = 22.2;
+    w = 11.8;
+
+    // The case: the lower part, the tabs at 16 mm, the upper part.
+    color(blue) {
+        translate([x0, -w / 2, 0]) cube([len, w, 15.9]);
+        translate([x0, -w / 2, 18.4]) cube([len, w, 4.3]);
+        translate([x0 - 5, -w / 2, 15.9]) difference() {
+            cube([len + 10, w, 2.5]);
+            for (x = [2.3, len + 10 - 2.3]) translate([x, w / 2, -1]) cylinder(d = 2, h = 5, $fn = 12);
+            // The slots from the holes to the tabs' ends.
+            for (x = [-0.1, len + 10 - 2.3]) translate([x, w / 2 - 0.5, -1]) cube([2.4, 1, 5]);
+        }
+        // The gear tower: round over the shaft, a smaller boss beside it.
+        translate([0, 0, 22.7]) cylinder(d = w, h = 4);
+        translate([6, 0, 22.7]) cylinder(d = 6, h = 3);
+    }
+    // The spline.
+    color(white) translate([0, 0, 26.7]) cylinder(d = 4.9, h = 2.3, $fn = 20);
+
+    // The horn, 1.5 mm thick, on the spline, its screw on top.
+    color(white) translate([0, 0, 29]) {
+        cylinder(d = 7, h = 1.5);
+        if (horn == "single") arm(16);
+        if (horn == "double") for (a = [0, 180]) rotate(a) arm(16);
+        if (horn == "cross") for (a = [0, 90, 180, 270]) rotate(a) arm(a % 180 == 0 ? 16 : 10);
+    }
+    if (horn != "none") color([0.7, 0.7, 0.72]) translate([0, 0, 30.5]) cylinder(d = 3, h = 0.5, $fn = 12);
+
+    // The wires out of the far end, then the plug.
+    for (i = [0 : 2]) color([[0.45, 0.25, 0.12], [0.85, 0.10, 0.10], [0.95, 0.55, 0.10]][i])
+        translate([x0 + len, (i - 1) * 1.0, 4]) rotate([0, 90, 0]) cylinder(d = 1, h = 8.2, $fn = 8);
+    translate([x0 + len + 8, 0, 4]) {
+        color(dark) translate([0, -3.8, -1.25]) cube([14, 7.6, 2.5]);
+        color([0.80, 0.81, 0.83]) for (y = [-2.54, 0, 2.54]) translate([13.9, y - 0.4, -0.4]) cube([0.2, 0.8, 0.8]);
+    }
+}
+
+// A horn's arm `l` long from the shaft's axis, tapered, with its holes.
+module arm(l) {
+    difference() {
+        hull() {
+            cylinder(d = 6, h = 1.5);
+            translate([l - 2, 0, 0]) cylinder(d = 3.5, h = 1.5);
+        }
+        for (k = [0 : 3]) translate([l - 2 - k * 2.2, 0, -1]) cylinder(d = 1, h = 4, $fn = 8);
+    }
+}
+
+sg90_servo(horn);

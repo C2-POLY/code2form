@@ -1,0 +1,115 @@
+// A closed GT2 timing belt (2 mm pitch, 6 mm wide) round two pulleys,
+// drawn as a band on the pulleys' pitch circles, the first pulley's axis
+// at the origin, the second's on +x, the band from z = 0 to 6: give the
+// belt's teeth and it finds the center distance, or the center distance
+// and it finds the belt. It echoes both: the belt's length in millimeters
+// and in teeth, and the center distance. A design uses its functions with
+//
+//     use <mechanical/gt2_belt.c2f>
+//     c = gt2_center_distance(20, 20, 200);   // 180 mm
+//     l = gt2_belt_length(20, 36, 150);       // in millimeters
+//
+// The belt's pitch length L, for pulleys of pitch diameters D1 and D2
+// (z·2/π) at a center distance C: L = 2C + π(D1 + D2)/2 + (D1 − D2)²/4C,
+// so C = (K + √(K² − 32(D1 − D2)²))/16 with K = 4L − 2π(D1 + D2), as
+// York Industries give it. A closed belt has a whole number of teeth:
+// given a center distance, the file echoes the belt it asks for, then the
+// nearest stock belt (a whole, even number of teeth here) and the center
+// distance that one takes, where the motor's slots must reach.
+//
+// From Gates' GT2 figures as sellers give them: the belt 1.38 mm thick,
+// its teeth 0.75 mm, its pitch line 0.254 mm outside the pulleys' tips.
+// Its mass is estimated: about 8 g a meter for a 6 mm belt of
+// glass-fiber-reinforced neoprene.
+
+// @description GT2 belt between two pulleys: from their teeth and the belt's
+// @description (or the center distance), gt2_belt() finds the other, echoes
+// @description both and draws the belt; gt2_belt_length() and
+// @description gt2_center_distance() compute them for a design.
+// @spec belt: GT2, 2 mm pitch, 6 mm wide, closed
+// @spec pitch length: 2 mm x the belt's teeth (400 mm for 200 teeth)
+// @spec length: 2C + π(D1 + D2)/2 + (D1 − D2)²/4C, D = teeth x 2/π
+// @spec thickness: 1.38 mm, its teeth 0.75 mm
+// @spec mass: 3.2 g for 200 teeth (estimated, about 8 g a meter)
+// @source https://www.york-ind.com/technical-resources/timing-belts/center-distance-belt-length.html York Industries, center distance and belt length
+// @source https://www.adafruit.com/product/1184 Adafruit, GT2 timing belt (2 mm pitch, 6 mm wide)
+
+use <lib/gt2.c2f>
+
+/* [Belt] */
+// The first pulley's teeth.
+teeth1 = 20; // [10:1:120]
+// The second pulley's teeth.
+teeth2 = 20; // [10:1:120]
+// The belt's teeth; 0 to give the center distance instead.
+belt_teeth = 200; // [0:1:1000]
+// The center distance in millimeters, used when belt_teeth is 0.
+center = 0; // [0:0.5:1000]
+
+// The pitch length of the GT2 belt, in millimeters, round pulleys of `t1`
+// and `t2` teeth whose axes are `center` mm apart.
+function gt2_belt_length(t1, t2, center) =
+    let (d1 = gt2_pitch_diameter(t1), d2 = gt2_pitch_diameter(t2))
+    2 * center + PI * (d1 + d2) / 2 + pow(d1 - d2, 2) / (4 * center);
+
+// The center distance at which a GT2 belt of `belt_teeth` teeth fits
+// round pulleys of `t1` and `t2` teeth; undef when the belt is too short
+// to go round them.
+function gt2_center_distance(t1, t2, belt_teeth) =
+    let (
+        d1 = gt2_pitch_diameter(t1),
+        d2 = gt2_pitch_diameter(t2),
+        k = 4 * belt_teeth * gt2_pitch() - 2 * PI * (d1 + d2),
+        disc = k * k - 32 * pow(d1 - d2, 2)
+    )
+    k > 0 && disc >= 0 ? (k + sqrt(disc)) / 16 : undef;
+
+// The belt's teeth for pulleys of `t1` and `t2` teeth `center` mm apart,
+// not rounded.
+function gt2_belt_teeth(t1, t2, center) = gt2_belt_length(t1, t2, center) / gt2_pitch();
+
+// The belt round two pulleys: see the file's opening comment.
+module gt2_belt(teeth1 = 20, teeth2 = 20, belt_teeth = 200, center = 0) {
+    assert(belt_teeth > 0 || center > 0, "gt2_belt: give the belt's teeth or the center distance");
+    c = belt_teeth > 0 ? gt2_center_distance(teeth1, teeth2, belt_teeth) : center;
+    assert(c != undef && c > (gt2_tip_diameter(teeth1) + gt2_tip_diameter(teeth2)) / 2,
+           "gt2_belt: the belt is too short for these pulleys");
+    length = gt2_belt_length(teeth1, teeth2, c);
+    teeth = length / gt2_pitch();
+    echo(str("gt2_belt: ", teeth1, " and ", teeth2, " teeth, belt ", round(length * 100) / 100, " mm (",
+             round(teeth * 100) / 100, " teeth), center distance ", round(c * 100) / 100, " mm"));
+    if (belt_teeth == 0) {
+        stock = 2 * round(teeth / 2);
+        echo(str("gt2_belt: the nearest belt, ", stock, " teeth (", stock * gt2_pitch(), " mm), takes ",
+                 round(gt2_center_distance(teeth1, teeth2, stock) * 100) / 100, " mm"));
+    }
+
+    // The band: from the pulleys' tips out over the belt's back.
+    r1 = gt2_tip_diameter(teeth1) / 2;
+    r2 = gt2_tip_diameter(teeth2) / 2;
+    back = gt2_back_thickness();
+    tooth = gt2_tooth_height();
+    color([0.12, 0.12, 0.13]) linear_extrude(6) difference() {
+        hull() {
+            circle(r = r1 + back, $fn = 64);
+            translate([c, 0]) circle(r = r2 + back, $fn = 64);
+        }
+        hull() {
+            circle(r = r1, $fn = 64);
+            translate([c, 0]) circle(r = r2, $fn = 64);
+        }
+    }
+    // Its teeth, as a thinner band inside.
+    color([0.20, 0.20, 0.22]) linear_extrude(6) difference() {
+        hull() {
+            circle(r = r1, $fn = 64);
+            translate([c, 0]) circle(r = r2, $fn = 64);
+        }
+        hull() {
+            circle(r = r1 - tooth, $fn = 64);
+            translate([c, 0]) circle(r = r2 - tooth, $fn = 64);
+        }
+    }
+}
+
+gt2_belt(teeth1, teeth2, belt_teeth, center);

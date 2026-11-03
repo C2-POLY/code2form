@@ -58,8 +58,10 @@ pub fn tools() -> Vec<Value> {
             "name": "part_pins",
             "title": "A part's pins",
             "description": "The pins a part declares in `// @pin` comments (name, label, type, voltage, reserved, position \
-                            and direction, in the part's millimeters), its mount holes and its ports, with the annotations \
-                            badly written. A `path` is read as is, else from `working_dir`, else from the library paths.",
+                            and direction, in the part's millimeters), its mount holes and its ports; for its firmware, \
+                            the board it is (`// @board`, as PlatformIO names it), the library that drives it per \
+                            framework (`// @driver`) and the code that sets it up (`// @init`, by section: global, \
+                            setup, test); with the annotations badly written. A `path` is read as is, else from `working_dir`, else from the library paths.",
             "inputSchema": schema_of(json!({
                 "code": { "type": "string", "description": "The part's text. Give this or `path`." },
                 "path": { "type": "string", "description": "The part's file, as a circuit names it (`electronics/inmp441.c2f`) or a path." },
@@ -107,6 +109,25 @@ pub fn tools() -> Vec<Value> {
             "inputSchema": schema_of(circuit(), &[]),
         }),
         json!({
+            "name": "firmware",
+            "title": "Write a first firmware",
+            "description": "Writes a PlatformIO project (Arduino framework) for the board a circuit's parts are wired \
+                            to (the part with `// @board`), in `output` (default: firmware/ beside the circuit): \
+                            include/pins.h, a #define per pin of a part wired to a GPIO of the board (AMP_BCLK), \
+                            rewritten each time; platformio.ini with the board and the libraries the parts' \
+                            `// @driver arduino` lines give; src/main.cpp, which includes their headers, sets each \
+                            part up and tries it in turn in loop() from their `// @init` code. platformio.ini and \
+                            main.cpp are written once and then left to the user. A circuit with an error, or a \
+                            reserved pin wired, is refused with check_circuit's message; set-up lines whose pins are \
+                            not wired to a GPIO are left out, in a comment, and listed in `notes`. Use it once the \
+                            circuit checks, then write the object's own program from main.cpp, with the constants of \
+                            pins.h.",
+            "inputSchema": schema_of(json!({
+                "path": { "type": "string", "description": "The circuit's .c2fc file." },
+                "output": { "type": "string", "description": "The folder to write the project in (default: firmware/ beside the circuit)." },
+            }), &["path"]),
+        }),
+        json!({
             "name": "fit",
             "title": "How the parts fit",
             "description": "How each part of a circuit fits in its enclosure, in millimeters: its least clearance, its gap \
@@ -137,6 +158,7 @@ pub fn tool(name: &str) -> Option<Tool> {
         "circuit_wires" => circuit_wires,
         "circuit_bom" => circuit_bom,
         "fit" => fit_tool,
+        "firmware" => firmware_tool,
         _ => return None,
     })
 }
@@ -182,6 +204,8 @@ fn library_parts(args: &Value) -> Result<Vec<Value>, String> {
             "specs": specs,
             "sources": sources,
             "pins": annotations.pins.len(),
+            "board": annotations.board.as_ref().map(|b| json!({ "board": b.board, "platform": b.platform })),
+            "drivers": drivers(&annotations),
         }));
     }
     let parts: Vec<Value> = match args.get("query").and_then(Value::as_str) {
@@ -197,6 +221,17 @@ fn library_parts(args: &Value) -> Result<Vec<Value>, String> {
             .collect(),
     };
     Ok(vec![text(pretty(&json!({ "parts": parts })))])
+}
+
+/// The libraries that drive a part, by framework: what PlatformIO names
+/// them (`builtin` when the framework has it) and the header.
+fn drivers(annotations: &annotations::Annotations) -> Value {
+    let drivers: serde_json::Map<String, Value> = annotations
+        .drivers
+        .iter()
+        .map(|d| (d.framework.clone(), json!({ "library": d.library.as_deref().unwrap_or("builtin"), "header": d.header })))
+        .collect();
+    json!(drivers)
 }
 
 /// The `.c2f` and `.scad` files under `dir`.
@@ -274,7 +309,20 @@ fn part_pins(args: &Value) -> Result<Vec<Value>, String> {
             json!({ "message": e.message, "line": line + 1, "column": column + 1 })
         })
         .collect();
-    let mut report = json!({ "pins": pins, "mount_holes": mount_holes, "ports": ports, "errors": errors });
+    let init: serde_json::Map<String, Value> = annotations::InitSection::ALL
+        .into_iter()
+        .map(|section| (section.name().to_string(), json!(annotations.init(section))))
+        .filter(|(_, code)| code.as_array().is_some_and(|c| !c.is_empty()))
+        .collect();
+    let mut report = json!({
+        "pins": pins,
+        "mount_holes": mount_holes,
+        "ports": ports,
+        "board": annotations.board.as_ref().map(|b| json!({ "board": b.board, "platform": b.platform })),
+        "drivers": drivers(&annotations),
+        "init": init,
+        "errors": errors,
+    });
     if let Some(file) = file {
         report["file"] = json!(file.display().to_string());
     }
@@ -313,6 +361,34 @@ fn problem(path: &Path, src: &str, diagnostic: &c2f_lang::Diagnostic) -> Value {
     let offset = (diagnostic.span.start as usize).min(src.len());
     let (line, column) = c2f_lang::span::LineIndex::new(src).line_col(src, offset);
     json!({ "message": diagnostic.message, "file": path.display().to_string(), "line": line + 1, "column": column + 1 })
+}
+
+fn firmware_tool(args: &Value) -> Result<Vec<Value>, String> {
+    if args.get("code").is_some() {
+        return Err("give the circuit's file (`path`): the firmware is written beside it".into());
+    }
+    let (circuit, _, path) = load(args)?;
+    let dir = match args.get("output").and_then(Value::as_str) {
+        Some(dir) => PathBuf::from(dir),
+        None => path.parent().unwrap_or(Path::new("")).join("firmware"),
+    };
+    let name = path.file_name().map_or_else(|| "circuit.c2fc".into(), |n| n.to_string_lossy().into_owned());
+    let firmware = c2f_circuit::firmware::firmware(&circuit, &name).map_err(|errors| pretty(&json!({ "ok": false, "errors": errors })))?;
+    let written = c2f_circuit::firmware::write(&firmware, &dir)?;
+    let files: Vec<Value> = written
+        .iter()
+        .map(|f| json!({ "path": f.path.display().to_string(), "written": f.written, "note": (!f.written).then_some("already there: left to the user") }))
+        .collect();
+    let report = json!({
+        "ok": true,
+        "board": firmware.board,
+        "files": files,
+        "pins_h": firmware.pins_h,
+        "notes": firmware.notes,
+        "next": "Build and flash with `pio run -t upload` in the folder, watch the serial monitor (`pio device monitor`): \
+                 each part prints its name as it is tried. Then write the object's program in src/main.cpp.",
+    });
+    Ok(vec![text(pretty(&report))])
 }
 
 fn check_circuit(args: &Value) -> Result<Vec<Value>, String> {

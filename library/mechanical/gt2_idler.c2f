@@ -1,0 +1,55 @@
+// GT2 idler pulley, 20 teeth (or smooth), 5 mm bore, for a 6 mm belt:
+// the aluminium body with its two flanges and, pressed in it, its two
+// small ball bearings that turn it on a 5 mm shaft or an M5 screw. Its
+// axis along z, a flange's face at z = 0, the other at z = 8.5.
+// https://www.adafruit.com/product/1251
+//
+// The teeth are those of the 20-tooth drive pulley (Adafruit 1251): 12.2
+// mm over them, on the GT2's 2 mm pitch, an approximate profile (see
+// `lib/gt2.c2f`). Estimated, from sellers' listings of the common idler
+// (they give no drawing): the flanges 18 mm across and 1 mm thick, 8.5 mm
+// in all, the two bearings MR105ZZ (5 x 10 x 4 mm), the mass, about 4 g
+// with its bearings. A smooth idler runs on the belt's back, or on its
+// teeth where the teeth's noise does not matter.
+
+// @description GT2 idler pulley, 20 teeth or smooth, 5 mm bore, with two
+// @description ball bearings: guides or tensions a GT2 belt on a 5 mm shaft or
+// @description an M5 screw.
+// @spec pulley: GT2 idler (2 mm pitch), 20 teeth or smooth
+// @spec outside diameter: 12.2 mm over the teeth, 18 mm over the flanges (estimated)
+// @spec bore: 5 mm, two MR105ZZ bearings (5 x 10 x 4 mm, estimated)
+// @spec belt: GT2, 6 mm wide
+// @spec width: 8.5 mm (estimated)
+// @spec mass: 4 g (estimated)
+// @source https://www.adafruit.com/product/1251 Adafruit, GT2 timing pulley, 20 teeth (the teeth)
+// @source https://partsbuilt.com/gt-pulley-20t-756-gt-belt PartsBuilt, a 20-tooth GT2 idler (sizes for comparison)
+
+use <lib/gt2.c2f>
+use <lib/ball_bearing.c2f>
+
+/* [Idler] */
+// Toothed for the belt's teeth, smooth for its back.
+type = "toothed"; // [toothed, smooth]
+// The number of teeth (the smooth one keeps their diameter).
+teeth = 20; // [16:1:40]
+
+module gt2_idler(type = "toothed", teeth = 20) {
+    $fn = 48;
+    tip = gt2_tip_diameter(teeth);
+    flange = tip + 5.8;
+    aluminium = [0.78, 0.79, 0.81];
+    assert(tip > 11, "gt2_idler: its bearings need 16 teeth or more");
+
+    color(aluminium) difference() {
+        union() {
+            cylinder(d = flange, h = 1);
+            translate([0, 0, 1]) linear_extrude(6.5) if (type == "toothed") gt2_outline(teeth); else circle(d = tip);
+            translate([0, 0, 7.5]) cylinder(d = flange, h = 1);
+        }
+        translate([0, 0, -1]) cylinder(d = 10, h = 10.5);
+    }
+    // The two bearings, face to face.
+    for (z = [0.25, 4.25]) translate([0, 0, z]) ball_bearing(5, 10, 4);
+}
+
+gt2_idler(type, teeth);

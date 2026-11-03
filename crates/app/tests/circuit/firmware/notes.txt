@@ -1,0 +1,5 @@
+note: amp: left out, `amp.SD` is not wired to a GPIO of the board: pinMode({pin:SD}, OUTPUT); digitalWrite({pin:SD}, HIGH);
+note: driver: left out, `driver.EEP` is not wired to a GPIO of the board: pinMode({pin:EEP}, OUTPUT); digitalWrite({pin:EEP}, HIGH);
+note: driver: left out, `driver.IN3` is not wired to a GPIO of the board: pinMode({pin:IN3}, OUTPUT); digitalWrite({pin:IN3}, LOW);
+note: driver: left out, `driver.IN4` is not wired to a GPIO of the board: pinMode({pin:IN4}, OUTPUT); digitalWrite({pin:IN4}, LOW);
+note: driver: left out, `driver.IN3` is not wired to a GPIO of the board: digitalWrite({pin:IN3}, HIGH); delay(500); digitalWrite({pin:IN3}, LOW); digitalWrite({pin:IN4}, LOW);

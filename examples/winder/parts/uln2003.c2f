@@ -16,6 +16,12 @@
 // @spec supply: 5 to 12 V
 // @spec inputs: IN1 to IN4, 5 V logic (3.3 V works)
 // @spec mass: 6 g (estimated)
+// @source https://docs.espressif.com/projects/arduino-esp32/en/latest/api/gpio.html Arduino ESP32 GPIO
+// @driver arduino builtin "Arduino.h"
+// @init global: const uint8_t {part}_half_steps[8] = { 0b0001, 0b0011, 0b0010, 0b0110, 0b0100, 0b1100, 0b1000, 0b1001 };
+// @init setup: pinMode({pin:IN1}, OUTPUT); pinMode({pin:IN2}, OUTPUT); pinMode({pin:IN3}, OUTPUT); pinMode({pin:IN4}, OUTPUT);
+// @init test: for (int s = 0; s < 512; s++) { uint8_t coils = {part}_half_steps[s % 8]; digitalWrite({pin:IN1}, (coils & 1) ? HIGH : LOW); digitalWrite({pin:IN2}, (coils & 2) ? HIGH : LOW); digitalWrite({pin:IN3}, (coils & 4) ? HIGH : LOW); digitalWrite({pin:IN4}, (coils & 8) ? HIGH : LOW); delayMicroseconds(1200); }
+// @init test: digitalWrite({pin:IN1}, LOW); digitalWrite({pin:IN2}, LOW); digitalWrite({pin:IN3}, LOW); digitalWrite({pin:IN4}, LOW);
 
 // @pin IN1 [5, 6, 1.6] input 5V "drives A"
 // @pin IN2 [7.54, 6, 1.6] input 5V "drives B"

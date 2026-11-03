@@ -1,0 +1,78 @@
+// Single 18650 cell holder for a circuit board, as Keystone's 1043 (leaf
+// springs, through-hole; its copies are the same size): the black cradle,
+// its two end walls with their spring contacts, the two pins and the two
+// locating pegs underneath, and the cell in it. The cradle's center at
+// the origin, its length along x, + towards +x, its base at z = 0, the
+// pins and pegs below it.
+// https://www.keyelco.com/userAssets/file/K75p29.pdf
+//
+// From Keystone's catalog page: the holder 77.1 mm long, 20.7 mm wide and
+// 18 mm high, its two pins (1.57 mm) 71.6 mm apart and 3.6 mm long, its
+// two pegs 3.3 mm long, set diagonally 55.2 mm apart along it and 16 mm
+// across, in 3.45 mm holes. From Panasonic's NCR18650B sheet: the cell
+// 18.5 mm across and 65.3 mm long at most, 3.6 V nominal, charged to 4.2
+// V, cut off at 2.5 V, 3200 mAh, 48.5 g at most. Estimated: the
+// cradle's walls, the springs, and the holder's mass, about 7 g: the cell
+// makes most of the weight, about 45 g (48.5 g at most for the
+// NCR18650B).
+//
+// + is the cell's voltage, 4.2 V charged, about 3 V flat: charge it with
+// a protected charger (`tp4056_usbc.c2f`), wired to its B+ and B-.
+
+// @description Holder for one 18650 Li-ion cell (3.7 V, 4.2 V charged), with
+// @description its cell: the battery of a portable project, to charge with a
+// @description TP4056 module.
+// @spec holder: single 18650, leaf springs, through-hole (Keystone 1043)
+// @spec cell: 18650 Li-ion, 18.5 x 65.3 mm, 3.6 to 3.7 V nominal, 4.2 V charged, 2.5 V cut-off
+// @spec capacity: about 3200 mAh (Panasonic NCR18650B)
+// @spec size: 77.1 x 20.7 x 18 mm
+// @spec mass: 7 g without the cell (estimated); a cell adds about 45 g (48.5 g at most)
+// @source https://www.keyelco.com/userAssets/file/K75p29.pdf Keystone, 18650 Li-ion battery holders
+// @source https://www.batteryspace.com/prod-specs/NCR18650B.pdf Panasonic NCR18650B cell
+
+/* [Battery] */
+// The cell in the holder.
+cell = true;
+
+// @pin + [35.8, 0, -3.6]  -z power_out 4.2V "cell +, 4.2 V charged"
+// @pin - [-35.8, 0, -3.6] -z ground "cell -"
+// @mount_hole [-27.6, 8, 0] d=3.45
+// @mount_hole [27.6, -8, 0] d=3.45
+
+module battery_18650_holder(cell = true) {
+    $fn = 40;
+    l = 77.1;
+    w = 20.7;
+    h = 18;
+    black = [0.10, 0.10, 0.11];
+    steel = [0.80, 0.81, 0.83];
+    echo(str("battery_18650_holder: about ", cell ? 52 : 7, " g", cell ? " with its cell" : " without a cell"));
+
+    // The cradle: the base, the low side walls, the end walls.
+    color(black) difference() {
+        union() {
+            translate([-l / 2, -w / 2, 0]) cube([l, w, 1.5]);
+            for (y = [-w / 2, w / 2 - 1.2]) translate([-l / 2, y, 0]) cube([l, 1.2, 9]);
+            for (x = [-l / 2, l / 2 - 3]) translate([x, -w / 2, 0]) cube([3, w, h]);
+        }
+        // The cell's seat, and a window in the base.
+        translate([-l / 2 + 3, 0, 1.5 + 9.25]) rotate([0, 90, 0]) cylinder(d = 18.8, h = l - 6);
+        translate([-20, -5, -1]) cube([40, 10, 3]);
+    }
+    // The pegs underneath.
+    color(black) for (p = [[-27.6, 8], [27.6, -8]]) translate([p[0], p[1], -3.3]) cylinder(d = 3.3, h = 3.3, $fn = 16);
+    // The leaf springs and the pins.
+    color(steel) for (s = [-1, 1]) {
+        translate([s * (l / 2 - 3.3) - 0.15, -4, 4]) cube([0.3, 8, 12]);
+        translate([s * 35.8, 0, -3.6]) cylinder(d = 1.57, h = 3.7, $fn = 8);
+        translate([s * 35.8 - 0.8, -0.8, -0.1]) cube([1.6, 1.6, 0.2]);
+    }
+
+    // The cell: its wrap, its + button and its - face.
+    if (cell) translate([-65.3 / 2, 0, 1.5 + 9.25]) rotate([0, 90, 0]) {
+        color([0.20, 0.55, 0.30]) cylinder(d = 18.5, h = 64.5);
+        color(steel) translate([0, 0, 64.5]) cylinder(d = 6.6, h = 0.8, $fn = 24);
+    }
+}
+
+battery_18650_holder(cell);

@@ -15,6 +15,7 @@ mod gltf;
 mod image;
 mod import;
 mod inventory;
+mod joints;
 mod mass;
 mod mesh;
 mod offset;
@@ -23,6 +24,7 @@ mod pieces;
 mod primitives;
 mod section;
 mod step;
+mod sweep;
 mod text;
 mod urdf;
 mod wavefront;
@@ -35,6 +37,7 @@ pub use gltf::{Glb, GltfAnimation, GltfOptions, glb, program_glb};
 pub use image::{VIEWS, encode_png, sheet_png};
 pub use import::objects as mesh_objects;
 pub use inventory::{PartsOptions, parts_json};
+pub use joints::JointControl;
 pub use mass::{
     BASE_TOLERANCE, Component, DEFAULT_INFILL, DEFAULT_WALL, Extra, MATERIALS, MassOptions, MassReport, Material, PartMass, Print,
     Stability, mass_properties,
@@ -43,6 +46,7 @@ pub use mesh::{Rendered, RenderMesh, Stats};
 pub use primitives::fragments;
 pub use section::{Axis, Section};
 pub use step::StepOptions;
+pub use sweep::{JointSweep, STEP_DEGREES, STEP_MM, Stop, SweepOptions, sweep};
 pub use text::set_font_folders;
 pub use urdf::{Urdf, UrdfOptions, urdf};
 pub use wavefront::{Obj, ObjOptions, obj};

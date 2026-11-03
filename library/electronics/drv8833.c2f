@@ -35,6 +35,15 @@
 // @source https://www.ti.com/product/DRV8833 product page
 // @source https://www.ti.com/lit/ds/symlink/drv8833.pdf datasheet
 // @source https://www.adafruit.com/product/3297 Adafruit's DRV8833 breakout (its mass)
+// @source https://docs.espressif.com/projects/arduino-esp32/en/latest/api/gpio.html Arduino ESP32 GPIO
+// @driver arduino builtin "Arduino.h"
+// @init setup optional: pinMode({pin:EEP}, OUTPUT); digitalWrite({pin:EEP}, HIGH);
+// @init setup optional: pinMode({pin:IN1}, OUTPUT); digitalWrite({pin:IN1}, LOW);
+// @init setup optional: pinMode({pin:IN2}, OUTPUT); digitalWrite({pin:IN2}, LOW);
+// @init setup optional: pinMode({pin:IN3}, OUTPUT); digitalWrite({pin:IN3}, LOW);
+// @init setup optional: pinMode({pin:IN4}, OUTPUT); digitalWrite({pin:IN4}, LOW);
+// @init test optional: digitalWrite({pin:IN1}, HIGH); delay(500); digitalWrite({pin:IN1}, LOW); digitalWrite({pin:IN2}, LOW);
+// @init test optional: digitalWrite({pin:IN3}, HIGH); delay(500); digitalWrite({pin:IN3}, LOW); digitalWrite({pin:IN4}, LOW);
 
 use <lib/pin_header.c2f>
 

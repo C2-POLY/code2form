@@ -45,8 +45,11 @@ user's library; a circuit (`.c2fc`, TOML) places parts and wires \
 their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
 `circuit_bom` list its wires in order and its parts, `fit` says how its \
-parts fit in their enclosure. `mass_properties` weighs a design or a \
+parts fit in their enclosure, `firmware` writes a first PlatformIO firmware \
+for its board that knows each wire and sets each part up. `mass_properties` weighs a design or a \
 circuit as printed, with its center of gravity and the angle it tips at. \
+`sweep` moves each part(joint = …) over its travel and says where a part \
+runs into another: call it after writing or changing a joint. \
 `loads` gives what turns a shaft: \
 the torque a motor must give a shaft, what its supports take and the \
 margins, to decide on a bearing, a reduction or another motor. To go from an \
@@ -258,6 +261,22 @@ fn tools() -> Value {
             }), &[]),
         },
         {
+            "name": "sweep",
+            "title": "Check a mechanism's travel",
+            "description": "Moves each part(joint = \"revolute\" | \"continuous\" | \"prismatic\") alone over its \
+                            whole travel (its limits; a full turn without them; its own length each way for a slide), \
+                            both ways from rest, a step at a time, the other joints at rest, and reports per joint the \
+                            first position each way where it, or a part written in it, runs into the rest of the model: \
+                            the two parts' names (`base` for what is outside any part) and the volume they share, more \
+                            than at rest; or that its travel is free. Parts that touch at rest (a pin in its hole) only \
+                            count when they overlap more. Call it after writing or changing a joint, before the user \
+                            prints: a stop inside the limits means a part to move, shorten or relieve, or limits to narrow.",
+            "inputSchema": schema(json!({
+                "step": { "type": "number", "exclusiveMinimum": 0, "default": c2f_geom::STEP_DEGREES, "description": "How far a turning joint goes at each step, in degrees." },
+                "step_mm": { "type": "number", "exclusiveMinimum": 0, "default": c2f_geom::STEP_MM, "description": "How far a sliding joint goes at each step, in mm." },
+            }), &[]),
+        },
+        {
             "name": "export",
             "title": "Export a model",
             "description": "Renders a model and writes it to a file: a solid as STL or 3MF (in millimeters), as \
@@ -371,6 +390,7 @@ fn tool(name: &str) -> Option<Tool> {
         "image" => image_tool,
         "export" => export_tool,
         "section" => section_tool,
+        "sweep" => sweep_tool,
         "electrify" => electrify_tool,
         _ => return circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)),
     };
@@ -507,6 +527,46 @@ fn section_tool(args: &Value) -> Result<Vec<Value>, String> {
     let (rendered, mut report) = render(args)?;
     let cut = rendered.section(axis, at).ok_or_else(|| format!("the model is empty or 2D: nothing to cut\n{}", pretty(&report)))?;
     report["section"] = cut.json(axis, at, tolerance);
+    Ok(vec![text(pretty(&report))])
+}
+
+fn sweep_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let step = |key: &str, default: f64| match args.get(key) {
+        None => Ok(default),
+        Some(v) => v.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or(format!("`{key}` must be a positive number")),
+    };
+    let options = c2f_geom::SweepOptions { step_degrees: step("step", c2f_geom::STEP_DEGREES)?, step_mm: step("step_mm", c2f_geom::STEP_MM)? };
+    let (program, _) = load(args)?;
+    let evaluated = c2f_eval::evaluate(&program);
+    let mut report = json!({ "ok": evaluated.error.is_none(), "echo": evaluated.echo, "warnings": evaluated.warnings });
+    if let Some(error) = &evaluated.error {
+        report["error"] = json!(error);
+        return Err(pretty(&report));
+    }
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
+    let joints = c2f_geom::sweep(&evaluated.nodes, base_dir, options);
+    let stop = |s: &Option<c2f_geom::Stop>| {
+        s.as_ref().map(|s| json!({ "position": s.position, "moving": s.moving, "hits": s.hit, "volume": s.volume }))
+    };
+    report["joints"] = joints
+        .iter()
+        .map(|j| {
+            json!({
+                "part": j.name,
+                "type": j.kind.name(),
+                "range": j.range,
+                "rest": j.rest,
+                "step": j.step,
+                "free": j.free(),
+                "down": stop(&j.down),
+                "up": stop(&j.up),
+                "summary": j.describe(),
+            })
+        })
+        .collect();
+    if joints.is_empty() {
+        report["note"] = json!("no part(joint = ...) moves: nothing to sweep");
+    }
     Ok(vec![text(pretty(&report))])
 }
 
@@ -844,7 +904,7 @@ mod tests {
         let server = Server::new(Registry::builtin().with(Box::new(Hello)).unwrap());
         let reply = server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
-        assert_eq!((tools[0]["name"].as_str(), tools.len()), (Some("render"), 21));
+        assert_eq!((tools[0]["name"].as_str(), tools.len()), (Some("render"), 23));
         let call = |name: &str, arguments: Value| {
             let line = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
             server.handle(&line.to_string()).unwrap()

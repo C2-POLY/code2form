@@ -18,9 +18,10 @@
 use std::ops::Range;
 use std::path::Path;
 
-use c2f_eval::node::{Matrix, Node};
+use c2f_eval::node::{IDENTITY, Joint, Matrix, Node};
 
 use crate::build::render_in;
+use crate::joints::{self, JointControl, Link};
 use crate::mesh::RenderMesh;
 use crate::parts::{self, multiply};
 
@@ -47,22 +48,88 @@ pub struct Exploded {
     /// Each part's vertices in `mesh`, and its move all the way exploded,
     /// radially and along its axis.
     pieces: Vec<(Range<usize>, [[f32; 3]; 2])>,
-    /// Each part's name, as `part("name")` gives it, the root excluded.
+    /// Each part's name, as `part("name")` gives it, made unique as the
+    /// sweep and the exports make it (`arm`, `arm 2`), the root excluded.
     names: Vec<String>,
+    /// Each part's place in its parent (by index among the parts), its
+    /// joint and the diagonal of its box, for posing it.
+    links: Vec<(Option<usize>, Matrix, Option<Joint>, f64)>,
 }
 
 impl Exploded {
     /// The parts moved `amount` of the way, from 0 (assembled) to 1, as
     /// `how` says.
     pub fn at(&self, amount: f32, how: Explode) -> RenderMesh {
+        self.posed(&[], amount, how)
+    }
+
+    /// The joints that move, in the order the model writes their parts.
+    pub fn joints(&self) -> Vec<JointControl> {
+        let links = self.links.iter().enumerate();
+        links
+            .filter_map(|(part, (_, _, joint, size))| {
+                let joint = joint.as_ref()?;
+                let range = joints::range(joint, *size)?;
+                Some(JointControl { name: self.names[part].clone(), part, kind: joint.kind, range })
+            })
+            .collect()
+    }
+
+    /// The parts at `pose`, one position per part in the order the model
+    /// writes them (degrees or millimeters; missing ones are 0), then
+    /// moved `amount` of the way apart as `how` says.
+    pub fn posed(&self, pose: &[f64], amount: f32, how: Explode) -> RenderMesh {
         let mut mesh = self.mesh.clone();
-        for (range, moves) in &self.pieces {
-            let offset = moves[how as usize];
-            for p in &mut mesh.positions[range.clone()] {
-                *p = [p[0] + amount * offset[0], p[1] + amount * offset[1], p[2] + amount * offset[2]];
+        if pose.iter().any(|&p| p != 0.0) {
+            let moves = self.moves(pose);
+            for ((range, _), m) in self.pieces.iter().zip(&moves) {
+                if *m == IDENTITY {
+                    continue;
+                }
+                for p in &mut mesh.positions[range.clone()] {
+                    *p = joints::apply(m, p.map(f64::from)).map(|v| v as f32);
+                }
+                // A turn turns the faces: their normals again.
+                for (t, corners) in mesh.positions[range.clone()].chunks(3).enumerate() {
+                    let normal = face_normal(corners);
+                    mesh.normals[range.start + 3 * t..range.start + 3 * t + 3].fill(normal);
+                }
+            }
+        }
+        if amount != 0.0 {
+            for (range, moves) in &self.pieces {
+                let offset = moves[how as usize];
+                for p in &mut mesh.positions[range.clone()] {
+                    *p = [p[0] + amount * offset[0], p[1] + amount * offset[1], p[2] + amount * offset[2]];
+                }
             }
         }
         mesh
+    }
+
+    /// Where `point`, on the part of the vertex at `index` of the mesh
+    /// drawn at `pose`, `amount` apart as `how` says, is in the model as
+    /// it is written.
+    pub fn to_model(&self, index: usize, point: [f32; 3], pose: &[f64], amount: f32, how: Explode) -> [f32; 3] {
+        let Some(piece) = self.pieces.iter().position(|(range, _)| range.contains(&index)) else { return point };
+        let offset = self.pieces[piece].1[how as usize];
+        let apart = [0, 1, 2].map(|k| f64::from(point[k] - amount * offset[k]));
+        let back = joints::invert(&self.moves(pose)[piece]);
+        joints::apply(&back, apart).map(|v| v as f32)
+    }
+
+    /// What moves each piece, the root first, from where the model puts it
+    /// to where `pose` does.
+    fn moves(&self, pose: &[f64]) -> Vec<Matrix> {
+        let links: Vec<Link> = std::iter::once(Link { parent: None, matrix: IDENTITY, joint: None })
+            .chain(self.links.iter().map(|(parent, matrix, joint, _)| Link {
+                parent: Some(parent.map_or(0, |p| p + 1)),
+                matrix: *matrix,
+                joint: joint.as_ref(),
+            }))
+            .collect();
+        let pose: Vec<f64> = std::iter::once(0.0).chain(pose.iter().copied()).collect();
+        joints::moves(&links, &pose)
     }
 
     /// How far each part moves all the way exploded, as `how` says, in the
@@ -132,7 +199,9 @@ pub fn exploded(nodes: &[Node], base_dir: &Path) -> Option<Exploded> {
         let parent = part.parent.map(|p| world[p]);
         world.push(parent.map_or(part.matrix, |m| multiply(&m, &part.matrix)));
     }
-    let mut exploded = Exploded { names: split.parts.iter().map(|p| p.name.clone()).collect(), ..Exploded::default() };
+    // Unique, as the other tools name them: `arm`, then `arm 2`.
+    let names = crate::gltf::unique(std::iter::once("base").chain(split.parts.iter().map(|p| p.name.as_str())));
+    let mut exploded = Exploded { names: names.into_iter().skip(1).collect(), ..Exploded::default() };
     let mut boxes: Vec<Box3> = Vec::new();
     let mut masses: Vec<Mass> = Vec::new();
     let identity = c2f_eval::node::IDENTITY;
@@ -154,6 +223,9 @@ pub fn exploded(nodes: &[Node], base_dir: &Path) -> Option<Exploded> {
         around[parent] = union(around[parent], around[i + 1]);
         weighs[parent] = weighs[parent].plus(weighs[i + 1]);
     }
+    let diagonal = |b: Box3| b.map_or(0.0, |(lo, hi)| (0..3).map(|k| f64::from(hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt());
+    exploded.links =
+        split.parts.iter().enumerate().map(|(i, p)| (p.parent, p.matrix, p.joint.clone(), diagonal(around[i + 1]))).collect();
     let mut depth: Vec<i32> = Vec::with_capacity(split.parts.len());
     for (i, part) in split.parts.iter().enumerate() {
         depth.push(part.parent.map_or(0, |p| depth[p] + 1));
@@ -225,6 +297,15 @@ fn union(a: Option<([f32; 3], [f32; 3])>, b: Option<([f32; 3], [f32; 3])>) -> Op
         (a, None) => a,
         (None, b) => b,
     }
+}
+
+/// The normal of a triangle's face, as the mesh draws it.
+fn face_normal(corners: &[[f32; 3]]) -> [f32; 3] {
+    let [a, b, c] = [corners[0], corners[1], corners[2]];
+    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    unit(n).unwrap_or([0.0, 0.0, 1.0])
 }
 
 /// `mesh` moved by `matrix`; a mirror turns its triangles over, so that
@@ -395,6 +476,57 @@ mod tests {
             assert_eq!(hips, [0.0; 3], "{how:?}");
             assert!(leg[2] < 0.0, "{how:?}: {leg:?}");
         }
+    }
+
+    #[test]
+    fn the_joints_that_move_have_a_range() {
+        let exploded = exploded_src(
+            "cube(10);
+            part(\"base\") {
+                part(\"turn\", joint = \"continuous\") cube(1);
+                part(\"bend\", joint = \"revolute\", limits = [-90, 0]) cube(1);
+                part(\"slide\", joint = \"prismatic\", axis = [1, 0, 0]) cube([3, 4, 12]);
+                part(\"glued\", joint = \"fixed\") cube(1);
+            }",
+        )
+        .unwrap();
+        let joints = exploded.joints();
+        let joints: Vec<(&str, usize, [f64; 2])> = joints.iter().map(|j| (j.name.as_str(), j.part, j.range)).collect();
+        assert_eq!(joints, [("turn", 1, [-180.0, 180.0]), ("bend", 2, [-90.0, 0.0]), ("slide", 3, [-13.0, 13.0])]);
+    }
+
+    #[test]
+    fn a_pose_turns_a_part_and_what_it_holds_about_its_joint() {
+        // An arm along X from (10, 0, 0), turning about Z, a hand at its end.
+        let src = "cube(1);
+            translate([10, 0, 0]) part(\"arm\", joint = \"revolute\", limits = [-90, 90]) {
+                cube([10, 1, 1]);
+                translate([10, 0, 0]) part(\"hand\") cube(1);
+            }";
+        let exploded = exploded_src(src).unwrap();
+        let posed = exploded.posed(&[90.0, 0.0], 0.0, Explode::Radial);
+        let box_of = |range: std::ops::Range<usize>| {
+            posed.positions[range].iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| {
+                ([lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])], [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])])
+            })
+        };
+        // The root's cube stays; the arm points along Y from (10, 0, 0); the
+        // hand is at its end, (10, 10, 0) turned too.
+        assert_eq!(&posed.positions[..36], &exploded.mesh.positions[..36]);
+        let (lo, hi) = box_of(36..72);
+        assert!(close(lo, [9.0, 0.0, 0.0]) && close(hi, [10.0, 10.0, 1.0]), "{lo:?} {hi:?}");
+        let (lo, hi) = box_of(72..108);
+        assert!(close(lo, [9.0, 10.0, 0.0]) && close(hi, [10.0, 11.0, 1.0]), "{lo:?} {hi:?}");
+        // The normals turned with the faces: still out of the arm.
+        for (p, n) in posed.positions[36..72].iter().zip(&posed.normals[36..72]) {
+            let out = (p[0] - 9.5) * n[0] + (p[1] - 5.0) * n[1] + (p[2] - 0.5) * n[2];
+            assert!(out > 0.0, "{p:?} {n:?}");
+        }
+        // A point on the posed hand goes back to the hand as written.
+        let back = exploded.to_model(72, [9.5, 10.5, 1.0], &[90.0, 0.0], 0.0, Explode::Radial);
+        assert!(close(back, [20.5, 0.5, 1.0]), "{back:?}");
+        // At rest, the pose is the model.
+        assert_eq!(exploded.posed(&[0.0, 0.0], 0.0, Explode::Radial), exploded.mesh);
     }
 
     #[test]

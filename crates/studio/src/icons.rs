@@ -21,6 +21,8 @@ pub enum Icon {
     Explode,
     /// A box cut open by a plane.
     Section,
+    /// The joints of a mechanism: an arm bent at its pivots.
+    Joints,
     Settings,
     Play,
     Pause,
@@ -182,6 +184,15 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
                 line(&[(x, y), (x + (10.0 - x).min(y - 5.0), y - (10.0 - x).min(y - 5.0))]);
             }
             line(&[(10.0, 2.5), (17.0, 5.5), (17.0, 17.5), (10.0, 14.5), (10.0, 2.5)]);
+        }
+        Icon::Joints => {
+            // A base, an upper arm and a forearm, a pivot at each joint.
+            line(&[(3.0, 17.0), (11.0, 17.0)]);
+            line(&[(7.0, 15.0), (7.0, 8.0)]);
+            line(&[(8.5, 6.5), (15.0, 4.0)]);
+            for (x, y) in [(7.0, 15.0), (7.0, 6.5)] {
+                painter.circle_stroke(p(x, y), 1.8 * s, stroke);
+            }
         }
         Icon::Reset => {
             // Three quarters of a circle, turning back, with its arrowhead.

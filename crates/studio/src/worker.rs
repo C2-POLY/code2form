@@ -99,6 +99,9 @@ pub enum Reply {
     /// generation follows with them.
     Circuit { generation: u64, circuit: Arc<c2f_circuit::Circuit> },
     Exported { target: PathBuf, result: Result<String, String> },
+    /// The travel of the shown model's joints, for the tab that asked, and
+    /// the text it was rendered from.
+    Swept { tab: u64, source: String, result: Result<Vec<c2f_geom::JointSweep>, String> },
 }
 
 enum Request {
@@ -106,6 +109,8 @@ enum Request {
     Export { target: PathBuf, format: Format, options: ExportOptions },
     /// The sheet of views of the model, as PNG.
     Sheet(PathBuf),
+    /// The travel of the model's joints: where its parts hit, for a tab.
+    Sweep(u64),
     Libraries(Vec<PathBuf>),
 }
 
@@ -244,6 +249,12 @@ impl Worker {
         let _ = self.requests.send(Request::Sheet(target));
     }
 
+    /// Moves each joint of the last good model over its travel, to find
+    /// where its parts hit, for the tab `tab`.
+    pub fn sweep(&self, tab: u64) {
+        let _ = self.requests.send(Request::Sweep(tab));
+    }
+
     pub fn latest(&self) -> u64 {
         self.latest.load(Ordering::Acquire)
     }
@@ -264,6 +275,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         let mut render = None;
         let mut exports = Vec::new();
         let mut sheets = Vec::new();
+        let mut sweep = None;
         for request in std::iter::once(first).chain(requests.try_iter()) {
             match request {
                 Request::Render { generation, source, path, values, t } => {
@@ -271,6 +283,7 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
                 }
                 Request::Export { target, format, options } => exports.push((target, format, options)),
                 Request::Sheet(target) => sheets.push(target),
+                Request::Sweep(tab) => sweep = Some(tab),
                 Request::Libraries(folders) => {
                     library_paths = folders.into_iter().chain(defaults.iter().cloned()).collect()
                 }
@@ -318,6 +331,13 @@ fn run(requests: &Receiver<Request>, replies: &Sender<Reply>, latest: &AtomicU64
         for target in sheets {
             let result = sheet(shown.as_ref(), &target);
             if replies.send(Reply::Exported { target, result }).is_err() {
+                return;
+            }
+            ctx.request_repaint();
+        }
+        if let Some(tab) = sweep {
+            let source = shown.as_ref().map(|s| s.source.clone()).unwrap_or_default();
+            if replies.send(Reply::Swept { tab, source, result: swept(shown.as_ref()) }).is_err() {
                 return;
             }
             ctx.request_repaint();
@@ -629,6 +649,18 @@ fn pipeline(
     Ok((rendered, program, output.origins))
 }
 
+/// The travel of the joints of the model on screen, with its values and
+/// time.
+fn swept(shown: Option<&Shown>) -> Result<Vec<c2f_geom::JointSweep>, String> {
+    let Shown { program, .. } = shown.ok_or_else(|| tr("there is no model to check yet", "il n’y a pas encore de modèle à vérifier").to_string())?;
+    catch_unwind(AssertUnwindSafe(|| {
+        let output = c2f_eval::evaluate(program);
+        let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
+        c2f_geom::sweep(&output.nodes, base_dir, c2f_geom::SweepOptions::default())
+    }))
+    .map_err(|panic| tr!("internal error: {}", "erreur interne : {}", panic_message(&*panic)))
+}
+
 fn export(shown: Option<&mut Shown>, target: &Path, format: Format, options: &ExportOptions) -> Result<String, String> {
     let Shown { rendered, program, source } = shown.ok_or_else(|| tr("there is no model to export yet", "il n’y a pas encore de modèle à exporter").to_string())?;
     match format {
@@ -838,6 +870,29 @@ mod tests {
     }
 
     #[test]
+    fn the_travel_of_the_shown_model_comes_back_with_its_text() {
+        let worker = Worker::spawn(egui::Context::default());
+        let source = "rotate([0, 0, 45]) translate([14, -1, 0]) cube([2, 2, 5]);
+            part(\"arm\", joint = \"revolute\", limits = [-90, 90]) translate([0, -1, 0]) cube([20, 2, 2]);";
+        let last = worker.render(source.into(), path(), Vec::new(), 0.0);
+        wait_for(&worker, last);
+        worker.sweep(7);
+        let start = Instant::now();
+        let swept = loop {
+            if let Some(Reply::Swept { tab, source, result }) = worker.poll().into_iter().find(|r| matches!(r, Reply::Swept { .. })) {
+                assert_eq!(tab, 7);
+                break (source, result);
+            }
+            assert!(start.elapsed() < Duration::from_secs(30), "no travel");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(swept.0, source);
+        let joints = swept.1.expect("a travel");
+        assert_eq!(joints.len(), 1);
+        assert!(joints[0].up.is_some() && joints[0].down.is_none(), "{}", joints[0].describe());
+    }
+
+    #[test]
     fn only_the_newest_render_is_reported_and_kept_for_export() {
         let worker = Worker::spawn(egui::Context::default());
         worker.render("cube(1);".into(), path(), Vec::new(), 0.0);
@@ -848,7 +903,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 Reply::Rendered(o) => Some(o.generation),
-                Reply::Exported { .. } | Reply::Circuit { .. } => None,
+                Reply::Exported { .. } | Reply::Circuit { .. } | Reply::Swept { .. } => None,
             })
             .collect();
         assert!(generations.windows(2).all(|w| w[0] < w[1]), "{generations:?}");

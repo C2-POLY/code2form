@@ -1,0 +1,88 @@
+// Subminiature limit switch with a roller lever, the KW12-3 sold for 3D
+// printers' end stops (KW10, KW11-3Z and SS-5GL2 are the same size): the
+// black case, its two mounting holes, the red plunger, the steel lever
+// on its hinge with its roller, and the three solder terminals COM, NC
+// and NO underneath. The case's corner at the origin, its length along
+// +x, its faces at y = 0 and y = 6.4, the terminals pointing -z, the
+// lever on top.
+// https://omronfs.omron.com/en_US/ecb/products/pdf/en-ss.pdf
+//
+// The KW12-3 has no maker's drawing; its sellers give 20 x 10 x 6.4 mm,
+// SPDT, 5 A at 125/250 V AC, and it copies the outline of Omron's SS
+// subminiature switch, whose sheet gives: the case 19.8 x 10.2 x 6.4 mm,
+// two 2.35 mm holes 9.5 mm apart (for M2.3 screws), the terminals
+// 1.6 mm from the end and 8.8 and 16.1 mm from COM (COM, NC, NO), the
+// hinge roller lever's roller 4.8 mm across and 3.2 mm wide, 0.49 N to
+// operate it, about 1.6 g with a pin plunger. Estimated: the holes 2.9
+// mm up from the terminals' side, the lever's shape and rest height
+// (the roller's top about 15.5 mm up), the terminals 3.2 mm long, and
+// the mass with the lever, about 2 g.
+//
+// Wiring for a GPIO: COM to ground, NO to a GPIO with its pull-up on, so
+// the pin reads LOW when the lever is pressed. NC opens when pressed,
+// for a fail-safe end stop that also trips on a cut wire.
+
+// @description Limit switch with a roller lever (KW12-3, SPDT): an end stop
+// @description that tells a GPIO when a carriage, a door or an arm reaches
+// @description the end of its travel.
+// @spec switch: subminiature snap-action, SPDT (COM, NO, NC)
+// @spec rating: 5 A at 125 V AC, 3 A at 250 V AC (Omron SS-5)
+// @spec operating force: 0.49 N at the roller (Omron SS-5GL2)
+// @spec mounting: two 2.35 mm holes, 9.5 mm apart, for M2 or M2.3 screws
+// @spec size: 19.8 x 10.2 x 6.4 mm without its lever
+// @spec mass: 2 g (estimated)
+// @source https://omronfs.omron.com/en_US/ecb/products/pdf/en-ss.pdf Omron SS subminiature basic switch (the KW12-3's outline)
+// @source https://hubtronics.in/switches/kw-12-micro-switch KW12 micro switch, seller's figures
+// @source https://docs.espressif.com/projects/arduino-esp32/en/latest/api/gpio.html Arduino ESP32 GPIO
+// @driver arduino builtin "Arduino.h"
+// @init setup: pinMode({pin:NO}, INPUT_PULLUP);
+// @init test: Serial.printf("{part}: %s\n", digitalRead({pin:NO}) == LOW ? "pressed" : "released");
+
+/* [Switch] */
+// The actuator on top of the case.
+lever = "roller"; // [roller, lever, none]
+
+// @pin COM [1.6, 3.2, -3.2]  -z passive 250V "common: to ground"
+// @pin NC  [10.4, 3.2, -3.2] -z passive 250V "normally closed: opens when pressed"
+// @pin NO  [17.7, 3.2, -3.2] -z passive 250V "normally open: to a GPIO with its pull-up"
+// @mount_hole [5.15, 0, 2.9] d=2.35 -y
+// @mount_hole [14.65, 0, 2.9] d=2.35 -y
+
+module limit_switch_kw12(lever = "roller") {
+    $fn = 24;
+    l = 19.8;
+    h = 10.2;
+    t = 6.4;
+    steel = [0.80, 0.81, 0.83];
+    tin = [0.85, 0.80, 0.62];
+
+    // The case and its two holes.
+    color([0.10, 0.10, 0.11]) difference() {
+        cube([l, t, h]);
+        for (x = [l / 2 - 4.75, l / 2 + 4.75]) translate([x, -1, 2.9]) rotate([-90, 0, 0]) cylinder(d = 2.35, h = t + 2);
+    }
+    // The plunger.
+    color([0.80, 0.15, 0.12]) translate([7.5, t / 2, h]) cylinder(d = 2.5, h = 0.8, $fn = 16);
+
+    // The terminals.
+    color(tin) for (x = [1.6, 10.4, 17.7]) translate([x - 1.6, t / 2 - 0.25, -3.2]) difference() {
+        cube([3.2, 0.5, 3.2]);
+        translate([1.6, -1, 1.4]) rotate([-90, 0, 0]) cylinder(d = 1.2, h = 3, $fn = 8);
+    }
+
+    // The lever, hinged at the +x end, resting on the plunger and rising
+    // towards its free end over x = 3.
+    if (lever != "none") {
+        color(steel) translate([0, t / 2 - 1.6, 0]) hull() {
+            translate([l - 1.5, 0, h + 0.5]) cube([1, 3.2, 0.3]);
+            translate([3.0, 0, h + 2.6]) cube([1, 3.2, 0.3]);
+        }
+        color(steel) translate([l - 1.5, t / 2 - 1.6, h - 1]) cube([1, 3.2, 1.8]);
+        if (lever == "roller") {
+            color(steel) for (y = [t / 2 - 1.9, t / 2 + 1.6]) translate([2.4, y, h + 2.6]) cube([2.4, 0.3, 2.6]);
+            color([0.92, 0.92, 0.90]) translate([3.5, t / 2 - 1.6, h + 2.9]) rotate([-90, 0, 0]) cylinder(d = 4.8, h = 3.2);
+        }
+    }
+}
+
+limit_switch_kw12(lever);

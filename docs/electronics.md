@@ -124,6 +124,40 @@ Their text runs to the end of the line. Give only figures your sources
 state, and a `@source` for each page they come from. The parts of the
 library each have one, from their maker's product page and datasheet.
 
+### Add what its firmware needs
+
+A board says what PlatformIO calls it and its platform; a part says
+which library drives it and the code that sets it up, so that Code2Form
+can write a first firmware for a circuit (section 6):
+
+```scad
+// @board seeed_xiao_esp32s3 espressif32
+```
+
+```scad
+// @driver arduino "adafruit/Adafruit NeoPixel@^1.12.3" "Adafruit_NeoPixel.h"
+// @init global: Adafruit_NeoPixel {part}(12, {pin:DIN}, NEO_GRB + NEO_KHZ800);
+// @init setup: {part}.begin(); {part}.setBrightness(30);
+// @init test: {part}.fill({part}.Color(0, 0, 60)); {part}.show(); delay(300); {part}.clear(); {part}.show();
+```
+
+| Annotation | Form |
+|---|---|
+| `@board` | the board and its platform as PlatformIO names them, two words |
+| `@driver` | a framework (`arduino`, `espidf`), the library as PlatformIO's `lib_deps` names it in quotes, or `builtin` when the framework has it, then the header to include in quotes; once per framework |
+| `@init` | a section, `global` (declarations), `setup` (run once) or `test` (a short check that the part answers, run in the loop), then `optional` for a line the rest does not need, a colon and a line of code; several lines of a section run in order |
+
+In the code, `{part}` is the part's name in the circuit (`ring`) and
+`{pin:DIN}` the constant of the board pin wired to its pin `DIN`
+(`RING_DIN`). A part with a line naming a pin that is not wired to a
+GPIO of the board is left out of the firmware, as the rest of its code
+may need that line; a line the rest does not need, as a shutdown or a
+sleep pin's, says `optional` after its section
+(`@init setup optional: …`) and is left out alone. A board pin's GPIO number comes from
+its label, `"GPIO4, A3, touch 4"`. The library's boards and the parts
+that talk to them carry these lines; the firmware is written for the
+Arduino framework.
+
 ### Check what you wrote
 
 Put the annotations at the top of the file and save it as
@@ -767,6 +801,7 @@ c2f circuit bom grogu.c2fc              # the bill of materials
 c2f circuit bom --csv grogu.c2fc
 c2f circuit fit grogu.c2fc              # each part's room in the enclosure, and what does not fit
 c2f circuit fit --clearance 1 grogu.c2fc
+c2f circuit firmware grogu.c2fc         # a first PlatformIO firmware, in firmware/ beside it
 c2f circuit stl grogu.c2fc > grogu.stl  # the parts assembled (not the wires)
 c2f circuit 3mf grogu.c2fc > grogu.3mf
 c2f mass grogu.c2fc                     # its masses, center of gravity and tipping angle
@@ -808,6 +843,39 @@ touch_plate              1  electronics/touch_plate.c2f                     touc
 With `--csv`, the wiring list's columns are
 `step,from,from_label,to,to_label,color,label,length_mm`, and the bill
 of materials' `name,quantity,file,params,instances`.
+
+### A first firmware
+
+`c2f circuit firmware` (or File › Generate the Firmware in the app, on
+a saved circuit) writes a PlatformIO project for the board the parts are
+wired to, in `firmware/` beside the circuit (`-o folder` elsewhere):
+
+- `include/pins.h`: a constant per pin of a part wired to a GPIO of the
+  board, named after the part and its pin, with the wire it comes from:
+
+  ```c
+  // amp: electronics/max98357a.c2f
+  #define AMP_LRC  5   // xiao.D4, green wire
+  #define AMP_BCLK 4   // xiao.D3, blue wire
+  #define AMP_DIN  6   // xiao.D5, yellow wire
+  ```
+
+- `platformio.ini`: the board, its platform, the Arduino framework and
+  the libraries the parts' `@driver` lines name;
+- `src/main.cpp`: their headers, then `setup()` sets each part up and
+  `loop()` tries them in turn, printing each one's name on the serial
+  port, from the parts' `@init` lines: Grogu's amplifier beeps, its
+  microphone prints its level, its motor turns half a second, its touch
+  pad prints what it reads.
+
+Build and flash it with `pio run -t upload`, and watch with
+`pio device monitor`: a part that stays silent is wired wrong. Then write
+the object's own program in `main.cpp`, with the constants of `pins.h`.
+Generated again after the circuit changed, only `pins.h` is rewritten:
+`platformio.ini` and `main.cpp` are yours from the first time. A circuit
+with an error, or a reserved pin wired without `allow`, gets no firmware;
+the set-up lines whose pins reach no GPIO (Grogu's driver sleep pin,
+tied to its supply) are left out, said in a comment and in a note.
 
 ## 7. With an AI agent
 

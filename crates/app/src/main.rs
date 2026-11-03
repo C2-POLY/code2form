@@ -35,6 +35,11 @@ commands:
   section the outline where a plane cuts the solid, as JSON (--axis,
           --at, --tolerance): to measure a mesh before drawing it again;
           through the axis of a turned part, its profile
+  sweep   whether the parts hit each other as the mechanism moves: each
+          part(joint = ...) goes alone over its travel, both ways from
+          rest, and the first position each way where it (or a part it
+          holds) runs into the rest is printed; fails when one does
+          (--step, --step-mm)
   png     a picture of the model from --view (default diagonal), 800
           by 600 pixels; --view sheet: its sheet of views, four sides
           at one scale with its size in millimeters (--section adds a
@@ -44,8 +49,9 @@ commands:
   check   parse only and report syntax errors and badly written
           electronics annotations
   pins    print the pins, mount holes and ports a part declares
-          (`// @pin`, `// @mount_hole`, `// @port`) and its sheet
-          (`// @description`, `// @spec`, `// @source`), one per line
+          (`// @pin`, `// @mount_hole`, `// @port`), its sheet
+          (`// @description`, `// @spec`, `// @source`) and its firmware
+          (`// @board`, `// @driver`, `// @init`), one per line
   mass    what a design (or a .c2fc circuit) weighs printed: each
           part()'s volume and mass, the total, the center of gravity,
           and the angle it leans before it tips; --material (PLA,
@@ -78,6 +84,11 @@ circuit commands, on a `.c2fc` circuit:
           the length is the routed curve's plus a margin
   bom     print the bill of materials: the parts by file and params,
           their quantity and the instances' names
+  firmware  write a first PlatformIO firmware for the board the parts
+          are wired to (-o <folder>, default firmware/ beside the
+          circuit): include/pins.h, a constant per pin wired to a GPIO,
+          rewritten each time; platformio.ini and src/main.cpp, which
+          set up each part and try it, written once and then yours
   stl     the parts, placed and evaluated with their params, as one
           ASCII STL (wires are not exported)
   3mf     the same, as a 3MF package (binary: redirect it to a file)
@@ -102,6 +113,10 @@ options:
   --at <mm>       section: where along it (default 0)
   --tolerance <mm>  section: points this close to a straight line are
                   left out (default 0.01)
+  --step <deg>    sweep: how far a turning joint goes at each step
+                  (default 2)
+  --step-mm <mm>  sweep: how far a sliding joint goes at each step
+                  (default 0.5)
   --scale <m>     glb: meters per model unit (default 0.001: a model in
                   millimeters keeps its size; 1 makes each unit a meter)
   --duration <s>  glb of a model that reads $t: the seconds its parts take
@@ -146,6 +161,8 @@ struct Options {
     /// `--view sheet` and `--section`, for `png`.
     sheet: bool,
     cut: bool,
+    /// `--step` and `--step-mm`, for `sweep`.
+    sweep: c2f_geom::SweepOptions,
 }
 
 impl Options {
@@ -157,13 +174,14 @@ impl Options {
         let (mut output, mut view, mut density) = (None, None, None);
         let mut section = (c2f_geom::Axis::Z, 0.0, 0.01);
         let (mut sheet, mut cut) = (false, false);
+        let mut sweep = c2f_geom::SweepOptions::default();
         while let Some((arg, tail)) = rest.split_first() {
             rest = tail;
             let animation = gltf.animation.get_or_insert_with(Default::default);
             let positive = |value: &String| value.parse().ok().filter(|v: &f64| v.is_finite() && *v > 0.0);
             match arg.as_str() {
                 "--scale" | "--duration" | "--fps" | "--animation" | "-o" | "--view" | "--density" | "--axis" | "--at"
-                | "--tolerance" => {
+                | "--tolerance" | "--step" | "--step-mm" => {
                     let (value, tail) = rest.split_first()?;
                     rest = tail;
                     match arg.as_str() {
@@ -177,6 +195,8 @@ impl Options {
                         "--axis" => section.0 = c2f_geom::Axis::named(value)?,
                         "--at" => section.1 = value.parse().ok().filter(|v: &f64| v.is_finite())?,
                         "--tolerance" => section.2 = value.parse().ok().filter(|v: &f64| v.is_finite() && *v >= 0.0)?,
+                        "--step" => sweep.step_degrees = positive(value)?,
+                        "--step-mm" => sweep.step_mm = positive(value)?,
                         _ => animation_name = Some(value.clone()),
                     }
                     continue;
@@ -236,6 +256,7 @@ impl Options {
             section,
             sheet,
             cut,
+            sweep,
         })
     }
 
@@ -274,7 +295,7 @@ fn run() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "obj", "step", "urdf", "json", "section", "png", "svg", "dxf"]
+    if !["ast", "check", "pins", "csg", "stl", "3mf", "glb", "obj", "step", "urdf", "json", "section", "sweep", "png", "svg", "dxf"]
         .contains(&options.command.as_str())
     {
         eprintln!("unknown command `{}`\n\n{USAGE}", options.command);
@@ -342,6 +363,7 @@ fn run() -> ExitCode {
             _ => ExitCode::FAILURE,
         },
         "section" => section(&program, &options),
+        "sweep" => sweep(&program, &options),
         "png" => png(&program, &options),
         // `csg`, or an export format.
         command => csg(&mut program, &src, Export::named(command), &options),
@@ -389,6 +411,9 @@ fn pins(src: &str, file_name: &str) -> ExitCode {
     printed.extend(annotations.description.iter().map(|a| (a.span, a.to_string())));
     printed.extend(annotations.specs.iter().map(|a| (a.span, a.to_string())));
     printed.extend(annotations.sources.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.board.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.drivers.iter().map(|a| (a.span, a.to_string())));
+    printed.extend(annotations.inits.iter().map(|a| (a.span, a.to_string())));
     printed.sort_by_key(|(span, _)| span.start);
     let lines = c2f_lang::span::LineIndex::new(src);
     for (span, text) in printed {
@@ -530,6 +555,28 @@ fn section(program: &c2f_eval::Program, options: &Options) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Prints each joint's travel, and fails when a part runs into another.
+fn sweep(program: &c2f_eval::Program, options: &Options) -> ExitCode {
+    let output = c2f_eval::evaluate(program);
+    for warning in &output.warnings {
+        eprintln!("WARNING: {warning}");
+    }
+    if let Some(error) = &output.error {
+        eprintln!("ERROR: {error}");
+        return ExitCode::FAILURE;
+    }
+    let base_dir = program.files[0].path.parent().unwrap_or(Path::new(""));
+    let joints = c2f_geom::sweep(&output.nodes, base_dir, options.sweep);
+    if joints.is_empty() {
+        println!("no part(joint = ...) moves: nothing to sweep");
+        return ExitCode::SUCCESS;
+    }
+    for joint in &joints {
+        println!("{}", joint.describe());
+    }
+    if joints.iter().all(c2f_geom::JointSweep::free) { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
 /// Writes a picture of the model, or its sheet of views, as PNG.
