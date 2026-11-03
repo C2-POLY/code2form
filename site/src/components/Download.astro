@@ -90,8 +90,6 @@ const cliName = release?.cli?.name ?? 'c2f-<version>-macos-universal.zip';
     <ol class="steps">
       {s.firstSteps.map((step) => <li>{step}</li>)}
     </ol>
-    <p>{s.firstTerminal}</p>
-    <pre class="term"><code>xattr -dr com.apple.quarantine /Applications/Code2Form.app</code></pre>
   </section>
 
   <section class="step" aria-labelledby="mcp-title">
@@ -102,7 +100,6 @@ const cliName = release?.cli?.name ?? 'c2f-<version>-macos-universal.zip';
         {s.mcpSteps[0]}
         <pre class="term"><code>{`cd ~/Downloads
 unzip ${cliName} -d c2f-cli
-xattr -cr c2f-cli
 mkdir -p ~/.local/bin && mv c2f-cli/c2f ~/.local/bin/`}</code></pre>
       </li>
       <li>
