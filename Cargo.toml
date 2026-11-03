@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/lang", "crates/eval", "crates/geom", "crates/circuit", "crates/sketch", "crates/agent", "crates/mobile", "crates/app", "crates/studio"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
