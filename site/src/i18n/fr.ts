@@ -163,18 +163,16 @@ const fr: Strings = {
     sha: 'SHA-256',
     firstTitle: 'Le premier lancement sur Mac',
     firstLead:
-      'Code2Form n’est pas encore notarié par Apple : macOS l’arrête la première fois. Une fois autorisé, il s’ouvre normalement.',
+      'Code2Form est signé et notarié par Apple : macOS le vérifie et l’ouvre comme n’importe quelle app.',
     firstSteps: [
       'Décompressez Code2Form et placez Code2Form.app dans Applications.',
-      'Ouvrez-le. macOS indique qu’il ne peut pas le vérifier : cliquez sur Terminé.',
-      'Ouvrez Réglages Système › Confidentialité et sécurité, descendez, et cliquez sur Ouvrir quand même à côté de Code2Form. Confirmez avec votre mot de passe.',
+      'Ouvrez-le. La première fois, macOS rappelle qu’il vient d’Internet : cliquez sur Ouvrir.',
     ],
-    firstTerminal: 'Ou, dans un terminal, sortez l’app de la quarantaine :',
     mcpTitle: 'Le serveur MCP, pour Claude Code',
     mcpLead:
       'c2f mcp permet à un agent comme Claude Code d’écrire un modèle, de le calculer, d’en regarder une image, de le vérifier et de l’exporter, sans ouvrir de fenêtre.',
     mcpSteps: [
-      'Décompressez c2f, sortez-le de la quarantaine, et placez-le dans un dossier de votre PATH :',
+      'Décompressez c2f et placez-le dans un dossier de votre PATH :',
       'Ajoutez-le à Claude Code :',
     ],
     mcpMore: 'Les outils et prompts qu’il propose',
