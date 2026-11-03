@@ -18,6 +18,14 @@
 # Both slices come from one Rust toolchain that has the targets
 # aarch64-apple-darwin and x86_64-apple-darwin: C2F_TOOLCHAIN, else the
 # first rustup toolchain that has them, else the cargo on PATH.
+#
+# Signing: with a "Developer ID Application" certificate in the keychain
+# (C2F_SIGN_IDENTITY names one, else the first found), the app and c2f
+# are signed with it and the hardened runtime, then notarized by Apple
+# with the notarytool profile C2F_NOTARY_PROFILE (default "code2form",
+# made once with `xcrun notarytool store-credentials code2form ...`), and
+# the app's ticket is stapled: macOS opens them without a warning. Without
+# the certificate, they keep an ad-hoc signature, for local builds.
 set -euo pipefail
 
 install=false
@@ -121,9 +129,20 @@ else
     "release's Contents/Resources to include it)" >&2
 fi
 
-# An ad-hoc signature: enough for a locally built app on Apple silicon.
-codesign --force --sign - "$app"
-codesign --force --sign - "$universal/c2f"
+identity="${C2F_SIGN_IDENTITY:-$(security find-identity -v -p codesigning |
+  sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n 1)}"
+if [[ -n "$identity" ]]; then
+  # The hardened runtime and a secure timestamp, which notarization needs.
+  codesign --force --options runtime --timestamp --sign "$identity" "$universal/c2f"
+  codesign --force --options runtime --timestamp --sign "$identity" "$app"
+  codesign --verify --strict --verbose=1 "$app"
+  echo "signed with $identity"
+else
+  # An ad-hoc signature: enough for a locally built app on Apple silicon.
+  codesign --force --sign - "$app"
+  codesign --force --sign - "$universal/c2f"
+  echo "note: no Developer ID Application certificate: signed ad hoc, not notarized" >&2
+fi
 echo "built $app ($version, $(lipo -archs "$app/Contents/MacOS/code2form"))"
 
 app_zip="$root/target/release/Code2Form-$version-macos-universal.zip"
@@ -131,6 +150,26 @@ cli_zip="$root/target/release/c2f-$version-macos-universal.zip"
 rm -f "$app_zip" "$cli_zip"
 ditto -c -k --keepParent "$app" "$app_zip"
 zip -q -j "$cli_zip" "$universal/c2f" "$root/LICENSE-MIT" "$root/LICENSE-APACHE"
+
+if [[ -n "$identity" ]]; then
+  profile="${C2F_NOTARY_PROFILE:-code2form}"
+  for zip in "$app_zip" "$cli_zip"; do
+    echo "notarizing $(basename "$zip")"
+    xcrun notarytool submit "$zip" --keychain-profile "$profile" --wait --output-format json > "$zip.notary.json"
+    status="$(sed -n 's/.*"status" *: *"\([^"]*\)".*/\1/p' "$zip.notary.json")"
+    rm -f "$zip.notary.json"
+    if [[ "$status" != "Accepted" ]]; then
+      echo "notarization of $(basename "$zip") ended $status: see xcrun notarytool log <id> --keychain-profile $profile" >&2
+      exit 1
+    fi
+  done
+  # The app carries its ticket, for a Mac that is offline at first launch;
+  # a bare binary cannot, so c2f's is checked online.
+  xcrun stapler staple "$app"
+  rm -f "$app_zip"
+  ditto -c -k --keepParent "$app" "$app_zip"
+  spctl --assess --type execute --verbose=2 "$app"
+fi
 echo "zipped $app_zip and $cli_zip"
 
 if $install; then
