@@ -76,6 +76,27 @@ impl<T> Shelf<T> {
         self.active = self.others.len();
     }
 
+    /// Takes every tab out, `blank` taking the active one's place: the tabs
+    /// in order, and which was active.
+    pub fn take_all(&mut self, current: &mut T, blank: T) -> (Vec<T>, usize) {
+        let active = std::mem::replace(current, blank);
+        let mut tabs = std::mem::take(&mut self.others);
+        tabs.insert(self.active.min(tabs.len()), active);
+        let index = std::mem::replace(&mut self.active, 0);
+        (tabs, index)
+    }
+
+    /// Puts `tabs` in, tab `active` the active one, in place of the tabs
+    /// there were, which must be none but `current`: it is given back.
+    /// `tabs` must not be empty.
+    pub fn put_all(&mut self, current: &mut T, mut tabs: Vec<T>, active: usize) -> T {
+        let active = active.min(tabs.len() - 1);
+        let shown = tabs.remove(active);
+        self.others = tabs;
+        self.active = active;
+        std::mem::replace(current, shown)
+    }
+
     /// Closes tab `index` and returns it, unless it is the last one. The
     /// active tab gives its place to the next one, or to the previous one
     /// when it was the last.
@@ -166,6 +187,8 @@ pub struct Session {
     pub paths: Vec<PathBuf>,
     pub active: Option<usize>,
     pub chat: bool,
+    /// The project open, its `.c2fproj`.
+    pub project: Option<PathBuf>,
 }
 
 impl Session {
@@ -196,6 +219,9 @@ pub fn store() -> Option<PathBuf> {
 const ACTIVE: &str = "* ";
 /// The chat's line: not a path, which versions before it skip.
 const CHAT: &str = "chat: open";
+/// The project's line, before its file: not a path, which versions before
+/// it skip.
+const PROJECT: &str = "project: ";
 /// The line of the version that showed the agent in the editor column,
 /// read as the chat open (`editor: agent`) or not.
 const EDITOR: &str = "editor: ";
@@ -206,6 +232,10 @@ fn parse(text: &str) -> Session {
     for line in text.lines() {
         if line.trim() == CHAT {
             session.chat = true;
+            continue;
+        }
+        if let Some(file) = line.strip_prefix(PROJECT) {
+            session.project = Some(PathBuf::from(file)).filter(|p| p.is_absolute());
             continue;
         }
         if let Some(mode) = line.strip_prefix(EDITOR) {
@@ -235,6 +265,11 @@ fn format(session: &Session) -> String {
         text.push_str(CHAT);
         text.push('\n');
     }
+    if let Some(project) = session.project.as_ref().and_then(|p| p.to_str()).filter(|p| !p.contains(['\n', '\r'])) {
+        text.push_str(PROJECT);
+        text.push_str(project);
+        text.push('\n');
+    }
     for (i, path) in session.paths.iter().enumerate() {
         let Some(line) = path.to_str().filter(|p| !p.contains(['\n', '\r'])) else { continue };
         if session.active == Some(i) {
@@ -249,6 +284,20 @@ fn format(session: &Session) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_tab_goes_out_and_comes_back_in_its_order() {
+        let mut shelf = Shelf::default();
+        let mut current = "a";
+        shelf.push(&mut current, "b");
+        shelf.push(&mut current, "c");
+        shelf.select(&mut current, 1);
+        let (tabs, active) = shelf.take_all(&mut current, "blank");
+        assert_eq!((tabs.clone(), active, current, shelf.len()), (vec!["a", "b", "c"], 1, "blank", 1));
+        let given_back = shelf.put_all(&mut current, tabs, active);
+        assert_eq!((given_back, current, shelf.len(), shelf.active()), ("blank", "b", 3, 1));
+        assert_eq!(shelf.iter(&current).copied().collect::<Vec<_>>(), ["a", "b", "c"]);
+    }
 
     /// The tabs in order, and the active one.
     fn order(shelf: &Shelf<char>, current: &char) -> (String, char) {
@@ -370,13 +419,14 @@ mod tests {
             paths: vec![path("a.c2f"), path("with space.c2fc"), path("b.scad")],
             active: Some(1),
             chat: true,
+            project: Some(path("Lamp/lamp.c2fproj")),
         };
         session.save(Some(&store)).unwrap();
         assert_eq!(Session::load(Some(&store)), session);
         // A path a line cannot hold is left out, and the active one moves.
-        let odd = Session { paths: vec![path("bad\nname.c2f"), path("a.c2f")], active: Some(1), chat: false };
+        let odd = Session { paths: vec![path("bad\nname.c2f"), path("a.c2f")], active: Some(1), chat: false, project: None };
         odd.save(Some(&store)).unwrap();
-        assert_eq!(Session::load(Some(&store)), Session { paths: vec![path("a.c2f")], active: Some(0), chat: false });
+        assert_eq!(Session::load(Some(&store)), Session { paths: vec![path("a.c2f")], active: Some(0), chat: false, project: None });
         assert!(Session::load(None).paths.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -385,7 +435,7 @@ mod tests {
     fn ignores_bad_session_lines() {
         let a = std::env::temp_dir().join("a.c2f");
         let text = format!("relative.c2f\n\n* {}\n{}\n", a.display(), a.display());
-        assert_eq!(parse(&text), Session { paths: vec![a.clone()], active: Some(0), chat: false });
+        assert_eq!(parse(&text), Session { paths: vec![a.clone()], active: Some(0), chat: false, project: None });
         // The agent shown in the editor column, as a version before kept it.
         assert!(parse("editor: agent\n").chat);
         assert!(!parse("editor: code\n").chat);

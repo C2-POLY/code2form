@@ -27,4 +27,6 @@ bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
 c2f-lang.workspace = true
 c2f-eval.workspace = true
 c2f-geom.workspace = true
+# Projects: a scan saved into an object's project.
+c2f-project.workspace = true
 uniffi = { version = "0.32", default-features = false }

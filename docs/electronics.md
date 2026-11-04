@@ -801,7 +801,7 @@ c2f circuit bom grogu.c2fc              # the bill of materials
 c2f circuit bom --csv grogu.c2fc
 c2f circuit fit grogu.c2fc              # each part's room in the enclosure, and what does not fit
 c2f circuit fit --clearance 1 grogu.c2fc
-c2f circuit firmware grogu.c2fc         # a first PlatformIO firmware, in firmware/ beside it
+c2f circuit firmware grogu.c2fc         # a first PlatformIO firmware, in its project's firmware/
 c2f circuit stl grogu.c2fc > grogu.stl  # the parts assembled (not the wires)
 c2f circuit 3mf grogu.c2fc > grogu.3mf
 c2f mass grogu.c2fc                     # its masses, center of gravity and tipping angle
@@ -848,7 +848,8 @@ of materials' `name,quantity,file,params,instances`.
 
 `c2f circuit firmware` (or File › Generate the Firmware in the app, on
 a saved circuit) writes a PlatformIO project for the board the parts are
-wired to, in `firmware/` beside the circuit (`-o folder` elsewhere):
+wired to, in the firmware folder of the circuit's project, or `firmware/`
+beside the circuit outside a project (`-o folder` elsewhere):
 
 - `include/pins.h`: a constant per pin of a part wired to a GPIO of the
   board, named after the part and its pin, with the wire it comes from:

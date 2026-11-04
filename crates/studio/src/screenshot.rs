@@ -10,7 +10,7 @@
 //! settings (`general`, `appearance`, `editor`, `model`, `export`,
 //! `libraries`, `firmware`, `shortcuts`); `firmware` shows a circuit's
 //! Firmware tab (`firmware,build` builds it first), `serial` the console's
-//! serial monitor; `play` plays a design that reads `$t`, and
+//! serial monitor, `files` the Files view of the project open; `play` plays a design that reads `$t`, and
 //! `exploded` draws its part()s apart (`play,exploded` does both;
 //! `exploded,axis` along each part's axis); `joints:shoulder=90;elbow=-60`
 //! opens the joints' card with those joints set (`,travel` checks their

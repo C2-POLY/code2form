@@ -1,0 +1,9 @@
+# A Code2Form project: its paths are relative to this file's folder.
+version = 1
+name = "Night light"
+# The first design is the main one.
+designs = [
+  "nightlight.c2f",
+]
+circuit = "nightlight.c2fc"
+scans = []

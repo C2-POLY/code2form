@@ -24,7 +24,7 @@ pub fn tools() -> Vec<Value> {
         json!({
             "path": {
                 "type": "string",
-                "description": "The circuit's .c2fc file (its project is firmware/ beside it), the project's folder, or its platformio.ini.",
+                "description": "The circuit's .c2fc file (its firmware: its project's, or firmware/ beside it), the firmware's folder, or its platformio.ini.",
             },
         })
     };
@@ -135,11 +135,24 @@ fn project(args: &Value) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// The PlatformIO project `path` names, to read or change.
+/// The PlatformIO project `path` names, to read or change: in the agent's
+/// folder, when the guard gives it one. A circuit's project can say its
+/// firmware is elsewhere: it is checked where it leads.
 fn project_dir(args: &Value) -> Result<PathBuf, String> {
+    let dir = found_project_dir(args)?;
+    if let Some(scope) = crate::guard::file_scope(args) {
+        let folder = scope.roots().first().cloned().unwrap_or_default();
+        if !c2f_lang::file_scope::resolve(&dir).starts_with(&folder) {
+            return Err(format!("the firmware's folder, {}, is outside the project folder, {}", dir.display(), folder.display()));
+        }
+    }
+    Ok(dir)
+}
+
+fn found_project_dir(args: &Value) -> Result<PathBuf, String> {
     let path = PathBuf::from(args.get("path").and_then(Value::as_str).ok_or("give the project's `path`")?);
     let dir = if path.extension().is_some_and(|e| e == "c2fc") {
-        path.parent().unwrap_or(Path::new("")).join("firmware")
+        c2f_project::firmware_dir_of(&path)
     } else if path.file_name().is_some_and(|n| n == "platformio.ini") {
         path.parent().unwrap_or(Path::new("")).to_path_buf()
     } else {

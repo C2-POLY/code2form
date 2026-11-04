@@ -1,0 +1,12 @@
+[package]
+name = "c2f-project"
+description = "Projects: a folder and its .c2fproj file, which say which file is the object's design, circuit, firmware and scans"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# The `.c2fproj` files, with the position of each value for errors.
+serde = { version = "1", features = ["derive"] }
+toml = "1"

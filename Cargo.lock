@@ -621,6 +621,7 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "c2f-project",
  "keyring",
  "libc",
  "serde",
@@ -658,6 +659,7 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "c2f-project",
  "miniz_oxide 0.8.9",
  "serde_json",
 ]
@@ -697,7 +699,16 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "c2f-project",
  "uniffi",
+]
+
+[[package]]
+name = "c2f-project"
+version = "0.7.0"
+dependencies = [
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -894,6 +905,7 @@ dependencies = [
  "c2f-eval",
  "c2f-geom",
  "c2f-lang",
+ "c2f-project",
  "c2f-sketch",
  "eframe",
  "glam",

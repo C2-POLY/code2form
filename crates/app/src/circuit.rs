@@ -109,7 +109,7 @@ pub fn run(args: &[String]) -> ExitCode {
         "check" => check(&circuit, &src, path),
         "fit" => fit_command(&circuit, &src, path, clearance.unwrap_or(c2f_geom::CLEARANCE)),
         "firmware" => {
-            let dir = output.map_or_else(|| path.parent().unwrap_or(Path::new("")).join("firmware"), Into::into);
+            let dir = output.map_or_else(|| c2f_project::firmware_dir_of(path), Into::into);
             firmware(&circuit, path, &dir)
         }
         // An export format.
