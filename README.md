@@ -48,6 +48,16 @@ they are. Written in Rust, it renders as you type.
   `c2f sweep arm.c2f` prints the same and fails on a stop, and the
   agent's `sweep` tool returns it. Only the view is posed: the exports
   stay as the code writes them.
+- **Firmware**: a circuit's Firmware tab, beside its code, edits the
+  project its first firmware started (`pins.h` following the wires),
+  builds it and flashes the board plugged in, the compiler's errors at
+  their line; the console's Serial monitor tab reads the board and sends
+  it lines. PlatformIO comes with the optional Firmware module (Settings
+  › Firmware), or is the one already installed. The agent reads and
+  changes the program (`firmware_code`, `firmware_edit`), builds it,
+  flashes it (once the user agrees) and reads the board
+  (`firmware_build`, `firmware_upload`, `serial_read`). See the
+  [guide](docs/electronics.md#the-firmware-tab).
 - **Examples**: the Examples menu lists the designs and circuits that
   come with the app, by subject: a chest that opens, three gears that
   drive one another and a walking mannequin (Game), and the Grogu
@@ -286,6 +296,11 @@ resolving from `working_dir`, then the library folders) or a file as
 | `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
 | `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
 | `firmware` | Writes a PlatformIO project (`output`, firmware/ beside the circuit `path` by default) for the board its parts are wired to: `include/pins.h` (a constant per pin wired to a GPIO, rewritten each time), `platformio.ini` (the board, the parts' libraries) and `src/main.cpp` (each part set up and tried in turn), the last two written once; refused on an error or a wired reserved pin; the set-up lines whose pins reach no GPIO left out, in `notes` |
+| `firmware_code` | The files of a PlatformIO project (src/, include/, platformio.ini) with `src/main.cpp` and `include/pins.h`, or one `file`, its lines numbered |
+| `firmware_edit` | Changes a file of the project in src/ or include/, or its platformio.ini: `edits` ({old, new}, each old found once, all or none) or the whole `text`; `include/pins.h`, the circuit's, is refused; the studio's Firmware tab shows the change at once |
+| `firmware_build` | Builds a PlatformIO project (the circuit's `firmware/`, its folder or its `platformio.ini`) with the Firmware module's PlatformIO: whether it built, the compiler's errors and warnings with their file, line and column, and the flash and RAM it takes |
+| `firmware_upload` | Builds the project and flashes it on the board plugged in (`port`, or the board Code2Form knows); in the studio the user agrees to each upload; when it fails, why and what the user should do |
+| `serial_read` | The lines the board prints for `seconds`, each with its time; `reset` restarts it first, `send` writes it a line; the ports there are, without a board |
 | `fit` | How each part fits in the enclosure: its least clearance, its gaps to the enclosure and the nearest part with where, the ports no cutout opens and the mount holes no standoff holds, and the wires that run into the enclosure; `clearance` sets the room wanted (0.5 mm) |
 | `mass_properties` | What a design or a circuit weighs printed in `material` (PLA, PETG, ABS, ASA, TPU, nylon or a density) with `infill` and `wall`, per part (`parts`): each part's volume, mass and center, the circuit's parts by their sheet's `mass`, the `extra` masses, the total and center of gravity, and the stability: whether it stands, and the least angle it tips at, toward which side |
 | `loads` | For a shaft a motor turns (its `axis`, `loads`, `supports`, `motor`, `shaft`, `ratio`): the torque it needs, each support's radial and axial reaction and moment, the shaft's deflection, the margins against the motor's and bearings' figures (given or read from their parts' `@spec`), a `suggested_ratio` when the torque falls short, warnings (an overhung motor, a margin under `target_margin`) and a `summary`; see the [guide](docs/electronics.md#loads-on-a-shaft) |

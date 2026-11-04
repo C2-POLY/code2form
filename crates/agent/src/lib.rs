@@ -16,6 +16,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
+pub mod board;
 pub mod circuit;
 pub mod conversation;
 pub mod engine;

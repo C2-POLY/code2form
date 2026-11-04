@@ -12,7 +12,7 @@ use eframe::egui::{
 
 use crate::find;
 use crate::i18n::tr;
-use crate::highlight::Highlighter;
+use crate::highlight::{Highlighter, Syntax};
 use crate::shortcuts::{self, Action};
 use crate::theme;
 
@@ -25,6 +25,9 @@ pub struct Editor {
     highlighter: Highlighter,
     /// A line (0-based) to flag in the gutter, such as a syntax error.
     pub error_line: Option<usize>,
+    /// More lines to flag (0-based), each an error (true) or a warning:
+    /// the compiler's messages about a firmware.
+    pub marks: Vec<(usize, bool)>,
     /// Where the cursor is, 0-based line and column, for the status bar.
     pub cursor: Option<(usize, usize)>,
     /// The cursor's byte offset in the text, while the editor has the
@@ -123,12 +126,19 @@ impl Editor {
     /// The editor of tab `tab`: each keeps its own cursor, scroll and undo
     /// history, which egui stores under the editor's id.
     pub fn for_tab(tab: u64) -> Self {
+        Editor::with_id(Id::new(("c2f-editor", tab)))
+    }
+
+    /// An editor whose cursor, scroll and undo history egui keeps under
+    /// `id`.
+    pub fn with_id(id: Id) -> Self {
         Editor {
-            id: Id::new(("c2f-editor", tab)),
+            id,
             indent_width: 4,
             find_keys: [Action::FindNext.default_keys(), Action::FindPrevious.default_keys()],
             highlighter: Highlighter::default(),
             error_line: None,
+            marks: Vec::new(),
             cursor: None,
             focused_offset: None,
             agent_tint: (Vec::new(), 0.0),
@@ -146,7 +156,11 @@ impl Editor {
 
     /// Highlights the text as a circuit file, or as code.
     pub fn set_circuit(&mut self, circuit: bool) {
-        self.highlighter.hash_comments = circuit;
+        self.set_syntax(if circuit { Syntax::Circuit } else { Syntax::Scad });
+    }
+
+    pub fn set_syntax(&mut self, syntax: Syntax) {
+        self.highlighter.syntax = syntax;
     }
 
     /// Gives the editor keyboard focus.
@@ -588,21 +602,27 @@ impl Editor {
                     let mark = Rect::from_min_size(Pos2::new(gutter.left() + 1.0, rect.top()), Vec2::new(3.0, rect.height()));
                     shapes.push(Shape::rect_filled(mark, CornerRadius::same(1), theme::palette().accent));
                 }
-                if self.error_line == Some(line) {
-                    shapes.push(Shape::rect_filled(
-                        band,
-                        CornerRadius::ZERO,
-                        theme::palette().error.gamma_multiply(0.12),
-                    ));
+                let flag = if self.error_line == Some(line) {
+                    Some(theme::palette().error)
+                } else {
+                    self.marks
+                        .iter()
+                        .filter(|(l, _)| *l == line)
+                        .map(|(_, error)| *error)
+                        .max()
+                        .map(|error| if error { theme::palette().error } else { theme::palette().warning })
+                };
+                if let Some(flag) = flag {
+                    shapes.push(Shape::rect_filled(band, CornerRadius::ZERO, flag.gamma_multiply(0.12)));
                     if starts_line {
                         let mark =
                             Rect::from_min_size(Pos2::new(gutter.left(), rect.top()), Vec2::new(3.0, rect.height()));
-                        shapes.push(Shape::rect_filled(mark, CornerRadius::ZERO, theme::palette().error));
+                        shapes.push(Shape::rect_filled(mark, CornerRadius::ZERO, flag));
                     }
                 }
                 if starts_line {
-                    let color = if self.error_line == Some(line) {
-                        theme::palette().error
+                    let color = if let Some(flag) = flag {
+                        flag
                     } else if current_line == Some(line) {
                         theme::palette().text
                     } else {

@@ -20,6 +20,7 @@ mod editor;
 mod examples;
 mod fillet;
 mod find;
+mod firmware;
 mod gizmo;
 mod highlight;
 mod icon_setting;
@@ -190,6 +191,8 @@ fn server_policy(args: &[std::ffi::OsString], folder: &Path) -> Policy {
 /// `code2form mcp --studio`: `c2f mcp --studio`, from the app itself.
 fn mcp(args: &[std::ffi::OsString]) -> ExitCode {
     eprintln!("code2form mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
+    // The studio asks the user before an upload, and shares its monitor.
+    c2f_agent::board::set_host(Box::new(c2f_agent::board::StudioHost::new()));
     let tools = match c2f_agent::Registry::builtin().with(Box::new(c2f_agent::studio_link::StudioProxy::new())) {
         Ok(tools) => tools,
         Err(err) => {

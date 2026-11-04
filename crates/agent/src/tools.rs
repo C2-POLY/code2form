@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn the_builtin_tools_render_code() {
         let registry = Registry::builtin();
-        assert_eq!(registry.names().len(), 22);
+        assert_eq!(registry.names().len(), 27);
         assert!(registry.names().iter().any(|name| name == "render"));
         let content = registry.call("render", &json!({ "code": "cube(10);" })).expect("a tool").expect("a report");
         let report: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
@@ -113,7 +113,7 @@ mod tests {
     fn a_host_adds_its_tools_after_the_builtin_ones() {
         let registry = Registry::builtin().with(Box::new(Echo("echo"))).unwrap();
         assert_eq!(registry.names().last().map(String::as_str), Some("echo"));
-        assert_eq!(registry.list().len(), 23);
+        assert_eq!(registry.list().len(), 28);
         let content = registry.call("echo", &json!({ "text": "hello" })).unwrap().unwrap();
         assert_eq!(content, vec![json!({ "type": "text", "text": "hello" })]);
     }

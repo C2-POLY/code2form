@@ -69,6 +69,8 @@ pub mod selection_context;
 pub mod live_circuit;
 /// The agent's edits as they land: marked, flashed, undone together.
 mod agent_edits;
+
+mod firmware_tab;
 /// The review of the agent's changes before they apply.
 pub mod review;
 /// What floats over the view: the chat with the agent.
@@ -145,18 +147,20 @@ enum Section {
     Model,
     Export,
     Libraries,
+    Firmware,
     Agent,
     Shortcuts,
 }
 
 impl Section {
-    const ALL: [Section; 8] = [
+    const ALL: [Section; 9] = [
         Section::General,
         Section::Appearance,
         Section::Editor,
         Section::Model,
         Section::Export,
         Section::Libraries,
+        Section::Firmware,
         Section::Agent,
         Section::Shortcuts,
     ];
@@ -170,6 +174,7 @@ impl Section {
             Section::Model => "model",
             Section::Export => "export",
             Section::Libraries => "libraries",
+            Section::Firmware => "firmware",
             Section::Agent => "agent",
             Section::Shortcuts => "shortcuts",
         }
@@ -183,6 +188,7 @@ impl Section {
             Section::Model => tr("Model", "Modèle"),
             Section::Export => tr("Export", "Export"),
             Section::Libraries => tr("Libraries", "Bibliothèques"),
+            Section::Firmware => tr("Firmware", "Firmware"),
             Section::Agent => tr("Agent", "Agent"),
             Section::Shortcuts => tr("Shortcuts", "Raccourcis"),
         }
@@ -379,6 +385,8 @@ struct Tab {
     agent_flash: Option<agent_edits::Flash>,
     /// A new file's start screen shows, with the idea typed in it so far.
     start: Option<String>,
+    /// A circuit's firmware project, once its Firmware tab showed.
+    firmware: Option<crate::firmware::Project>,
 }
 
 impl Tab {
@@ -430,6 +438,7 @@ impl Tab {
             agent_group: None,
             agent_flash: None,
             start: None,
+            firmware: None,
         }
     }
 
@@ -569,6 +578,9 @@ pub struct StudioApp {
     /// The files open, and which have unsaved edits, that the agent's
     /// tools do not write onto.
     tabs: agent_setup::TabFiles,
+    /// The Firmware module, the build or upload under way, the serial
+    /// ports and the monitor.
+    board: crate::firmware::Board,
 }
 
 impl StudioApp {
@@ -659,6 +671,7 @@ impl StudioApp {
             live,
             agent_running: false,
             tabs,
+            board: crate::firmware::Board::new(ctx),
         };
         app.apply_settings(ctx);
         if app.session.chat {
@@ -668,6 +681,15 @@ impl StudioApp {
         let layout = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("layout:"));
         if let Some(arrangement) = layout.and_then(Arrangement::from_id) {
             app.arrangement = arrangement;
+        }
+        // A circuit's Firmware tab, and the serial monitor.
+        let words = app.screenshot.as_ref().and_then(|s| s.select.clone()).unwrap_or_default();
+        if words.split(',').any(|w| w == "firmware") {
+            app.panels.circuit_tab = firmware_tab::CircuitTab::Firmware;
+        }
+        if words.split(',').any(|w| w == "serial") {
+            app.panels.console_tab = firmware_tab::ConsoleTab::Serial;
+            app.console_open = true;
         }
         // A screenshot of a settings page, as `settings:shortcuts`.
         let page = app.screenshot.as_ref().and_then(|s| s.select.as_deref()?.strip_prefix("settings:"));
@@ -806,6 +828,10 @@ impl StudioApp {
             None => return,
         };
         closed.editor.forget(ctx);
+        let mut closed = closed;
+        for error in closed.firmware.as_mut().map(|p| p.save_all()).unwrap_or_default() {
+            self.doc.console.log(Level::Error, tr!("Cannot save {error}", "Impossible d'enregistrer {error}"));
+        }
         let mut viewer = closed.viewer;
         if let Some(gl) = &self.gl {
             viewer.destroy(gl);
@@ -1054,7 +1080,13 @@ impl StudioApp {
                     let target = target.split(',').filter(|w| section_asked(w) == (None, None)).collect::<Vec<_>>().join(",");
                     let rewire = target.strip_prefix("rewire:").and_then(|t| t.split_once('>'));
                     let moved = target.strip_prefix("move:").and_then(|t| t.split_once(':'));
-                    if target == "catalogue" {
+                    if target.split(',').any(|w| w == "build") {
+                        // The firmware built once, its messages listed.
+                        let built = self.firmware_project().is_none_or(|p| p.last.is_some());
+                        if !built && self.board.job.is_none() {
+                            self.run_firmware(firmware_tab::JobKind::Build);
+                        }
+                    } else if target == "catalogue" {
                         self.catalogue_open = true;
                     } else if let Some((name, to)) = moved {
                         // A part held mid-drag, as `move:mic:40,10` asks.
@@ -1114,6 +1146,9 @@ impl StudioApp {
 
     /// Shows a circuit just read, or none, and watches its part files.
     fn set_circuit(&mut self, found: Option<Arc<c2f_circuit::Circuit>>) {
+        if let Some(circuit) = &found {
+            self.follow_pins(circuit);
+        }
         // The parts' files and the enclosure's: an edit to one renders again.
         let files: Vec<PathBuf> = found
             .iter()
@@ -2187,6 +2222,10 @@ impl StudioApp {
 
     /// Saves; returns false when cancelled or failed.
     fn save(&mut self) -> bool {
+        // The firmware's files too, which save as they are typed.
+        for error in self.doc.firmware.as_mut().map(|p| p.save_all()).unwrap_or_default() {
+            self.doc.console.log(Level::Error, tr!("Cannot save {error}", "Impossible d'enregistrer {error}"));
+        }
         match self.doc.path.clone() {
             Some(path) => self.write_to(path),
             None => self.save_as(),
@@ -3076,11 +3115,12 @@ impl StudioApp {
     /// The console's title row, which folds it, its counts, and while it is
     /// open, its lines.
     fn console_contents(&mut self, ui: &mut egui::Ui) {
-        let console = &mut self.doc.console;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             let icon = if self.console_open { Icon::FoldDown } else { Icon::FoldUp };
-            let title = RichText::new("Console").strong().size(12.5).color(theme::palette().text);
+            let on_serial = self.panels.console_tab == firmware_tab::ConsoleTab::Serial;
+            let title = RichText::new("Console").size(12.5);
+            let title = if on_serial { title.color(theme::palette().text_dim) } else { title.strong().color(theme::palette().text) };
             let (toggle, _) = ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
@@ -3089,9 +3129,32 @@ impl StudioApp {
                 (response.clicked() || label.clicked(), ())
             })
             .inner;
-            if toggle {
+            if toggle && on_serial {
+                // Back to the console, open.
+                self.panels.console_tab = firmware_tab::ConsoleTab::Console;
+                self.console_open = true;
+            } else if toggle {
                 self.console_open = !self.console_open;
             }
+            // The serial monitor, a tab away, for a circuit or while open.
+            let serial = self.doc.is_circuit() || self.board.monitor().is_some();
+            if serial {
+                use firmware_tab::ConsoleTab;
+                let on = self.panels.console_tab == ConsoleTab::Serial;
+                let title = RichText::new(tr("Serial monitor", "Moniteur série")).size(12.5);
+                let title = if on { title.strong().color(theme::palette().text) } else { title.color(theme::palette().text_dim) };
+                if ui.add(Button::new(title).frame(false)).clicked() {
+                    self.panels.console_tab = if on { ConsoleTab::Console } else { ConsoleTab::Serial };
+                    self.console_open = true;
+                }
+                if on {
+                    self.serial_controls(ui);
+                    return;
+                }
+            } else {
+                self.panels.console_tab = firmware_tab::ConsoleTab::Console;
+            }
+            let console = &mut self.doc.console;
             let errors = console.count(Level::Error);
             let warnings = console.count(Level::Warning);
             let echoes = console.count(Level::Echo);
@@ -3114,6 +3177,10 @@ impl StudioApp {
         });
         if self.console_open {
             ui.add_space(2.0);
+            if self.panels.console_tab == firmware_tab::ConsoleTab::Serial {
+                self.serial_lines(ui);
+                return;
+            }
             Frame::new()
                 .fill(theme::palette().editor)
                 .corner_radius(CornerRadius::same(6))
@@ -3144,12 +3211,20 @@ impl StudioApp {
         let max = ui.available_height() * 0.6;
         self.console_dock(max).show_inside(ui, |ui| self.console_contents(ui));
         let design = !self.doc.is_circuit();
-        if design {
-            let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 12, right: 12, top: 8, bottom: 0 });
-            egui::TopBottomPanel::top("code-tabs").frame(frame).show_separator_line(false).show_inside(ui, |ui| {
+        let frame = Frame::new().fill(theme::palette().panel).inner_margin(Margin { left: 12, right: 12, top: 8, bottom: 0 });
+        egui::TopBottomPanel::top("code-tabs").frame(frame).show_separator_line(false).show_inside(ui, |ui| {
+            if design {
                 let choices = [(workspace::CodeTab::Code, tr("Code", "Code")), (workspace::CodeTab::Tree, tr("Tree", "Arbre"))];
                 workspace::tab_strip(ui, &mut self.panels.code_tab, &choices);
-            });
+            } else {
+                use firmware_tab::CircuitTab;
+                let choices = [(CircuitTab::Circuit, tr("Circuit", "Circuit")), (CircuitTab::Firmware, tr("Firmware", "Firmware"))];
+                workspace::tab_strip(ui, &mut self.panels.circuit_tab, &choices);
+            }
+        });
+        if !design && self.panels.circuit_tab == firmware_tab::CircuitTab::Firmware {
+            egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().editor)).show_inside(ui, |ui| self.firmware_column(ui));
+            return;
         }
         self.show_agent_marks(ui.ctx());
         egui::CentralPanel::default().frame(Frame::new().fill(theme::palette().editor)).show_inside(ui, |ui| {
@@ -3950,6 +4025,7 @@ impl StudioApp {
                         Section::Model => model_page(ui, ctx, &mut self.settings),
                         Section::Export => export_folder = export_page(ui, ctx, &mut self.settings),
                         Section::Libraries => (libraries, fonts) = libraries_page(ui, &self.settings),
+                        Section::Firmware => self.firmware_page(ui),
                         Section::Agent => self.agent.settings_page(ui, ctx, &mut self.settings.agent),
                         Section::Shortcuts => {}
                     });
@@ -4223,6 +4299,7 @@ impl StudioApp {
         self.start_screen(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
+        self.board_dialogs(ctx);
         self.review_window(ctx);
         self.drop_unseen_focus(ctx);
     }
@@ -4240,6 +4317,7 @@ impl eframe::App for StudioApp {
             }
         }
         self.receive();
+        self.poll_board(ctx);
         self.serve_live(ctx);
         self.animate(ctx);
         self.explode(ctx);
@@ -4266,7 +4344,7 @@ impl eframe::App for StudioApp {
         self.save_session();
 
         let checking = matches!(self.doc.travel, Some(None));
-        let ready = self.doc.finished > 0 && !self.doc.busy() && !checking && self.live.review.as_ref().is_none_or(|r| r.settled());
+        let ready = self.doc.finished > 0 && !self.doc.busy() && !checking && !self.board.busy() && self.live.review.as_ref().is_none_or(|r| r.settled());
         if let Some(result) = self.screenshot.as_mut().and_then(|s| s.update(ctx, ready)) {
             match result {
                 Ok(message) => self.doc.console.log(Level::Info, message),
@@ -4283,6 +4361,14 @@ impl eframe::App for StudioApp {
     }
 
     fn on_exit(&mut self, gl: Option<&glow::Context>) {
+        if let Some(project) = self.doc.firmware.as_mut() {
+            project.save_all();
+        }
+        for index in 0..self.shelf.len() {
+            if let Some(project) = self.shelf.other_mut(index).and_then(|t| t.firmware.as_mut()) {
+                project.save_all();
+            }
+        }
         self.save_session();
         self.note_window();
         if self.settings != self.saved_settings {

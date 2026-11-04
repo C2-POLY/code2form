@@ -139,7 +139,10 @@ const PROMPTS: &[Prompt] = &[
                6. If there is a brief, check the build against it with `check_brief` (the circuit gives the components' masses): fix what does not hold, or tell the user why it cannot.\n\
                7. Show the user the build with `circuit_image` (`view = \"sheet\"` when it helps), the wiring list from `circuit_wires` and the parts from `circuit_bom`, and ask them to approve it or say what to change.\n\
                \n\
-               Once approved, `export` writes each printed piece for the slicer.",
+               Once approved, `export` writes each printed piece for the slicer. For its program, `firmware` writes a first \
+               one from the circuit; read it with `firmware_code`, write what the object does with `firmware_edit`, build it \
+               with `firmware_build` until it builds, and once the user agrees and the board is plugged in, `firmware_upload` \
+               it and check what the board prints with `serial_read`.",
     },
 ];
 

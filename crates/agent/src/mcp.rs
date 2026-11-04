@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::guard::scoped;
 use crate::{Export, Registry, Tools};
 
+mod board;
 mod brief;
 mod circuit;
 mod mass;
@@ -46,7 +47,11 @@ their pins: `check_circuit` checks it (voltages, grounds, reserved pins), \
 `circuit_image` pictures it with its wires, `circuit_wires` and \
 `circuit_bom` list its wires in order and its parts, `fit` says how its \
 parts fit in their enclosure, `firmware` writes a first PlatformIO firmware \
-for its board that knows each wire and sets each part up. `mass_properties` weighs a design or a \
+for its board that knows each wire and sets each part up; write the \
+object's program in its src/main.cpp (`firmware_code` reads the \
+project, `firmware_edit` changes it), `firmware_build` it and fix its \
+errors, `firmware_upload` it once the user agrees, then `serial_read` \
+what the board prints. `mass_properties` weighs a design or a \
 circuit as printed, with its center of gravity and the angle it tips at. \
 `sweep` moves each part(joint = …) over its travel and says where a part \
 runs into another: call it after writing or changing a joint. \
@@ -335,6 +340,8 @@ fn tools() -> Value {
         tools.extend(brief::tools());
         tools.extend(mass::tools());
         tools.extend(loads::tools());
+        // Building, flashing and reading the board.
+        tools.extend(board::tools());
     }
     tools
 }
@@ -392,7 +399,7 @@ fn tool(name: &str) -> Option<Tool> {
         "section" => section_tool,
         "sweep" => sweep_tool,
         "electrify" => electrify_tool,
-        _ => return circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)),
+        _ => return circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)).or_else(|| board::tool(name)),
     };
     Some(tool)
 }
@@ -904,7 +911,7 @@ mod tests {
         let server = Server::new(Registry::builtin().with(Box::new(Hello)).unwrap());
         let reply = server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
-        assert_eq!((tools[0]["name"].as_str(), tools.len()), (Some("render"), 23));
+        assert_eq!((tools[0]["name"].as_str(), tools.len()), (Some("render"), 28));
         let call = |name: &str, arguments: Value| {
             let line = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
             server.handle(&line.to_string()).unwrap()

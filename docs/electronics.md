@@ -868,14 +868,54 @@ wired to, in `firmware/` beside the circuit (`-o folder` elsewhere):
   microphone prints its level, its motor turns half a second, its touch
   pad prints what it reads.
 
-Build and flash it with `pio run -t upload`, and watch with
-`pio device monitor`: a part that stays silent is wired wrong. Then write
-the object's own program in `main.cpp`, with the constants of `pins.h`.
+Build and flash it from the circuit's Firmware tab in the app (below),
+or with `pio run -t upload`, and watch the serial monitor: a part that
+stays silent is wired wrong. Then write the object's own program in
+`main.cpp`, with the constants of `pins.h`.
 Generated again after the circuit changed, only `pins.h` is rewritten:
 `platformio.ini` and `main.cpp` are yours from the first time. A circuit
 with an error, or a reserved pin wired without `allow`, gets no firmware;
 the set-up lines whose pins reach no GPIO (Grogu's driver sleep pin,
 tied to its supply) are left out, said in a comment and in a note.
+
+### The Firmware tab
+
+A circuit's code has a Firmware tab beside it, once its firmware is
+written (the tab offers to write it). It opens the project's files in
+the editor, `src/main.cpp` first, coloured as C++, and saves them as you
+type; a file the agent or another editor changes on disk shows at once.
+`include/pins.h` is read only: saving the circuit writes it again, so its
+constants follow the wires. A constant of a pin used in the code whose
+wire left the circuit is listed under the code, at its line, before
+anything is built.
+
+**Build** compiles the project and lists the compiler's errors and
+warnings under the code: a click goes to the line. **Upload to the
+board** builds, then flashes the board picked in the list beside it (the
+board plugged in that Code2Form knows, by default: the XIAO ESP32-S3,
+the DevKitC-1 and their USB chips), and says what to do when it fails:
+plug the board in, free its port, or press BOOT and RESET. The flash and
+RAM the program takes show after a build.
+
+The console has a **Serial monitor** tab: pick the port and the speed
+(115200, as the first firmware), open it, and the lines the board prints
+come with the time they came; a field sends it a line, Restart the board
+restarts it to read it start, and the monitor finds the board again once
+plugged back in. It lets go of the port while the board is flashed.
+
+Building and uploading need the **Firmware module** (Settings ›
+Firmware): it installs PlatformIO in Code2Form's folder, then each
+board's toolchain at its first build (about 5 GB for an ESP32, its
+compilers for both of Espressif's cores included), and
+uninstalls it all in one click. A PlatformIO already installed (in
+`~/.platformio`, or from Homebrew) is used instead, with nothing to
+install. The editor and the monitor work without it.
+
+Ask the agent to change the program ("make the motor turn while the pad
+is touched"): it reads the project with `firmware_code`, changes it with
+`firmware_edit` (the Firmware tab shows its change at once; `pins.h`
+stays the circuit's), builds it until it builds, then flashes it once you
+agree in the dialog the studio shows, and reads what the board prints.
 
 ## 7. With an AI agent
 

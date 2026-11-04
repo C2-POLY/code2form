@@ -1,0 +1,15 @@
+[package]
+name = "c2f-board"
+description = "Talking to a board: the firmware's toolchain, building and flashing it, and the board's serial port"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# PlatformIO's installer script, downloaded when the user installs the
+# Firmware module: blocking, and in Rust down to its TLS, as the agent's.
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
+# The serial ports and their USB ids. Without libudev on Linux, which
+# lists the ports from /sys instead.
+serialport = { version = "4", default-features = false }
