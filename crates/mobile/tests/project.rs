@@ -16,7 +16,7 @@ fn a_scan_goes_into_a_projects_scans_and_its_file() {
     let scan = root.join("scan-2026-11-04-101500.stl");
     std::fs::write(&scan, "solid s\nendsolid s\n").unwrap();
     let saved = add_scan(made.folder.clone(), scan.to_string_lossy().into_owned()).unwrap();
-    assert!(saved.ends_with("Grogu/scans/scan-2026-11-04-101500.stl"), "{saved}");
+    assert!(std::path::Path::new(&saved).ends_with("Grogu/scans/scan-2026-11-04-101500.stl"), "{saved}");
     let project = project_at(made.folder.clone()).unwrap();
     assert_eq!(project.scans, 1);
     // The studio reads what the app wrote.

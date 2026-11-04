@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn a_folder_of_everything_or_a_blank_name_is_refused() {
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let home = PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap());
         assert!(adopt(&home.join("Documents"), None).unwrap_err().contains("more than one object"));
         assert!(adopt(Path::new("/"), None).is_err());
         let dir = folder("blank");
