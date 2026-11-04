@@ -905,6 +905,9 @@ impl Tools for LiveTools {
             "view_image" => self.view_image(args),
             "focus" => self.focus(args),
             "open_file" => self.open_file(args),
+            // The board's questions, from the agent's tools in another
+            // process: not listed.
+            _ if name.starts_with("_board_") => return c2f_agent::board::answer(name, args),
             _ => return super::live_circuit::call(self, name, args),
         })
     }

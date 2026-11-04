@@ -11,6 +11,8 @@ c2f-lang.workspace = true
 c2f-eval.workspace = true
 c2f-geom.workspace = true
 c2f-circuit.workspace = true
+# Building and flashing the firmware, and reading the board.
+c2f-board.workspace = true
 # The tools' JSON, and the conversation's events.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

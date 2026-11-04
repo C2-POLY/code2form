@@ -379,6 +379,8 @@ fn mcp(studio: bool) -> ExitCode {
     eprintln!("c2f mcp: Code2Form {} serving on stdin and stdout", env!("CARGO_PKG_VERSION"));
     let mut tools = Registry::builtin();
     if studio {
+        // The studio asks the user before an upload, and shares its monitor.
+        c2f_agent::board::set_host(Box::new(c2f_agent::board::StudioHost::new()));
         tools = match tools.with(Box::new(c2f_agent::studio_link::StudioProxy::new())) {
             Ok(tools) => tools,
             Err(err) => {

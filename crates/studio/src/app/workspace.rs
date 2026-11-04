@@ -33,6 +33,10 @@ pub(super) enum InspectorTab {
 #[derive(Debug, Default)]
 pub(super) struct Panels {
     pub code_tab: CodeTab,
+    /// A circuit's: its code, or its firmware.
+    pub circuit_tab: super::firmware_tab::CircuitTab,
+    /// The console, or the serial monitor.
+    pub console_tab: super::firmware_tab::ConsoleTab,
     pub inspector: InspectorTab,
     /// The selection the inspector last saw, by statement: a new one
     /// brings its Properties tab forward, the same one after a render

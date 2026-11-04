@@ -97,12 +97,12 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "sweep", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "firmware", "fit", "check_part", "save_part", "save_brief", "check_brief", "read_brief", "mass_properties", "loads"]
+        ["render", "parameters", "image", "electrify", "section", "sweep", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "firmware", "fit", "check_part", "save_part", "save_brief", "check_brief", "read_brief", "mass_properties", "loads", "firmware_build", "firmware_upload", "serial_read"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
         let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
-        assert_eq!(takes_code, !["library_parts", "electrify", "firmware", "save_brief", "check_brief", "read_brief", "loads"].contains(&tool["name"].as_str().unwrap()), "{tool}");
+        assert_eq!(takes_code, !["library_parts", "electrify", "firmware", "save_brief", "check_brief", "read_brief", "loads", "firmware_build", "firmware_upload", "serial_read"].contains(&tool["name"].as_str().unwrap()), "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);
@@ -955,6 +955,26 @@ fn firmware_writes_a_project_for_the_board_and_refuses_a_code_only_circuit() {
     assert!(dir.join("src/main.cpp").exists() && dir.join("platformio.ini").exists());
     let (is_error, _) = server.report("firmware", json!({ "code": "version = 1" }));
     assert!(is_error);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_board_tools_say_what_is_missing_without_platformio_or_a_board() {
+    let dir = temp_dir("board-tools");
+    let empty = std::ffi::OsString::new();
+    // No module, and the user's PlatformIO left aside.
+    let mut server = Server::start_with(&[("CODE2FORM_FIRMWARE_DIR", dir.join("module").as_os_str()), ("CODE2FORM_PLATFORMIO", &empty)]);
+    let (is_error, _) = server.report("firmware", json!({ "path": grogu_dir().join("grogu.c2fc"), "output": dir.join("firmware") }));
+    assert!(!is_error);
+    let (is_error, report) = server.report("firmware_build", json!({ "path": dir.join("firmware") }));
+    assert!(is_error);
+    assert!(report.to_string().contains("Settings › Firmware"), "{report}");
+    let (is_error, report) = server.report("firmware_build", json!({ "path": dir.join("nowhere") }));
+    assert!(is_error);
+    assert!(report.to_string().contains("platformio.ini"), "{report}");
+    let (is_error, report) = server.report("serial_read", json!({ "port": dir.join("no-port"), "seconds": 0.1 }));
+    assert!(is_error);
+    assert!(report.to_string().contains("cannot open"), "{report}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

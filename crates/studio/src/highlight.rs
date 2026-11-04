@@ -1,5 +1,6 @@
-//! Syntax highlighting for the editor (the .scad language): a small lexer that splits
-//! the text into colored runs, and the [`LayoutJob`] egui lays out.
+//! Syntax highlighting for the editor (the .scad language, a circuit's
+//! TOML, and a firmware's C++): a small lexer that splits the text into
+//! colored runs, and the [`LayoutJob`] egui lays out.
 
 use std::ops::Range;
 
@@ -110,16 +111,47 @@ const FUNCTIONS: &[&str] = &[
     "PI",
 ];
 
+/// The language of the text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Syntax {
+    #[default]
+    Scad,
+    /// A circuit file (TOML): `#` starts a comment.
+    Circuit,
+    /// A firmware's C++: its keywords and types, Arduino's functions, and
+    /// its constants in capitals (a pin's, `HIGH`) as special.
+    Cpp,
+}
+
+const CPP_KEYWORDS: &[&str] = &[
+    "if", "else", "for", "while", "do", "switch", "case", "default", "break", "continue", "return", "goto", "const",
+    "constexpr", "static", "volatile", "extern", "inline", "struct", "class", "enum", "union", "typedef", "using",
+    "namespace", "template", "typename", "public", "private", "protected", "virtual", "override", "new", "delete",
+    "this", "true", "false", "nullptr", "NULL", "sizeof", "auto",
+];
+
+const CPP_TYPES: &[&str] = &[
+    "void", "bool", "char", "short", "int", "long", "float", "double", "unsigned", "signed", "size_t", "int8_t",
+    "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "byte", "word", "String",
+];
+
+const ARDUINO_FUNCTIONS: &[&str] = &[
+    "setup", "loop", "pinMode", "digitalWrite", "digitalRead", "analogWrite", "analogRead", "analogReadResolution",
+    "ledcAttach", "ledcWrite", "touchRead", "delay", "delayMicroseconds", "millis", "micros", "map", "constrain",
+    "min", "max", "abs", "random", "attachInterrupt", "Serial", "Wire", "SPI", "tone", "noTone",
+];
+
 /// Splits `src` into runs of one kind. The runs cover the whole text, in
 /// order, and adjacent runs of the same kind are merged.
 #[cfg(test)]
 pub fn tokenize(src: &str) -> Vec<(Range<usize>, Kind)> {
-    tokenize_as(src, false)
+    tokenize_as(src, Syntax::Scad)
 }
 
-/// As [`tokenize`]; `hash_comments` reads `#` to the end of the line as a
-/// comment, as in circuit files (TOML).
-pub fn tokenize_as(src: &str, hash_comments: bool) -> Vec<(Range<usize>, Kind)> {
+/// As [`tokenize`], for a text in `syntax`.
+pub fn tokenize_as(src: &str, syntax: Syntax) -> Vec<(Range<usize>, Kind)> {
+    let hash_comments = syntax == Syntax::Circuit;
+    let cpp = syntax == Syntax::Cpp;
     let bytes = src.as_bytes();
     let len = bytes.len();
     let mut out: Vec<(Range<usize>, Kind)> = Vec::new();
@@ -133,7 +165,25 @@ pub fn tokenize_as(src: &str, hash_comments: bool) -> Vec<(Range<usize>, Kind)> 
         let start = i;
         let b = bytes[i];
         let next = bytes.get(i + 1).copied().unwrap_or(0);
-        let kind = if (b == b'/' && next == b'/') || (hash_comments && b == b'#') {
+        // A C++ directive (`#include`) starts its line.
+        let line_start = || {
+            let before = src[..i].trim_end_matches([' ', '\t']);
+            before.is_empty() || before.ends_with('\n')
+        };
+        let kind = if cpp && b == b'#' && line_start() {
+            i += 1;
+            while i < len && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            Kind::Keyword
+        } else if cpp && b == b'\'' {
+            i += 1;
+            while i < len && bytes[i] != b'\'' && bytes[i] != b'\n' {
+                i = if bytes[i] == b'\\' { skip_char(src, (i + 1).min(len - 1)) } else { skip_char(src, i) };
+            }
+            i = (i + 1).min(len);
+            Kind::Str
+        } else if (b == b'/' && next == b'/') || (hash_comments && b == b'#') {
             i = src[i..].find('\n').map_or(len, |n| i + n);
             Kind::Comment
         } else if b == b'/' && next == b'*' {
@@ -161,13 +211,25 @@ pub fn tokenize_as(src: &str, hash_comments: bool) -> Vec<(Range<usize>, Kind)> 
         } else if b.is_ascii_digit() || (b == b'.' && next.is_ascii_digit()) {
             i = number_end(bytes, i);
             Kind::Number
-        } else if b == b'$' || b == b'_' || b.is_ascii_alphabetic() {
+        } else if (b == b'$' && !cpp) || b == b'_' || b.is_ascii_alphabetic() {
             i += 1;
             while i < len && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
                 i += 1;
             }
             let word = &src[start..i];
-            if word.starts_with('$') {
+            if cpp {
+                if CPP_KEYWORDS.contains(&word) {
+                    Kind::Keyword
+                } else if CPP_TYPES.contains(&word) {
+                    Kind::Module
+                } else if ARDUINO_FUNCTIONS.contains(&word) {
+                    Kind::Function
+                } else if word.len() > 1 && word.bytes().all(|c| c == b'_' || c.is_ascii_uppercase() || c.is_ascii_digit()) {
+                    Kind::Special
+                } else {
+                    Kind::Plain
+                }
+            } else if word.starts_with('$') {
                 Kind::Special
             } else if expect_definition {
                 Kind::Definition
@@ -196,7 +258,7 @@ pub fn tokenize_as(src: &str, hash_comments: bool) -> Vec<(Range<usize>, Kind)> 
 
         let word = &src[start..i];
         expect_definition = kind == Kind::Keyword && (word == "module" || word == "function");
-        expect_path = kind == Kind::Keyword && (word == "include" || word == "use");
+        expect_path = kind == Kind::Keyword && (word == "include" || word == "use" || word == "#include");
         push(&mut out, start..i, kind);
     }
     out
@@ -264,9 +326,9 @@ pub struct Highlighter {
     source: String,
     font: Option<FontId>,
     job: LayoutJob,
-    /// `#` starts a comment: the text is a circuit file.
-    pub hash_comments: bool,
-    highlighted_as: bool,
+    /// The language of the text.
+    pub syntax: Syntax,
+    highlighted_as: Syntax,
     /// Whether the colors are the dark theme's.
     dark: Option<bool>,
 }
@@ -276,15 +338,15 @@ impl Highlighter {
         let dark = theme::palette().dark;
         if self.source != src
             || self.font.as_ref() != Some(font)
-            || self.highlighted_as != self.hash_comments
+            || self.highlighted_as != self.syntax
             || self.dark != Some(dark)
         {
             self.dark = Some(dark);
             self.source.clear();
             self.source.push_str(src);
             self.font = Some(font.clone());
-            self.highlighted_as = self.hash_comments;
-            self.job = build_job(src, font, self.hash_comments);
+            self.highlighted_as = self.syntax;
+            self.job = build_job(src, font, self.syntax);
         }
         let mut job = self.job.clone();
         job.wrap.max_width = wrap_width;
@@ -292,9 +354,9 @@ impl Highlighter {
     }
 }
 
-fn build_job(src: &str, font: &FontId, hash_comments: bool) -> LayoutJob {
+fn build_job(src: &str, font: &FontId, syntax: Syntax) -> LayoutJob {
     let mut job = LayoutJob::default();
-    for (range, kind) in tokenize_as(src, hash_comments) {
+    for (range, kind) in tokenize_as(src, syntax) {
         let format = TextFormat {
             font_id: font.clone(),
             color: color(kind),
@@ -324,13 +386,36 @@ mod tests {
     #[test]
     fn circuit_comments_start_with_a_hash() {
         let src = "# 5 V\ncolor = \"#ff0000\" # red\n";
-        let comments: Vec<&str> = tokenize_as(src, true)
+        let comments: Vec<&str> = tokenize_as(src, Syntax::Circuit)
             .into_iter()
             .filter(|(_, kind)| *kind == Kind::Comment)
             .map(|(r, _)| src[r].trim())
             .collect();
         assert_eq!(comments, ["# 5 V", "# red"]);
         assert!(tokenize(src).iter().all(|(r, kind)| *kind != Kind::Comment || src[r.clone()].starts_with("//")));
+    }
+
+    #[test]
+    fn a_firmware_reads_as_cpp() {
+        let src = "#include <Arduino.h>\n#include \"pins.h\"\nvoid setup() { pinMode(AMP_BCLK, OUTPUT); char c = '\\n'; } // é\n";
+        let got: Vec<(&str, Kind)> = tokenize_as(src, Syntax::Cpp)
+            .into_iter()
+            .filter(|(r, _)| !src[r.clone()].trim().is_empty())
+            .map(|(r, k)| (src[r].trim(), k))
+            .collect();
+        assert_eq!(got[..2], [("#include", Kind::Keyword), ("<Arduino.h>", Kind::Str)]);
+        assert!(got.contains(&("\"pins.h\"", Kind::Str)));
+        assert!(got.contains(&("void", Kind::Module)));
+        assert!(got.contains(&("pinMode", Kind::Function)));
+        assert!(got.contains(&("AMP_BCLK", Kind::Special)));
+        assert!(got.contains(&("'\\n'", Kind::Str)));
+        assert_eq!(got.last(), Some(&("// é", Kind::Comment)));
+        let mut at = 0;
+        for (range, _) in tokenize_as(src, Syntax::Cpp) {
+            assert_eq!(range.start, at);
+            at = range.end;
+        }
+        assert_eq!(at, src.len());
     }
 
     #[test]

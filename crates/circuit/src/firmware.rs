@@ -249,6 +249,72 @@ pub fn write(firmware: &Firmware, dir: &Path) -> Result<Vec<Written>, String> {
     Ok(out)
 }
 
+/// A pin's constant the code uses that `include/pins.h` no longer defines:
+/// its wire was taken out of the circuit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stale {
+    /// From 0.
+    pub line: usize,
+    /// Where it is in the code, in bytes.
+    pub at: std::ops::Range<usize>,
+    pub name: String,
+}
+
+/// The constants in `code` that name a pin of one of `circuit`'s parts
+/// (`AMP_SD` for `amp`) and that neither `pins_h` nor `code` defines: a
+/// wire taken out since the code was written, found before it is built.
+pub fn stale_pins(circuit: &Circuit, pins_h: &str, code: &str) -> Vec<Stale> {
+    let prefixes: Vec<String> = circuit.parts.iter().map(|part| constant(&part.name, "")).collect();
+    let defined: BTreeSet<&str> = [pins_h, code]
+        .iter()
+        .flat_map(|text| text.lines())
+        .filter_map(|line| line.trim_start().strip_prefix("#define")?.split_whitespace().next())
+        .collect();
+    let mut out = Vec::new();
+    for (at, word) in words(code) {
+        let pin = prefixes.iter().any(|p| word.len() > p.len() && word.starts_with(p.as_str()));
+        if pin && word.bytes().all(|b| !b.is_ascii_lowercase()) && !defined.contains(word) {
+            let line = code[..at].matches('\n').count();
+            out.push(Stale { line, at: at..at + word.len(), name: word.to_string() });
+        }
+    }
+    out
+}
+
+/// The words of C++ `code`, with their offsets, its comments and strings
+/// left out.
+fn words(code: &str) -> Vec<(usize, &str)> {
+    let bytes = code.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Bytes, not text: `i` may stop inside a character.
+        let rest = &bytes[i..];
+        let find = |what: &[u8], from: usize| rest[from..].windows(what.len()).position(|w| w == what).map(|n| from + n);
+        if rest.starts_with(b"//") {
+            i += find(b"\n", 0).unwrap_or(rest.len());
+        } else if rest.starts_with(b"/*") {
+            i += find(b"*/", 2).map_or(rest.len(), |n| n + 2);
+        } else if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote && bytes[i] != b'\n' {
+                i += if bytes[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+        } else if bytes[i] == b'_' || bytes[i].is_ascii_alphabetic() {
+            let start = i;
+            while i < bytes.len() && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
+                i += 1;
+            }
+            out.push((start, &code[start..i]));
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// The GPIO a board pin is, from its label (`"GPIO4, A3, touch 4"`); `None`
 /// for a supply, a ground, or a pin that is no GPIO.
 fn gpio(circuit: &Circuit, end: End) -> Option<u32> {
@@ -357,6 +423,22 @@ cube(1);
              [[wires]]\nfrom = \"xiao.3V3\"\nto = \"ring-2.VCC\"\n[[wires]]\nfrom = \"xiao.GND\"\nto = \"ring-2.GND\"\n{wires}"
         );
         crate::parse(&src, &dir.join("lamp.c2fc"), &[]).expect("parses")
+    }
+
+    #[test]
+    fn a_pin_constant_whose_wire_went_is_found_in_the_code() {
+        let wired = circuit("[[wires]]\nfrom = \"xiao.D6\"\nto = \"ring-2.DIN\"\n", BOARD);
+        let pins_h = firmware(&wired, "lamp.c2fc").unwrap().pins_h;
+        let code = "#include \"pins.h\"\n#define RING_2_LOCAL 4\n// RING_2_EN in a comment\nvoid setup() {\n  \
+                    pinMode(RING_2_DIN, OUTPUT); pinMode(RING_2_EN, OUTPUT); // é\n  \
+                    Serial.println(\"RING_2_EN\"); f(RING_2_LOCAL, XIAO_D9, ring_2_en, Xiao_D0);\n}\n";
+        let stale = stale_pins(&wired, &pins_h, code);
+        let found: Vec<_> = stale.iter().map(|s| (s.line, s.name.as_str())).collect();
+        // Not the defined ones, nor those in a comment or a string, nor
+        // words in lower case: the one whose wire is gone, and the board's
+        // pin that never was.
+        assert_eq!(found, [(4, "RING_2_EN"), (5, "XIAO_D9")]);
+        assert_eq!(&code[stale[0].at.clone()], "RING_2_EN");
     }
 
     #[test]

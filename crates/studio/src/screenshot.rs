@@ -8,7 +8,9 @@
 //! `catalogue` opens the parts catalogue; `move:mic:40,10` holds the part
 //! `mic` mid-drag at x 40, y 10; `settings:model` shows a page of the
 //! settings (`general`, `appearance`, `editor`, `model`, `export`,
-//! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
+//! `libraries`, `firmware`, `shortcuts`); `firmware` shows a circuit's
+//! Firmware tab (`firmware,build` builds it first), `serial` the console's
+//! serial monitor; `play` plays a design that reads `$t`, and
 //! `exploded` draws its part()s apart (`play,exploded` does both;
 //! `exploded,axis` along each part's axis); `joints:shoulder=90;elbow=-60`
 //! opens the joints' card with those joints set (`,travel` checks their
