@@ -130,6 +130,9 @@ pub struct ApiEngine {
     history: Arc<Mutex<Vec<Value>>>,
     stop: Arc<AtomicBool>,
     turn: Option<JoinHandle<()>>,
+    /// The turn under way sent its last event: it is over for the caller,
+    /// though its thread may not have returned yet.
+    ended: Arc<AtomicBool>,
 }
 
 impl ApiEngine {
@@ -146,6 +149,7 @@ impl ApiEngine {
             history: Arc::default(),
             stop: Arc::default(),
             turn: None,
+            ended: Arc::default(),
         }
     }
 
@@ -176,7 +180,7 @@ impl ApiEngine {
 
     /// Whether a turn is under way.
     fn busy(&self) -> bool {
-        self.turn.as_ref().is_some_and(|turn| !turn.is_finished())
+        self.turn.as_ref().is_some_and(|turn| !turn.is_finished()) && !self.ended.load(Ordering::SeqCst)
     }
 }
 
@@ -192,13 +196,16 @@ impl Engine for ApiEngine {
             return Err("no Anthropic API key: add one in the settings".into());
         }
         let stopped = self.turn.take().filter(|turn| !turn.is_finished());
-        // A flag of its own, so that stopping this turn never stops the next.
+        // Flags of its own, so that stopping or ending this turn never
+        // touches the next.
         self.stop = Arc::new(AtomicBool::new(false));
+        self.ended = Arc::new(AtomicBool::new(false));
         let turn = Turn {
             options: self.options.clone(),
             agent: self.agent.clone(),
             history: self.history.clone(),
             stop: self.stop.clone(),
+            ended: self.ended.clone(),
             events,
         };
         let handle = thread::Builder::new()
@@ -230,6 +237,9 @@ struct Turn {
     agent: ureq::Agent,
     history: Arc<Mutex<Vec<Value>>>,
     stop: Arc<AtomicBool>,
+    /// Set as the last event goes: a message sent on receiving it starts
+    /// the next turn, which waits for this thread to return.
+    ended: Arc<AtomicBool>,
     events: Sender<Event>,
 }
 
@@ -289,6 +299,7 @@ impl Turn {
         let end = self.converse(&mut history, &mut totals);
         drop_dangling_server_calls(&mut history);
         drop(history);
+        self.ended.store(true, Ordering::SeqCst);
         let _ = self.events.send(match end {
             Ok(()) => Event::Done { usage: Some(totals.usage), cost_usd: totals.cost, session_id: None },
             Err(message) => Event::Error { message },
