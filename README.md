@@ -53,9 +53,10 @@ they are. Written in Rust, it renders as you type.
   builds it and flashes the board plugged in, the compiler's errors at
   their line; the console's Serial monitor tab reads the board and sends
   it lines. PlatformIO comes with the optional Firmware module (Settings
-  › Firmware), or is the one already installed. The agent builds,
-  flashes (once the user agrees) and reads the board with
-  `firmware_build`, `firmware_upload` and `serial_read`. See the
+  › Firmware), or is the one already installed. The agent reads and
+  changes the program (`firmware_code`, `firmware_edit`), builds it,
+  flashes it (once the user agrees) and reads the board
+  (`firmware_build`, `firmware_upload`, `serial_read`). See the
   [guide](docs/electronics.md#the-firmware-tab).
 - **Examples**: the Examples menu lists the designs and circuits that
   come with the app, by subject: a chest that opens, three gears that
@@ -295,6 +296,8 @@ resolving from `working_dir`, then the library folders) or a file as
 | `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
 | `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
 | `firmware` | Writes a PlatformIO project (`output`, firmware/ beside the circuit `path` by default) for the board its parts are wired to: `include/pins.h` (a constant per pin wired to a GPIO, rewritten each time), `platformio.ini` (the board, the parts' libraries) and `src/main.cpp` (each part set up and tried in turn), the last two written once; refused on an error or a wired reserved pin; the set-up lines whose pins reach no GPIO left out, in `notes` |
+| `firmware_code` | The files of a PlatformIO project (src/, include/, platformio.ini) with `src/main.cpp` and `include/pins.h`, or one `file`, its lines numbered |
+| `firmware_edit` | Changes a file of the project in src/ or include/, or its platformio.ini: `edits` ({old, new}, each old found once, all or none) or the whole `text`; `include/pins.h`, the circuit's, is refused; the studio's Firmware tab shows the change at once |
 | `firmware_build` | Builds a PlatformIO project (the circuit's `firmware/`, its folder or its `platformio.ini`) with the Firmware module's PlatformIO: whether it built, the compiler's errors and warnings with their file, line and column, and the flash and RAM it takes |
 | `firmware_upload` | Builds the project and flashes it on the board plugged in (`port`, or the board Code2Form knows); in the studio the user agrees to each upload; when it fails, why and what the user should do |
 | `serial_read` | The lines the board prints for `seconds`, each with its time; `reset` restarts it first, `send` writes it a line; the ports there are, without a board |

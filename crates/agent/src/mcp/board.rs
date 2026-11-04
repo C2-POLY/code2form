@@ -34,6 +34,41 @@ pub fn tools() -> Vec<Value> {
     });
     vec![
         json!({
+            "name": "firmware_code",
+            "title": "Read the firmware's code",
+            "description": "The files of a PlatformIO project, such as the one `firmware` writes: without `file`, the list \
+                            of its files (src/, include/, platformio.ini) and the text of src/main.cpp and include/pins.h; \
+                            with `file` (its path in the project, `src/main.cpp`), that file's text, its lines numbered. \
+                            Read it before changing the program with firmware_edit: pins.h gives the constant of each pin \
+                            wired to the board.",
+            "inputSchema": schema_of(super::merge(project(), json!({
+                "file": { "type": "string", "description": "A file of the project, as `src/main.cpp`." },
+            })), &["path"]),
+        }),
+        json!({
+            "name": "firmware_edit",
+            "title": "Change the firmware's code",
+            "description": "Changes a file of a PlatformIO project, in src/ or include/, or its platformio.ini: either \
+                            `edits`, a list of {old, new} where each `old` occurs exactly once in the file (copied \
+                            exactly, without line numbers), applied in order, all or none; or `text`, the whole new file, \
+                            which may be a new one. include/pins.h is the circuit's and refused: rewire the circuit \
+                            instead. The studio shows the change in the circuit's Firmware tab at once. Then build it \
+                            with firmware_build and fix what it says.",
+            "inputSchema": schema_of(super::merge(project(), json!({
+                "file": { "type": "string", "description": "The file to change, as `src/main.cpp`." },
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": { "old": { "type": "string" }, "new": { "type": "string" } },
+                        "required": ["old", "new"],
+                    },
+                    "description": "The changes, in order. Give this or `text`.",
+                },
+                "text": { "type": "string", "description": "The whole file. Give this or `edits`." },
+            })), &["path", "file"]),
+        }),
+        json!({
             "name": "firmware_build",
             "title": "Build the firmware",
             "description": "Builds a PlatformIO project, such as the one `firmware` writes, with the Firmware module's \
@@ -76,6 +111,8 @@ pub fn tools() -> Vec<Value> {
 /// The tool named `name`, if it is one of these.
 pub fn tool(name: &str) -> Option<Tool> {
     Some(match name {
+        "firmware_code" => code_tool,
+        "firmware_edit" => edit_tool,
         "firmware_build" => build_tool,
         "firmware_upload" => upload_tool,
         "serial_read" => serial_tool,
@@ -83,9 +120,23 @@ pub fn tool(name: &str) -> Option<Tool> {
     })
 }
 
-/// The PlatformIO project `path` names: the folder of its platformio.ini,
-/// or a circuit's firmware/ folder.
+/// The PlatformIO project `path` names, to build: the folder of its
+/// platformio.ini, or a circuit's firmware/ folder.
 fn project(args: &Value) -> Result<PathBuf, String> {
+    let dir = project_dir(args)?;
+    // PlatformIO runs the Python a project names: the agent builds none,
+    // as it runs no program of its own.
+    let ini = std::fs::read_to_string(dir.join("platformio.ini")).unwrap_or_default();
+    if ini.lines().any(|l| l.trim_start().starts_with("extra_scripts")) {
+        return Err("the project runs scripts of its own as it builds (`extra_scripts` in platformio.ini): ask the \
+                    user to build it from the studio instead"
+            .into());
+    }
+    Ok(dir)
+}
+
+/// The PlatformIO project `path` names, to read or change.
+fn project_dir(args: &Value) -> Result<PathBuf, String> {
     let path = PathBuf::from(args.get("path").and_then(Value::as_str).ok_or("give the project's `path`")?);
     let dir = if path.extension().is_some_and(|e| e == "c2fc") {
         path.parent().unwrap_or(Path::new("")).join("firmware")
@@ -95,18 +146,125 @@ fn project(args: &Value) -> Result<PathBuf, String> {
         path
     };
     if dir.join("platformio.ini").is_file() {
-        // PlatformIO runs the Python a project names: the agent builds
-        // none, as it runs no program of its own.
-        let ini = std::fs::read_to_string(dir.join("platformio.ini")).unwrap_or_default();
-        if ini.lines().any(|l| l.trim_start().starts_with("extra_scripts")) {
-            return Err("the project runs scripts of its own as it builds (`extra_scripts` in platformio.ini): ask the \
-                        user to build it from the studio instead"
-                .into());
-        }
         Ok(dir)
     } else {
         Err(format!("{} has no platformio.ini: write the circuit's first firmware with `firmware`, then build it", dir.display()))
     }
+}
+
+/// The files of the project the agent reads and changes: its sources and
+/// headers, then platformio.ini, by their path in it.
+fn code_files(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                walk(&path, root, out);
+            } else if path.extension().is_some_and(|e| ["cpp", "c", "h", "hpp", "ino"].iter().any(|x| e == *x)) {
+                out.push(name_in(root, &path));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for folder in ["src", "include"] {
+        walk(&dir.join(folder), dir, &mut files);
+    }
+    files.sort();
+    files.push(c2f_circuit::firmware::PLATFORMIO_INI.to_string());
+    files
+}
+
+fn name_in(root: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    relative.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+}
+
+/// The file `file` names in the project at `dir`: in src/ or include/, or
+/// its platformio.ini; nowhere else.
+fn project_file(dir: &Path, file: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(file);
+    let plain = relative.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    let allowed = file == c2f_circuit::firmware::PLATFORMIO_INI || file.starts_with("src/") || file.starts_with("include/");
+    if !plain || !allowed {
+        return Err(format!("`file` = {file} is not a file of the project: give a path in src/ or include/, or platformio.ini"));
+    }
+    Ok(dir.join(relative))
+}
+
+/// `text`, each line after its number.
+fn numbered(text: &str) -> String {
+    use std::fmt::Write as _;
+    text.lines().enumerate().fold(String::new(), |mut out, (i, line)| {
+        let _ = writeln!(out, "{:4}\t{line}", i + 1);
+        out
+    })
+}
+
+fn code_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let dir = project_dir(args)?;
+    let report = match args.get("file").and_then(Value::as_str) {
+        Some(file) => {
+            let path = project_file(&dir, file)?;
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            json!({ "file": file, "text": numbered(&text) })
+        }
+        None => {
+            let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok().map(|t| numbered(&t));
+            json!({
+                "project": dir.display().to_string(),
+                "files": code_files(&dir),
+                "src/main.cpp": read(c2f_circuit::firmware::MAIN_CPP),
+                "include/pins.h": read(c2f_circuit::firmware::PINS_H),
+            })
+        }
+    };
+    Ok(vec![text(pretty(&report))])
+}
+
+fn edit_tool(args: &Value) -> Result<Vec<Value>, String> {
+    let dir = project_dir(args)?;
+    let file = args.get("file").and_then(Value::as_str).ok_or("give the `file` to change, as `src/main.cpp`")?;
+    if file == c2f_circuit::firmware::PINS_H {
+        return Err("include/pins.h is written from the circuit: change the circuit's wires instead, and the pins follow".into());
+    }
+    let path = project_file(&dir, file)?;
+    let new = match (args.get("text").and_then(Value::as_str), args.get("edits").and_then(Value::as_array)) {
+        (Some(text), None) => text.to_string(),
+        (None, Some(edits)) => {
+            let mut text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            for (i, edit) in edits.iter().enumerate() {
+                let (Some(old), Some(new)) = (edit.get("old").and_then(Value::as_str), edit.get("new").and_then(Value::as_str)) else {
+                    return Err(format!("edit {} needs `old` and `new`", i + 1));
+                };
+                match text.matches(old).count() {
+                    1 => text = text.replacen(old, new, 1),
+                    n => {
+                        return Err(format!(
+                            "edit {}: `old` occurs {n} times in {file}, not once: nothing was changed; read it again with firmware_code",
+                            i + 1
+                        ));
+                    }
+                }
+            }
+            text
+        }
+        _ => return Err("give `edits` or `text`, one of them".into()),
+    };
+    if file == c2f_circuit::firmware::PLATFORMIO_INI && new.lines().any(|l| l.trim_start().starts_with("extra_scripts")) {
+        return Err("platformio.ini may not run scripts of its own (`extra_scripts`): the user adds them if they want".into());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&path, &new).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let report = json!({
+        "ok": true,
+        "file": file,
+        "lines": new.lines().count(),
+        "next": "Build it with firmware_build and fix what it says.",
+    });
+    Ok(vec![text(pretty(&report))])
 }
 
 fn build_tool(args: &Value) -> Result<Vec<Value>, String> {
@@ -237,6 +395,39 @@ mod tests {
         std::fs::write(firmware.join("platformio.ini"), "[env:x]\nextra_scripts = pre:run.py\n").unwrap();
         let err = project(&json!({ "path": firmware })).unwrap_err();
         assert!(err.contains("extra_scripts"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_agent_reads_and_changes_the_code_but_not_the_pins() {
+        let dir = std::env::temp_dir().join(format!("c2f-board-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("include")).unwrap();
+        std::fs::write(dir.join("platformio.ini"), "[env:x]\n").unwrap();
+        std::fs::write(dir.join("src/main.cpp"), "void setup() {}\nvoid loop() {}\n").unwrap();
+        std::fs::write(dir.join("include/pins.h"), "#define LED_DIN 4\n").unwrap();
+        let read = |args: Value| -> Value {
+            serde_json::from_str(code_tool(&args).unwrap()[0]["text"].as_str().unwrap()).unwrap()
+        };
+        let listed = read(json!({ "path": dir }));
+        assert_eq!(listed["files"], json!(["include/pins.h", "src/main.cpp", "platformio.ini"]));
+        assert_eq!(listed["src/main.cpp"], "   1\tvoid setup() {}\n   2\tvoid loop() {}\n");
+        let edit = |args: Value| edit_tool(&super::super::merge(json!({ "path": dir }), args));
+        edit(json!({ "file": "src/main.cpp", "edits": [{ "old": "void loop() {}", "new": "void loop() { delay(10); }" }] })).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("src/main.cpp")).unwrap(), "void setup() {}\nvoid loop() { delay(10); }\n");
+        // A new file, and its text read back.
+        edit(json!({ "file": "src/motor.h", "text": "#pragma once\n" })).unwrap();
+        assert_eq!(read(json!({ "path": dir, "file": "src/motor.h" }))["text"], "   1\t#pragma once\n");
+        // Refused: an `old` found twice (nothing changes), the pins, a path
+        // out of the project, scripts in platformio.ini.
+        let err = edit(json!({ "file": "src/main.cpp", "edits": [{ "old": "void", "new": "int" }] })).unwrap_err();
+        assert!(err.contains("2 times"), "{err}");
+        assert!(edit(json!({ "file": "include/pins.h", "text": "" })).unwrap_err().contains("circuit"));
+        assert!(edit(json!({ "file": "../x.cpp", "text": "" })).is_err());
+        assert!(edit(json!({ "file": "src/../../x.cpp", "text": "" })).is_err());
+        assert!(edit(json!({ "file": "platformio.ini", "text": "extra_scripts = a.py\n" })).unwrap_err().contains("extra_scripts"));
+        assert_eq!(std::fs::read_to_string(dir.join("include/pins.h")).unwrap(), "#define LED_DIN 4\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

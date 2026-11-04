@@ -97,12 +97,12 @@ fn protocol() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["render", "parameters", "image", "electrify", "section", "sweep", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "firmware", "fit", "check_part", "save_part", "save_brief", "check_brief", "read_brief", "mass_properties", "loads", "firmware_build", "firmware_upload", "serial_read"]
+        ["render", "parameters", "image", "electrify", "section", "sweep", "export", "library_parts", "part_pins", "check_circuit", "circuit_image", "circuit_wires", "circuit_bom", "firmware", "fit", "check_part", "save_part", "save_brief", "check_brief", "read_brief", "mass_properties", "loads", "firmware_code", "firmware_edit", "firmware_build", "firmware_upload", "serial_read"]
     );
     for tool in tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
         let takes_code = tool["inputSchema"]["properties"]["code"].is_object();
-        assert_eq!(takes_code, !["library_parts", "electrify", "firmware", "save_brief", "check_brief", "read_brief", "loads", "firmware_build", "firmware_upload", "serial_read"].contains(&tool["name"].as_str().unwrap()), "{tool}");
+        assert_eq!(takes_code, !["library_parts", "electrify", "firmware", "save_brief", "check_brief", "read_brief", "loads", "firmware_code", "firmware_edit", "firmware_build", "firmware_upload", "serial_read"].contains(&tool["name"].as_str().unwrap()), "{tool}");
     }
 
     assert_eq!(server.request("resources/list", json!({}))["error"]["code"], -32601);

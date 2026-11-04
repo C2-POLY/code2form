@@ -911,6 +911,12 @@ uninstalls it all in one click. A PlatformIO already installed (in
 `~/.platformio`, or from Homebrew) is used instead, with nothing to
 install. The editor and the monitor work without it.
 
+Ask the agent to change the program ("make the motor turn while the pad
+is touched"): it reads the project with `firmware_code`, changes it with
+`firmware_edit` (the Firmware tab shows its change at once; `pins.h`
+stays the circuit's), builds it until it builds, then flashes it once you
+agree in the dialog the studio shows, and reads what the board prints.
+
 ## 7. With an AI agent
 
 `c2f mcp` is a Model Context Protocol server. Add it to Claude Code
