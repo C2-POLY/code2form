@@ -589,6 +589,15 @@ pub struct StudioApp {
     board: crate::firmware::Board,
     /// The project open, in its panel.
     project: Option<project_panel::OpenProject>,
+    /// The tabs of the projects not open (and of the files out of any),
+    /// put away until they are again.
+    parked: Vec<project_panel::Parked>,
+    /// What the panel on the left shows, the project open.
+    left_view: project_panel::PanelView,
+    /// The folder of the file open shows on the left, without a project.
+    folder_shown: bool,
+    /// The files the Files view shows, as last listed.
+    folder_tree: Option<project_panel::FileTree>,
 }
 
 impl StudioApp {
@@ -681,6 +690,10 @@ impl StudioApp {
             tabs,
             board: crate::firmware::Board::new(ctx),
             project: None,
+            parked: Vec::new(),
+            left_view: project_panel::PanelView::default(),
+            folder_shown: false,
+            folder_tree: None,
         };
         app.apply_settings(ctx);
         if app.session.chat {
@@ -696,6 +709,9 @@ impl StudioApp {
         if words.split(',').any(|w| w == "firmware") {
             app.panels.circuit_tab = firmware_tab::CircuitTab::Firmware;
         }
+        if words.split(',').any(|w| w == "files") {
+            app.left_view = project_panel::PanelView::Files;
+        }
         if words.split(',').any(|w| w == "serial") {
             app.panels.console_tab = firmware_tab::ConsoleTab::Serial;
             app.console_open = true;
@@ -709,6 +725,11 @@ impl StudioApp {
         // The tabs of the last session, quietly: a file gone since is
         // simply not reopened.
         let session = std::mem::take(&mut app.session);
+        // The project open last time first, its tabs then joining it.
+        let project = session.project.clone().filter(|p| app.settings.reopen_tabs && p.is_file()).and_then(|p| c2f_project::Project::open(&p).ok());
+        if let Some(project) = &project {
+            app.switch_project(ctx, Some(project.clone()));
+        }
         let mut active = None;
         let reopened = if app.settings.reopen_tabs { session.paths.as_slice() } else { &[] };
         for (i, path) in reopened.iter().enumerate().filter(|(_, p)| p.exists()) {
@@ -720,9 +741,9 @@ impl StudioApp {
         if let Some(index) = active {
             app.select_tab(ctx, index);
         }
-        // The project open last time, in its panel.
-        if let Some(project) = session.project.clone().filter(|p| app.settings.reopen_tabs && p.is_file()) {
-            app.open_project(ctx, &project);
+        // A tab out of the project put it away: it comes back on top.
+        if let Some(project) = project.filter(|p| app.project.as_ref().is_none_or(|o| o.project.file != p.file)) {
+            app.switch_project(ctx, Some(project));
         }
         app.session = session;
         for path in paths {
@@ -2054,7 +2075,8 @@ impl StudioApp {
             self.open_project(ctx, &path);
             return;
         }
-        self.follow_project(&path);
+        // With its project's tabs.
+        self.follow_project(ctx, &path);
         if let Some(index) = self.tab_of(&path) {
             self.select_tab(ctx, index);
             return;
@@ -2531,6 +2553,13 @@ impl StudioApp {
     /// given up: asks about the next tab's, or closes the window.
     fn quit(&mut self, ctx: &egui::Context) {
         self.quit_cleared.push(self.doc.id);
+        // The tabs of a project put away are asked about too: it comes back
+        // to show them.
+        if self.next_unsaved().is_none() {
+            if let Some(key) = self.parked_unsaved() {
+                self.bring_back(ctx, key);
+            }
+        }
         match self.next_unsaved() {
             Some(index) => {
                 self.select_tab(ctx, index);
@@ -2861,13 +2890,20 @@ impl StudioApp {
                     "Son dossier devient un projet, ses fichiers là où ils sont : ses pièces, son circuit, son firmware et ses scans",
                 );
                 if ui.button(tr("Make a Project of This Folder", "Faire de ce dossier un projet")).on_hover_text(hint).clicked() {
-                    self.adopt_project(ctx);
+                    self.adopt_project();
                     ui.close();
                 }
             }
             if self.project.is_some() && ui.button(tr("Close the Project", "Fermer le projet")).clicked() {
-                self.project = None;
+                self.switch_project(ctx, None);
                 ui.close();
+            }
+            if self.project.is_none() && self.doc.path.is_some() {
+                let label = if self.folder_shown { tr("Hide the Folder", "Masquer le dossier") } else { tr("Show the Folder", "Afficher le dossier") };
+                if ui.button(label).on_hover_text(tr("The files of the open file's folder, on the left", "Les fichiers du dossier du fichier ouvert, à gauche")).clicked() {
+                    self.folder_shown = !self.folder_shown;
+                    ui.close();
+                }
             }
             ui.separator();
             self.recent_menu(ui);
@@ -5339,6 +5375,49 @@ mod tests {
 
     fn files(names: &[&str]) -> Vec<Option<String>> {
         names.iter().map(|n| (!n.is_empty()).then(|| n.to_string())).collect()
+    }
+
+    #[test]
+    fn each_project_keeps_its_own_tabs() {
+        let ctx = egui::Context::default();
+        let root = std::env::temp_dir().join(format!("code2form-project-tabs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (name, files) in [("Lamp", ["shade.c2f", "base.c2f"]), ("Box", ["lid.c2f", "body.c2f"])] {
+            c2f_project::create(&root.join(name), name).unwrap();
+            for file in files {
+                std::fs::write(root.join(name).join("models").join(file), "cube(1);").unwrap();
+            }
+        }
+        std::fs::write(root.join("loose.c2f"), "cube(1);").unwrap();
+        let mut app = studio(&ctx, None, Vec::new());
+        app.open(&ctx, root.join("Lamp/models/shade.c2f"));
+        app.open(&ctx, root.join("Lamp/models/base.c2f"));
+        assert_eq!(app.project.as_ref().map(|o| o.project.name.as_str()), Some("Lamp"));
+        // A file of another project: only its project's tabs show.
+        app.open(&ctx, root.join("Box/models/lid.c2f"));
+        assert_eq!(app.project.as_ref().map(|o| o.project.name.as_str()), Some("Box"));
+        assert_eq!(open_files(&app), (files(&["lid.c2f"]), 0));
+        // A file out of any project: none open, its tabs alone.
+        app.open(&ctx, root.join("loose.c2f"));
+        assert!(app.project.is_none());
+        assert_eq!(open_files(&app), (files(&["loose.c2f"]), 0));
+        // Back to the lamp: its tabs as they were left, the second active.
+        app.open_project(&ctx, &root.join("Lamp"));
+        assert_eq!(open_files(&app), (files(&["shade.c2f", "base.c2f"]), 1));
+        // Its file opened again selects its tab rather than another.
+        app.open(&ctx, root.join("Lamp/models/shade.c2f"));
+        assert_eq!(open_files(&app), (files(&["shade.c2f", "base.c2f"]), 0));
+        // An unsaved edit in a project put away is asked about on quitting.
+        app.open(&ctx, root.join("Box/models/body.c2f"));
+        assert_eq!(open_files(&app).0, files(&["lid.c2f", "body.c2f"]));
+        app.open_project(&ctx, &root.join("Lamp"));
+        let boxes = std::fs::canonicalize(root.join("Box")).unwrap();
+        let parked_box = app.parked.iter_mut().find(|p| p.project.as_ref().is_some_and(|f| f.starts_with(&boxes))).unwrap();
+        parked_box.tabs[0].text.push_str("// edited");
+        app.quit(&ctx);
+        assert_eq!(app.project.as_ref().map(|o| o.project.name.as_str()), Some("Box"), "brought back to ask");
+        assert!(matches!(app.confirm, Some(Pending::Quit)));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -76,6 +76,27 @@ impl<T> Shelf<T> {
         self.active = self.others.len();
     }
 
+    /// Takes every tab out, `blank` taking the active one's place: the tabs
+    /// in order, and which was active.
+    pub fn take_all(&mut self, current: &mut T, blank: T) -> (Vec<T>, usize) {
+        let active = std::mem::replace(current, blank);
+        let mut tabs = std::mem::take(&mut self.others);
+        tabs.insert(self.active.min(tabs.len()), active);
+        let index = std::mem::replace(&mut self.active, 0);
+        (tabs, index)
+    }
+
+    /// Puts `tabs` in, tab `active` the active one, in place of the tabs
+    /// there were, which must be none but `current`: it is given back.
+    /// `tabs` must not be empty.
+    pub fn put_all(&mut self, current: &mut T, mut tabs: Vec<T>, active: usize) -> T {
+        let active = active.min(tabs.len() - 1);
+        let shown = tabs.remove(active);
+        self.others = tabs;
+        self.active = active;
+        std::mem::replace(current, shown)
+    }
+
     /// Closes tab `index` and returns it, unless it is the last one. The
     /// active tab gives its place to the next one, or to the previous one
     /// when it was the last.
@@ -263,6 +284,20 @@ fn format(session: &Session) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_tab_goes_out_and_comes_back_in_its_order() {
+        let mut shelf = Shelf::default();
+        let mut current = "a";
+        shelf.push(&mut current, "b");
+        shelf.push(&mut current, "c");
+        shelf.select(&mut current, 1);
+        let (tabs, active) = shelf.take_all(&mut current, "blank");
+        assert_eq!((tabs.clone(), active, current, shelf.len()), (vec!["a", "b", "c"], 1, "blank", 1));
+        let given_back = shelf.put_all(&mut current, tabs, active);
+        assert_eq!((given_back, current, shelf.len(), shelf.active()), ("blank", "b", 3, 1));
+        assert_eq!(shelf.iter(&current).copied().collect::<Vec<_>>(), ["a", "b", "c"]);
+    }
 
     /// The tabs in order, and the active one.
     fn order(shelf: &Shelf<char>, current: &char) -> (String, char) {

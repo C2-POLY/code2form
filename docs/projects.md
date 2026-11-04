@@ -74,9 +74,19 @@ become a project.
   opens its project too, when no other is open, and the project open
   comes back at the next launch with the tabs (when the settings reopen
   them).
-- **The Project panel**, on the left, lists the brief, the designs (the
+- **Each project has its own tabs**: the tabs at the top are the files
+  of the project open. Opening another project, or a file of another,
+  puts them away and brings back its own as they were left; a file out
+  of any project opens with the other files out of any. Quitting asks
+  about the unsaved edits of every project, putting away or not.
+- **The panel on the left** shows the project two ways, **Project** and
+  **Files**. Project lists the brief, the designs (the
   main one starred), the scans, the circuit, the firmware and the
-  exports. A click opens a file in its tab: a scan to look at and build
+  exports. Files shows the project's folder as it is on disk, folders
+  first, a firmware's build left out: a design, a circuit or a mesh
+  opens in its tab, a firmware's source in its circuit's Firmware tab,
+  another file in the Finder. Without a project, File › Show the Folder
+  shows the folder of the file open. A click opens a file in its tab: a scan to look at and build
   on, the firmware in its circuit's Firmware tab, an export in the
   Finder. The `+` of Designs writes a new part in `models/`, that of
   Scans imports a mesh into `scans/`, that of Circuit writes the circuit

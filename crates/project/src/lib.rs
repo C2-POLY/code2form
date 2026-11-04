@@ -138,6 +138,8 @@ impl Project {
         } else {
             path.to_path_buf()
         };
+        // One path for one project, however it was named.
+        let file = absolute(&file);
         let src = std::fs::read_to_string(&file).map_err(|e| vec![problem(0, format!("cannot read {}: {e}", file.display()))])?;
         Project::parse(&src, &file)
     }

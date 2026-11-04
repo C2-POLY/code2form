@@ -1,8 +1,9 @@
 //! The project open in the studio: its panel on the left, by section
-//! (Brief, Designs, Scans, Circuit, Firmware, Exports), each file a click
-//! away; File › New Project, Open Project and Make a Project of a folder;
-//! and the files the agent or the iPhone puts in its folders, taken in as
-//! they come.
+//! (Brief, Designs, Scans, Circuit, Firmware, Exports) or as the files of
+//! its folder, each file a click away; its own tabs, put away while
+//! another project is open and back with it; File › New Project, Open
+//! Project and Make a Project of a folder; and the files the agent or the
+//! iPhone puts in its folders, taken in as they come.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -93,14 +94,81 @@ fn hidden(path: &Path) -> bool {
     path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
 }
 
+/// What the panel on the left shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum PanelView {
+    /// The project by section.
+    #[default]
+    Project,
+    /// The files of its folder, as they are on disk.
+    Files,
+}
+
+/// A folder's files, as last listed, for the Files view.
+pub(super) struct FileTree {
+    root: PathBuf,
+    nodes: Vec<Node>,
+    listed: Instant,
+}
+
+struct Node {
+    path: PathBuf,
+    name: String,
+    /// A folder's files; `None` for a file.
+    children: Option<Vec<Node>>,
+}
+
+/// The folders the Files view leaves out: a firmware's build, a cache.
+const SKIPPED: [&str; 4] = [".pio", "node_modules", "target", "__pycache__"];
+
+impl FileTree {
+    fn of(root: &Path) -> FileTree {
+        let mut count = 0;
+        FileTree { root: root.to_path_buf(), nodes: list(root, 0, &mut count), listed: Instant::now() }
+    }
+}
+
+/// The files and folders in `dir`, folders first, down to six levels and
+/// two thousand entries.
+fn list(dir: &Path, depth: usize, count: &mut usize) -> Vec<Node> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut entries: Vec<(bool, PathBuf, String)> = entries
+        .flatten()
+        .map(|e| (e.file_type().is_ok_and(|t| t.is_dir()), e.path(), e.file_name().to_string_lossy().into_owned()))
+        .filter(|(_, _, name)| !name.starts_with('.') && !SKIPPED.contains(&name.as_str()))
+        .collect();
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.to_lowercase().cmp(&b.2.to_lowercase())));
+    let mut nodes = Vec::new();
+    for (folder, path, name) in entries {
+        *count += 1;
+        if *count > 2000 {
+            break;
+        }
+        let children = folder.then(|| if depth < 6 { list(&path, depth + 1, count) } else { Vec::new() });
+        nodes.push(Node { path, name, children });
+    }
+    nodes
+}
+
+/// The tabs of a project not open, put away until it is again: `None` for
+/// the files outside any project.
+pub(super) struct Parked {
+    pub project: Option<PathBuf>,
+    pub tabs: Vec<super::Tab>,
+    pub active: usize,
+}
+
 /// What a click in the panel asks for.
 enum PanelAction {
     Open(PathBuf),
     OpenFirmware(PathBuf),
+    /// A file of the Files view: opened in the tab it takes.
+    OpenFile(PathBuf),
     Reveal(PathBuf),
     NewDesign,
     ImportScan,
     NewCircuit,
+    View(PanelView),
     Close,
 }
 
@@ -112,8 +180,8 @@ impl StudioApp {
             Ok(project) => {
                 self.remember(&project.file);
                 let first = project.main_design().or_else(|| project.circuit_path()).filter(|p| p.is_file());
-                self.project = Some(OpenProject::new(project));
-                if self.doc.is_blank() {
+                self.switch_project(ctx, Some(project));
+                if self.doc.is_blank() && self.shelf.len() == 1 {
                     if let Some(first) = first {
                         self.open(ctx, first);
                     }
@@ -128,15 +196,84 @@ impl StudioApp {
         }
     }
 
-    /// The project of a file just opened shows in its panel, when no other
-    /// is open.
-    pub(super) fn follow_project(&mut self, file: &Path) {
-        if self.project.is_some() {
+    /// A file about to open goes with its project's tabs: the project open
+    /// changes when the file is another's, or in none.
+    pub(super) fn follow_project(&mut self, ctx: &egui::Context, file: &Path) {
+        let project = Project::of(file);
+        let key = |file: &Path| std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+        let now = self.project.as_ref().map(|o| key(&o.project.file));
+        if project.as_ref().map(|p| key(&p.file)) != now {
+            self.switch_project(ctx, project);
+        }
+    }
+
+    /// Opens `project`, or none: the tabs open go away with the project
+    /// they belong to, and those of `project` come back as they were left.
+    pub(super) fn switch_project(&mut self, ctx: &egui::Context, project: Option<Project>) {
+        let key = |file: &Path| std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+        let from = self.project.as_ref().map(|o| key(&o.project.file));
+        let to = project.as_ref().map(|p| key(&p.file));
+        if from == to {
+            if let Some(project) = project {
+                self.project = Some(OpenProject::new(project));
+            }
             return;
         }
-        if let Some(project) = Project::of(file) {
-            self.project = Some(OpenProject::new(project));
+        // The tabs open now, untitled empty ones left out.
+        let blank = self.fresh_tab();
+        let (tabs, active) = self.shelf.take_all(&mut self.doc, blank);
+        let active_id = tabs.get(active).map(|t| t.id);
+        let mut kept: Vec<super::Tab> = Vec::new();
+        for mut tab in tabs {
+            if tab.is_blank() {
+                tab.editor.forget(ctx);
+                if let Some(gl) = &self.gl {
+                    tab.viewer.destroy(gl);
+                }
+                continue;
+            }
+            // Out of sight, it renders again once back.
+            tab.stale = true;
+            kept.push(tab);
         }
+        if !kept.is_empty() {
+            let active = active_id.and_then(|id| kept.iter().position(|t| t.id == id)).unwrap_or(0);
+            self.parked.retain(|p| p.project != from);
+            self.parked.push(Parked { project: from, tabs: kept, active });
+        }
+        self.project = project.map(OpenProject::new);
+        self.folder_tree = None;
+        if let Some(index) = self.parked.iter().position(|p| p.project == to) {
+            let parked = self.parked.remove(index);
+            let blank = self.shelf.put_all(&mut self.doc, parked.tabs, parked.active);
+            if let Some(gl) = &self.gl {
+                let mut viewer = blank.viewer;
+                viewer.destroy(gl);
+            }
+            self.show_tab(ctx);
+        }
+    }
+
+    /// The project put away that has unsaved edits, to show while
+    /// quitting, those already asked about left out.
+    pub(super) fn parked_unsaved(&self) -> Option<Option<PathBuf>> {
+        self.parked
+            .iter()
+            .find(|p| p.tabs.iter().any(|t| t.is_dirty() && !self.quit_cleared.contains(&t.id)))
+            .map(|p| p.project.clone())
+    }
+
+    /// Brings back the project (or the files out of any) `key` names.
+    pub(super) fn bring_back(&mut self, ctx: &egui::Context, key: Option<PathBuf>) {
+        let project = key.as_deref().and_then(|file| Project::open(file).ok());
+        if key.is_some() && project.is_none() {
+            // Its file is gone: its tabs come back with the files out of
+            // any project.
+            if let Some(parked) = self.parked.iter_mut().find(|p| p.project == key) {
+                parked.project = None;
+            }
+        }
+        self.switch_project(ctx, project);
     }
 
     /// File › New Project: a folder picked, the project made in it.
@@ -171,13 +308,13 @@ impl StudioApp {
 
     /// File › Make a Project of This Folder: the folder of the file open,
     /// its files where they are.
-    pub(super) fn adopt_project(&mut self, ctx: &egui::Context) {
+    pub(super) fn adopt_project(&mut self) {
         let Some(dir) = self.doc.path.as_deref().and_then(Path::parent).map(Path::to_path_buf) else { return };
         match c2f_project::adopt(&dir, None) {
             Ok(project) => {
                 self.doc.console.log(Level::Info, tr!("{} is a project now", "{} est maintenant un projet", dir.display()));
-                self.project = None;
-                self.open_project(ctx, &project.file);
+                // The tabs open stay: they are the project's now.
+                self.project = Some(OpenProject::new(project));
             }
             Err(error) => self.doc.console.log(Level::Error, error),
         }
@@ -206,8 +343,27 @@ impl StudioApp {
         Some(dir)
     }
 
+    /// The folder the Files view shows: the project's, else the file
+    /// open's.
+    fn files_root(&self) -> Option<PathBuf> {
+        self.project_dir().or_else(|| self.doc.path.as_deref().and_then(Path::parent).map(Path::to_path_buf))
+    }
+
     /// Looks at the project's folder now and then.
     pub(super) fn poll_project(&mut self, ctx: &egui::Context) {
+        let shows_files = self.left_view == PanelView::Files && (self.project.is_some() || self.folder_shown);
+        if shows_files {
+            let root = self.files_root();
+            let stale = match (&self.folder_tree, &root) {
+                (Some(tree), Some(root)) => tree.root != *root || tree.listed.elapsed() >= POLL,
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            if stale {
+                self.folder_tree = root.as_deref().map(FileTree::of);
+            }
+            ctx.request_repaint_after(POLL);
+        }
         let Some(open) = self.project.as_mut() else { return };
         if open.polled.elapsed() < POLL {
             ctx.request_repaint_after(POLL);
@@ -224,21 +380,53 @@ impl StudioApp {
 
     /// The project's panel, on the left.
     pub(super) fn project_panel(&mut self, ctx: &egui::Context) {
-        let Some(open) = &self.project else { return };
+        if self.project.is_none() && !self.folder_shown {
+            return;
+        }
         let palette = theme::palette();
         let mut action = None;
         let frame = Frame::new().fill(palette.panel).inner_margin(Margin { left: 12, right: 10, top: 10, bottom: 10 });
-        egui::SidePanel::left("project").frame(frame).resizable(true).default_width(200.0).width_range(160.0..=320.0).show(ctx, |ui| {
-            let project = &open.project;
+        let view = if self.project.is_some() { self.left_view } else { PanelView::Files };
+        egui::SidePanel::left("project").frame(frame).resizable(true).default_width(210.0).width_range(160.0..=360.0).show(ctx, |ui| {
+            let title = match &self.project {
+                Some(open) => open.project.name.clone(),
+                None => self.files_root().and_then(|r| r.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default(),
+            };
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&project.name).strong().size(14.0).color(palette.text)).on_hover_text(project.dir.display().to_string());
+                let folder = self.files_root().map(|r| r.display().to_string()).unwrap_or_default();
+                ui.label(RichText::new(title).strong().size(14.0).color(palette.text)).on_hover_text(folder);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").on_hover_text(tr("Close the project", "Fermer le projet")).clicked() {
+                    let hint = if self.project.is_some() { tr("Close the project", "Fermer le projet") } else { tr("Hide the folder", "Masquer le dossier") };
+                    if ui.small_button("×").on_hover_text(hint).clicked() {
                         action = Some(PanelAction::Close);
                     }
                 });
             });
+            if self.project.is_some() {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    for (choice, label) in [(PanelView::Project, tr("Project", "Projet")), (PanelView::Files, tr("Files", "Fichiers"))] {
+                        if ui.add(Button::selectable(view == choice, RichText::new(label).size(12.0))).clicked() && view != choice {
+                            action = Some(PanelAction::View(choice));
+                        }
+                    }
+                });
+            }
             ui.add_space(6.0);
+            if view == PanelView::Files {
+                egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+                    let current = self.doc.path.clone();
+                    match &self.folder_tree {
+                        Some(tree) => show_nodes(ui, &tree.nodes, 0, current.as_deref(), &mut action),
+                        None => {
+                            ui.label(RichText::new(tr("Listing…", "Lecture…")).size(11.5).color(palette.text_faint));
+                        }
+                    }
+                });
+                return;
+            }
+            let Some(open) = &self.project else { return };
+            let project = &open.project;
             egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                 let current = self.doc.path.clone();
                 let entry = |ui: &mut egui::Ui, path: &Path, label: String| -> bool {
@@ -333,6 +521,11 @@ impl StudioApp {
     fn panel_action(&mut self, ctx: &egui::Context, action: PanelAction) {
         match action {
             PanelAction::Open(path) => self.open(ctx, path),
+            PanelAction::OpenFile(path) => self.open_from_folder(ctx, path),
+            PanelAction::View(view) => {
+                self.left_view = view;
+                self.folder_tree = None;
+            }
             PanelAction::OpenFirmware(circuit) => {
                 self.open(ctx, circuit);
                 self.panels.circuit_tab = super::firmware_tab::CircuitTab::Firmware;
@@ -341,11 +534,59 @@ impl StudioApp {
             PanelAction::Reveal(path) => {
                 let _ = reveal(&path);
             }
-            PanelAction::Close => self.project = None,
+            PanelAction::Close if self.project.is_some() => self.switch_project(ctx, None),
+            PanelAction::Close => self.folder_shown = false,
             PanelAction::NewDesign => self.add_to_project(ctx, Kind::Design),
             PanelAction::NewCircuit => self.add_to_project(ctx, Kind::Circuit),
             PanelAction::ImportScan => self.import_scan(ctx),
         }
+    }
+
+    /// A file clicked in the Files view: a design, a circuit or a mesh in
+    /// its tab, a firmware's file in its circuit's Firmware tab, another in
+    /// the Finder.
+    fn open_from_folder(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let extension = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if ["c2f", "scad", "c2fc", "stl", "obj", "3mf", "ply", "off", "amf"].contains(&extension.as_str()) {
+            self.open(ctx, path);
+            return;
+        }
+        let firmware_file = ["cpp", "c", "h", "hpp", "ino", "ini"].contains(&extension.as_str());
+        if let Some(circuit) = firmware_file.then(|| self.circuit_of_firmware(&path)).flatten() {
+            self.open(ctx, circuit);
+            self.panels.circuit_tab = super::firmware_tab::CircuitTab::Firmware;
+            self.show_code(ctx);
+            if let Some(project) = self.firmware_project() {
+                if let Some(index) = project.index_of(&path) {
+                    project.current = index;
+                }
+            }
+            return;
+        }
+        let _ = reveal(&path);
+    }
+
+    /// The circuit whose firmware `file` is part of: the project's, or the
+    /// one beside the firmware's folder.
+    fn circuit_of_firmware(&self, file: &Path) -> Option<PathBuf> {
+        if let Some(open) = &self.project {
+            let circuit = open.project.circuit_path().filter(|_| file.starts_with(open.project.firmware_dir()));
+            if circuit.is_some() {
+                return circuit;
+            }
+        }
+        // `…/firmware/src/main.cpp`: a circuit beside `…/firmware`.
+        file.ancestors().skip(1).find(|dir| dir.join("platformio.ini").is_file()).and_then(|firmware| {
+            let beside = firmware.parent()?;
+            let mut circuits: Vec<PathBuf> = std::fs::read_dir(beside)
+                .ok()?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "c2fc"))
+                .collect();
+            circuits.sort();
+            circuits.into_iter().next()
+        })
     }
 
     /// A new design or circuit in the project, named to be free, opened.
@@ -422,6 +663,33 @@ impl StudioApp {
     }
 }
 
+/// The Files view's nodes; a file clicked, as an action.
+fn show_nodes(ui: &mut egui::Ui, nodes: &[Node], depth: usize, current: Option<&Path>, action: &mut Option<PanelAction>) {
+    let palette = theme::palette();
+    for node in nodes {
+        match &node.children {
+            Some(children) => {
+                // The object's own folders open at first.
+                let open = depth == 0 && ["models", "circuit", "scans", "firmware", "src"].contains(&node.name.as_str());
+                egui::CollapsingHeader::new(RichText::new(&node.name).size(12.5).color(palette.text))
+                    .id_salt(&node.path)
+                    .default_open(open)
+                    .show(ui, |ui| show_nodes(ui, children, depth + 1, current, action));
+            }
+            None => {
+                let on = current == Some(node.path.as_path());
+                let kind = Kind::of(&node.path).is_some() || node.name.ends_with(".c2fproj");
+                let text = RichText::new(&node.name).size(12.5);
+                let text = if on { text.strong().color(palette.accent_strong) } else if kind { text.color(palette.text) } else { text.color(palette.text_dim) };
+                let response = ui.add(egui::Label::new(text).truncate().sense(Sense::click())).on_hover_text(node.path.display().to_string());
+                if response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    *action = Some(PanelAction::OpenFile(node.path.clone()));
+                }
+            }
+        }
+    }
+}
+
 /// The name of `file` in `dir`, or `name_2`, `name_3`… when it is taken.
 fn free(dir: &Path, file: &Path) -> PathBuf {
     let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -450,6 +718,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_files_view_lists_folders_first_without_builds() {
+        let dir = std::env::temp_dir().join(format!("c2f-studio-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("firmware/.pio/build")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(dir.join("models/a.c2f"), "").unwrap();
+        std::fs::write(dir.join("brief.md"), "").unwrap();
+        std::fs::write(dir.join(".DS_Store"), "").unwrap();
+        let tree = FileTree::of(&dir);
+        let names: Vec<&str> = tree.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["firmware", "models", "brief.md"]);
+        assert!(tree.nodes[0].children.as_ref().unwrap().is_empty(), "the build left out");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_path_is_written_from_another_folder() {
         assert_eq!(relative_to(Path::new("/p/models/plate.c2f"), Path::new("/p/circuit")), "../models/plate.c2f");
         assert_eq!(relative_to(Path::new("/p/plate.c2f"), Path::new("/p")), "plate.c2f");
@@ -467,7 +751,7 @@ mod tests {
         assert!(open.refresh().unwrap());
         assert_eq!(open.project.scans, ["scans/scan-2026-11-04.stl"]);
         assert_eq!(open.project.designs, ["models/shade.c2f"]);
-        assert_eq!(open.exports, [dir.join("exports/shade.stl")]);
+        assert_eq!(open.exports, [std::fs::canonicalize(dir.join("exports/shade.stl")).unwrap()]);
         // Written into its file too, and nothing new the next time.
         assert_eq!(Project::open(&dir).unwrap().scans, ["scans/scan-2026-11-04.stl"]);
         assert!(!open.refresh().unwrap());
