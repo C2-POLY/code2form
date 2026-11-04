@@ -7,12 +7,14 @@ use c2f_agent::{Export, Registry, Server, render};
 mod circuit;
 mod mass;
 mod loads;
+mod project;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
        c2f circuit <command> [--csv] [--margin <mm>] [--clearance <mm>] <file.c2fc>
        c2f mass [--material <name>] [--infill <%>] [--wall <mm>] [-D name=value]... <file>
        c2f loads [--json] <scenario.json>
+       c2f project <new | info | adopt> [--name <name>] <folder>
        c2f mcp [--studio]
 
 commands:
@@ -63,6 +65,10 @@ commands:
           torque needed, each support's reaction, the shaft's deflection,
           the margins against the motor's and bearings' figures and a
           reduction when the torque falls short (--json: as JSON)
+  project a project: `new` creates one in a new folder (its .c2fproj,
+          a brief, models/, scans/, circuit/, firmware/, exports/),
+          `info` says what it holds and what is missing, `adopt` makes
+          an existing folder one, its files where they are
   mcp     serve AI agents (Model Context Protocol) on stdin and stdout;
           --studio adds the live tools of the studio that is open, to
           read and edit the document on screen
@@ -85,8 +91,8 @@ circuit commands, on a `.c2fc` circuit:
   bom     print the bill of materials: the parts by file and params,
           their quantity and the instances' names
   firmware  write a first PlatformIO firmware for the board the parts
-          are wired to (-o <folder>, default firmware/ beside the
-          circuit): include/pins.h, a constant per pin wired to a GPIO,
+          are wired to (-o <folder>, default the project's firmware/,
+          or firmware/ beside the circuit): include/pins.h, a constant per pin wired to a GPIO,
           rewritten each time; platformio.ini and src/main.cpp, which
           set up each part and try it, written once and then yours
   stl     the parts, placed and evaluated with their params, as one
@@ -290,6 +296,9 @@ fn run() -> ExitCode {
     }
     if args.first().is_some_and(|arg| arg == "loads") {
         return loads::run(&args[1..]);
+    }
+    if args.first().is_some_and(|arg| arg == "project") {
+        return project::run(&args[1..]);
     }
     let Some(options) = Options::parse(&args) else {
         eprintln!("{USAGE}");

@@ -1,0 +1,9 @@
+# A Code2Form project: its paths are relative to this file's folder.
+version = 1
+name = "Grogu"
+# The first design is the main one.
+designs = [
+  "grogu_plate.c2f",
+]
+circuit = "grogu.c2fc"
+scans = []

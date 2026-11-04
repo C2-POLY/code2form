@@ -1,0 +1,8 @@
+# A Code2Form project: its paths are relative to this file's folder.
+version = 1
+name = "Robot arm"
+# The first design is the main one.
+designs = [
+  "arm.c2f",
+]
+scans = []

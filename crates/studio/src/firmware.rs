@@ -28,10 +28,10 @@ const APPROVE_WAIT: Duration = Duration::from_secs(600);
 /// The installer's lines shown, the latest.
 const INSTALL_LINES: usize = 200;
 
-/// The project of a circuit: `firmware/` beside it, once it has a
-/// platformio.ini.
+/// The firmware's project of a circuit: its project's, or `firmware/`
+/// beside it, once it has a platformio.ini.
 pub fn project_dir(circuit: &Path) -> Option<PathBuf> {
-    let dir = circuit.parent()?.join("firmware");
+    let dir = c2f_project::firmware_dir_of(circuit);
     dir.join("platformio.ini").is_file().then_some(dir)
 }
 

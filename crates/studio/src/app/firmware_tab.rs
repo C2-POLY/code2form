@@ -56,7 +56,20 @@ impl StudioApp {
     /// The active circuit's firmware project, opened when first asked for,
     /// or again once the circuit is saved elsewhere; `None` without one.
     pub(super) fn firmware_project(&mut self) -> Option<&mut Project> {
-        let dir = self.doc.path.as_deref().filter(|_| self.doc.is_circuit()).and_then(firmware::project_dir);
+        let circuit = self.doc.path.clone().filter(|_| self.doc.is_circuit());
+        // Looked for once a second: it reads the project's file.
+        let fresh = match (&self.doc.firmware_dir, &circuit) {
+            (Some((path, at, dir)), Some(circuit)) if path == circuit && at.elapsed() < firmware::DISK_POLL => Some(dir.clone()),
+            _ => None,
+        };
+        let dir = match fresh {
+            Some(dir) => dir,
+            None => {
+                let dir = circuit.as_deref().and_then(firmware::project_dir);
+                self.doc.firmware_dir = circuit.map(|c| (c, Instant::now(), dir.clone()));
+                dir
+            }
+        };
         if self.doc.firmware.as_ref().is_some_and(|p| Some(&p.dir) != dir.as_ref()) {
             // The project the edits were made in keeps them.
             if let Some(mut old) = self.doc.firmware.take() {

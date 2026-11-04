@@ -166,6 +166,8 @@ pub struct Session {
     pub paths: Vec<PathBuf>,
     pub active: Option<usize>,
     pub chat: bool,
+    /// The project open, its `.c2fproj`.
+    pub project: Option<PathBuf>,
 }
 
 impl Session {
@@ -196,6 +198,9 @@ pub fn store() -> Option<PathBuf> {
 const ACTIVE: &str = "* ";
 /// The chat's line: not a path, which versions before it skip.
 const CHAT: &str = "chat: open";
+/// The project's line, before its file: not a path, which versions before
+/// it skip.
+const PROJECT: &str = "project: ";
 /// The line of the version that showed the agent in the editor column,
 /// read as the chat open (`editor: agent`) or not.
 const EDITOR: &str = "editor: ";
@@ -206,6 +211,10 @@ fn parse(text: &str) -> Session {
     for line in text.lines() {
         if line.trim() == CHAT {
             session.chat = true;
+            continue;
+        }
+        if let Some(file) = line.strip_prefix(PROJECT) {
+            session.project = Some(PathBuf::from(file)).filter(|p| p.is_absolute());
             continue;
         }
         if let Some(mode) = line.strip_prefix(EDITOR) {
@@ -233,6 +242,11 @@ fn format(session: &Session) -> String {
     let mut text = String::new();
     if session.chat {
         text.push_str(CHAT);
+        text.push('\n');
+    }
+    if let Some(project) = session.project.as_ref().and_then(|p| p.to_str()).filter(|p| !p.contains(['\n', '\r'])) {
+        text.push_str(PROJECT);
+        text.push_str(project);
         text.push('\n');
     }
     for (i, path) in session.paths.iter().enumerate() {
@@ -370,13 +384,14 @@ mod tests {
             paths: vec![path("a.c2f"), path("with space.c2fc"), path("b.scad")],
             active: Some(1),
             chat: true,
+            project: Some(path("Lamp/lamp.c2fproj")),
         };
         session.save(Some(&store)).unwrap();
         assert_eq!(Session::load(Some(&store)), session);
         // A path a line cannot hold is left out, and the active one moves.
-        let odd = Session { paths: vec![path("bad\nname.c2f"), path("a.c2f")], active: Some(1), chat: false };
+        let odd = Session { paths: vec![path("bad\nname.c2f"), path("a.c2f")], active: Some(1), chat: false, project: None };
         odd.save(Some(&store)).unwrap();
-        assert_eq!(Session::load(Some(&store)), Session { paths: vec![path("a.c2f")], active: Some(0), chat: false });
+        assert_eq!(Session::load(Some(&store)), Session { paths: vec![path("a.c2f")], active: Some(0), chat: false, project: None });
         assert!(Session::load(None).paths.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -385,7 +400,7 @@ mod tests {
     fn ignores_bad_session_lines() {
         let a = std::env::temp_dir().join("a.c2f");
         let text = format!("relative.c2f\n\n* {}\n{}\n", a.display(), a.display());
-        assert_eq!(parse(&text), Session { paths: vec![a.clone()], active: Some(0), chat: false });
+        assert_eq!(parse(&text), Session { paths: vec![a.clone()], active: Some(0), chat: false, project: None });
         // The agent shown in the editor column, as a version before kept it.
         assert!(parse("editor: agent\n").chat);
         assert!(!parse("editor: code\n").chat);

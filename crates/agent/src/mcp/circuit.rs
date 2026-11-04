@@ -370,7 +370,17 @@ fn firmware_tool(args: &Value) -> Result<Vec<Value>, String> {
     let (circuit, _, path) = load(args)?;
     let dir = match args.get("output").and_then(Value::as_str) {
         Some(dir) => PathBuf::from(dir),
-        None => path.parent().unwrap_or(Path::new("")).join("firmware"),
+        None => {
+            // The project's firmware may be elsewhere: in the agent's
+            // folder all the same, when the guard gives it one.
+            let dir = c2f_project::firmware_dir_of(&path);
+            if let Some(folder) = crate::guard::file_scope(args).and_then(|s| s.roots().first().cloned()) {
+                if !c2f_lang::file_scope::resolve(&dir).starts_with(&folder) {
+                    return Err(format!("the firmware's folder, {}, is outside the project folder, {}", dir.display(), folder.display()));
+                }
+            }
+            dir
+        }
     };
     let name = path.file_name().map_or_else(|| "circuit.c2fc".into(), |n| n.to_string_lossy().into_owned());
     let firmware = c2f_circuit::firmware::firmware(&circuit, &name).map_err(|errors| pretty(&json!({ "ok": false, "errors": errors })))?;

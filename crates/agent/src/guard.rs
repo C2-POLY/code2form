@@ -23,7 +23,7 @@ const PATH_KEYS: [&str; 6] = ["path", "working_dir", "output", "brief", "design"
 const LIBRARY_LOOKUPS: [&str; 2] = ["part_pins", "check_part"];
 
 /// The tools that write files.
-const WRITING_TOOLS: [&str; 6] = ["export", "save_brief", "save_part", "electrify", "firmware", "firmware_edit"];
+const WRITING_TOOLS: [&str; 8] = ["export", "save_brief", "save_part", "electrify", "firmware", "firmware_edit", "project_new", "project_add"];
 
 /// The argument a [`Guarded`] provider sets to the folders the files a
 /// program names may be read from: the project folder and the libraries,
@@ -93,7 +93,7 @@ impl Policy {
             ));
         }
         let (allowed, what) = match name {
-            "save_brief" | "firmware" | "firmware_edit" => (self.new_files, "Writing new files"),
+            "save_brief" | "firmware" | "firmware_edit" | "project_new" | "project_add" => (self.new_files, "Writing new files"),
             "export" => (self.export, "Exporting"),
             "save_part" => (self.save_part, "Saving parts to the library"),
             "electrify" => (self.electrify, "Electrifying a design"),
@@ -179,7 +179,7 @@ pub fn settings_file() -> Option<PathBuf> {
 fn writes(name: &str, key: &str) -> bool {
     matches!(
         (name, key),
-        ("export" | "firmware", "output") | ("save_brief" | "firmware_edit", "path") | ("electrify", "path" | "circuit")
+        ("export" | "firmware", "output") | ("save_brief" | "firmware_edit" | "project_new" | "project_add", "path") | ("electrify", "path" | "circuit")
     )
 }
 

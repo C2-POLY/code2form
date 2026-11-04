@@ -18,6 +18,7 @@ mod circuit;
 mod mass;
 mod loads;
 mod part;
+mod project;
 pub mod prompts;
 
 /// The protocol versions this server speaks, the latest first.
@@ -53,6 +54,10 @@ project, `firmware_edit` changes it), `firmware_build` it and fix its \
 errors, `firmware_upload` it once the user agrees, then `serial_read` \
 what the board prints. `mass_properties` weighs a design or a \
 circuit as printed, with its center of gravity and the angle it tips at. \
+An object's files (its brief, designs, scans, circuit, firmware and \
+exports) live in its project, a folder with a `.c2fproj` file: \
+`project_info` says what it holds and where, `project_new` creates one, \
+`project_add` names a file written in it. \
 `sweep` moves each part(joint = …) over its travel and says where a part \
 runs into another: call it after writing or changing a joint. \
 `loads` gives what turns a shaft: \
@@ -342,6 +347,8 @@ fn tools() -> Value {
         tools.extend(loads::tools());
         // Building, flashing and reading the board.
         tools.extend(board::tools());
+        // The object's project: what is what in its folder.
+        tools.extend(project::tools());
     }
     tools
 }
@@ -399,7 +406,7 @@ fn tool(name: &str) -> Option<Tool> {
         "section" => section_tool,
         "sweep" => sweep_tool,
         "electrify" => electrify_tool,
-        _ => return circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)).or_else(|| board::tool(name)),
+        _ => return circuit::tool(name).or_else(|| part::tool(name)).or_else(|| brief::tool(name)).or_else(|| mass::tool(name)).or_else(|| loads::tool(name)).or_else(|| board::tool(name)).or_else(|| project::tool(name)),
     };
     Some(tool)
 }
@@ -911,7 +918,7 @@ mod tests {
         let server = Server::new(Registry::builtin().with(Box::new(Hello)).unwrap());
         let reply = server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
-        assert_eq!((tools[0]["name"].as_str(), tools.len()), (Some("render"), 28));
+        assert_eq!((tools[0]["name"].as_str(), tools.len()), (Some("render"), 31));
         let call = |name: &str, arguments: Value| {
             let line = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
             server.handle(&line.to_string()).unwrap()

@@ -1,0 +1,11 @@
+# A Code2Form project: its paths are relative to this file's folder.
+version = 1
+name = "Watch winder"
+brief = "brief.md"
+# The first design is the main one.
+designs = [
+  "watch_winder.c2f",
+  "winder_frame.c2f",
+]
+circuit = "winder.c2fc"
+scans = []

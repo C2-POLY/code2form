@@ -71,6 +71,8 @@ pub mod live_circuit;
 mod agent_edits;
 
 mod firmware_tab;
+
+mod project_panel;
 /// The review of the agent's changes before they apply.
 pub mod review;
 /// What floats over the view: the chat with the agent.
@@ -387,6 +389,9 @@ struct Tab {
     start: Option<String>,
     /// A circuit's firmware project, once its Firmware tab showed.
     firmware: Option<crate::firmware::Project>,
+    /// Where its firmware is, as last looked for (in its project's file),
+    /// for which circuit and when.
+    firmware_dir: Option<(PathBuf, Instant, Option<PathBuf>)>,
 }
 
 impl Tab {
@@ -439,6 +444,7 @@ impl Tab {
             agent_flash: None,
             start: None,
             firmware: None,
+            firmware_dir: None,
         }
     }
 
@@ -581,6 +587,8 @@ pub struct StudioApp {
     /// The Firmware module, the build or upload under way, the serial
     /// ports and the monitor.
     board: crate::firmware::Board,
+    /// The project open, in its panel.
+    project: Option<project_panel::OpenProject>,
 }
 
 impl StudioApp {
@@ -672,6 +680,7 @@ impl StudioApp {
             agent_running: false,
             tabs,
             board: crate::firmware::Board::new(ctx),
+            project: None,
         };
         app.apply_settings(ctx);
         if app.session.chat {
@@ -710,6 +719,10 @@ impl StudioApp {
         }
         if let Some(index) = active {
             app.select_tab(ctx, index);
+        }
+        // The project open last time, in its panel.
+        if let Some(project) = session.project.clone().filter(|p| app.settings.reopen_tabs && p.is_file()) {
+            app.open_project(ctx, &project);
         }
         app.session = session;
         for path in paths {
@@ -848,7 +861,8 @@ impl StudioApp {
 
     /// Writes the open tabs down when they changed, for the next launch.
     fn save_session(&mut self) {
-        let mut session = Session { chat: self.overlay.chat_open(), ..Session::default() };
+        let project = self.project.as_ref().map(|o| o.project.file.clone());
+        let mut session = Session { chat: self.overlay.chat_open(), project, ..Session::default() };
         for (i, tab) in self.shelf.iter(&self.doc).enumerate() {
             let Some(path) = &tab.path else { continue };
             if i == self.shelf.active() {
@@ -1508,6 +1522,11 @@ impl StudioApp {
     /// for an untitled tab a scratch folder of its own, never the working
     /// directory nor the home folder.
     fn agent_folder(&self) -> PathBuf {
+        // The project's folder, for a file of the project open.
+        let in_project = self.doc.path.as_deref().is_some_and(|p| self.project.as_ref().is_some_and(|o| o.project.relative(p).is_some()));
+        if let Some(dir) = self.project_dir().filter(|_| in_project) {
+            return dir;
+        }
         match self.doc.path.as_deref().and_then(Path::parent) {
             Some(folder) => folder.to_path_buf(),
             None => agent_setup::scratch_folder(&format!("tab-{}", self.doc.id)),
@@ -2031,6 +2050,11 @@ impl StudioApp {
     /// one otherwise.
     fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
         let path = absolute(&path);
+        if path.extension().is_some_and(|e| e == c2f_project::EXTENSION) || (path.is_dir() && c2f_project::file_in(&path).is_some()) {
+            self.open_project(ctx, &path);
+            return;
+        }
+        self.follow_project(&path);
         if let Some(index) = self.tab_of(&path) {
             self.select_tab(ctx, index);
             return;
@@ -2365,7 +2389,8 @@ impl StudioApp {
             .add_filter("PNG", &["png"])
             .set_file_name(format!("{stem}-views.png"));
         let folder = self.settings.export_folder.clone().filter(|folder| folder.is_dir());
-        if let Some(dir) = folder.or_else(|| self.doc.directory()) {
+        // A file of the project open exports into the project's exports.
+        if let Some(dir) = self.project_exports().or(folder).or_else(|| self.doc.directory()) {
             dialog = dialog.set_directory(dir);
         }
         if let Some(target) = dialog.save_file() {
@@ -2653,7 +2678,8 @@ impl StudioApp {
     }
 
     fn update_title(&mut self, ctx: &egui::Context) {
-        let title = format!("{}{} — Code2Form", if self.doc.is_dirty() { "● " } else { "" }, self.doc.file_name());
+        let project = self.project.as_ref().map(|o| format!("{} — ", o.project.name)).unwrap_or_default();
+        let title = format!("{}{project}{} — Code2Form", if self.doc.is_dirty() { "● " } else { "" }, self.doc.file_name());
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
@@ -2820,6 +2846,30 @@ impl StudioApp {
                 self.open_dialog(ctx);
                 ui.close();
             }
+            ui.separator();
+            if ui.button(tr("New Project…", "Nouveau projet…")).clicked() {
+                self.new_project_dialog(ctx);
+                ui.close();
+            }
+            if ui.button(tr("Open Project…", "Ouvrir un projet…")).clicked() {
+                self.open_project_dialog(ctx);
+                ui.close();
+            }
+            if self.can_adopt() {
+                let hint = tr(
+                    "Its folder becomes a project, its files where they are: its designs, circuit, firmware and scans",
+                    "Son dossier devient un projet, ses fichiers là où ils sont : ses pièces, son circuit, son firmware et ses scans",
+                );
+                if ui.button(tr("Make a Project of This Folder", "Faire de ce dossier un projet")).on_hover_text(hint).clicked() {
+                    self.adopt_project(ctx);
+                    ui.close();
+                }
+            }
+            if self.project.is_some() && ui.button(tr("Close the Project", "Fermer le projet")).clicked() {
+                self.project = None;
+                ui.close();
+            }
+            ui.separator();
             self.recent_menu(ui);
             self.examples_menu(ui);
             self.insert_menu(ui, ctx);
@@ -2857,7 +2907,7 @@ impl StudioApp {
     fn generate_firmware(&mut self) {
         let (Some(wiring), Some(path)) = (&self.doc.wiring, self.doc.path.clone()) else { return };
         let name = path.file_name().map_or_else(|| "circuit.c2fc".into(), |n| n.to_string_lossy().into_owned());
-        let dir = path.parent().unwrap_or(Path::new("")).join("firmware");
+        let dir = c2f_project::firmware_dir_of(&path);
         let firmware = match c2f_circuit::firmware::firmware(&wiring.circuit, &name) {
             Ok(firmware) => firmware,
             Err(errors) => {
@@ -4293,6 +4343,7 @@ impl StudioApp {
         self.status_bar(ctx);
         self.agent_panel(ctx);
         self.catalogue_panel(ctx);
+        self.project_panel(ctx);
         self.code_panel(ctx);
         self.modelling_panels(ctx);
         self.view_panel(ctx);
@@ -4318,6 +4369,7 @@ impl eframe::App for StudioApp {
         }
         self.receive();
         self.poll_board(ctx);
+        self.poll_project(ctx);
         self.serve_live(ctx);
         self.animate(ctx);
         self.explode(ctx);
