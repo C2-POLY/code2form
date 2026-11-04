@@ -1,0 +1,59 @@
+// Linear ball bearing LM8UU, for an 8 mm shaft: the steel sleeve with its
+// two grooves for the retaining rings, the rubber seals at both ends and
+// the shaft's bore through. Its axis along z, its ends at z = 0 and z = 24,
+// centered on the origin.
+// https://hc-maschinentechnik.de/LM-bearing-8-mm
+//
+// The LM series' sizes (as THK, Samick and their copies make
+// them), from HC Maschinentechnik's table: the bore 8 mm, 15 mm outside,
+// 24 mm long, the grooves 1.1 mm wide, 14.3 mm across at their bottom,
+// their outer faces 17.5 mm apart; 4 rows of balls; 274 N dynamic, 392 N
+// static; 15 g. The shaft wants an h6 tolerance, the housing an H7 bore.
+// Drawn, not measured: the seals' and the balls' track, which do not
+// show. To hold it in a print, a 15.1 to 15.2 mm hole; the grooves take
+// DIN 471 rings for a 15 mm shaft, to stop it sliding out.
+
+// @description Linear ball bearing LM8UU, 8 mm bore, 15 mm outside, 24 mm
+// @description long: the carriage's bearing on an 8 mm rod, as 3D printers'
+// @description axes slide.
+// @spec bearing: linear ball bushing LM8UU, 4 rows of balls, sealed both ends
+// @spec bore: 8 mm, for an h6 shaft
+// @spec outside diameter: 15 mm, in an H7 bore
+// @spec length: 24 mm
+// @spec grooves: 1.1 mm wide, 14.3 mm across, their outer faces 17.5 mm apart
+// @spec dynamic load: 274 N
+// @spec static load: 392 N
+// @spec mass: 15 g
+// @source https://hc-maschinentechnik.de/LM-bearing-8-mm HC Maschinentechnik, LM linear bearings 8 mm (dimensions, load ratings, mass)
+
+module lm8uu() {
+    $fn = 48;
+    d = 8;
+    D = 15;
+    L = 24;
+    B = 17.5;
+    W = 1.1;
+    D1 = 14.3;
+    g1 = (L - B) / 2;
+    g2 = L - g1 - W;
+    steel = [0.80, 0.81, 0.83];
+
+    // The sleeve, its outer corners chamfered, its two grooves.
+    color(steel) rotate_extrude() polygon([
+        [5.5, 0], [D / 2 - 0.3, 0], [D / 2, 0.3],
+        [D / 2, g1], [D1 / 2, g1], [D1 / 2, g1 + W], [D / 2, g1 + W],
+        [D / 2, g2], [D1 / 2, g2], [D1 / 2, g2 + W], [D / 2, g2 + W],
+        [D / 2, L - 0.3], [D / 2 - 0.3, L], [5.5, L]
+    ]);
+    // The seals at both ends, and the ball retainer's liner inside.
+    color([0.12, 0.12, 0.13]) for (z = [0, L - 1.5]) translate([0, 0, z]) difference() {
+        cylinder(d = 11, h = 1.5);
+        translate([0, 0, -1]) cylinder(d = d, h = 3.5);
+    }
+    color([0.25, 0.25, 0.27]) translate([0, 0, 1.5]) difference() {
+        cylinder(d = 11, h = L - 3);
+        translate([0, 0, -1]) cylinder(d = d + 1, h = L);
+    }
+}
+
+lm8uu();

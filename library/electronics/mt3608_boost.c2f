@@ -1,0 +1,78 @@
+// MT3608 adjustable boost converter module, the common blue 37 x 17 mm
+// board: the board, the MT3608 (SOT-23-6), its inductor, Schottky diode
+// and capacitors, the blue multi-turn trimmer that sets the output, and
+// its four pads, VIN+ and VIN- at one end, VOUT+ and VOUT- at the other.
+// Seen from the parts' side, the input towards -x, the board's corner at
+// the origin.
+// https://www.olimex.com/Products/Breadboarding/BB-PWR-3608/resources/MT3608.pdf
+//
+// From Aerosemi's MT3608 datasheet: 2 to 24 V in, up to 28 V out, a
+// 1.2 MHz switch with a 4 A current limit, a 0.6 V feedback. From the
+// sellers (Components101, ProtoSupplies): the board 37 x 17 mm (36 to
+// 37.2), 14 mm high with its trimmer, 2 A at most out (1 A for long),
+// turning the trimmer clockwise lowers the output. Estimated: the pads'
+// places, the parts' sizes and places, the board's thickness (1.6 mm)
+// and its mass, about 3 g.
+//
+// The output is set by the trimmer, from the input's voltage up to 28 V,
+// and is unknown as it comes: turn it, measuring VOUT+, before wiring a
+// load. The pins say 5 V, the setting this file assumes (for a servo or
+// a 5 V board from one Li-ion cell); a design that sets another changes
+// the VOUT+ line. VIN- and VOUT- are one ground.
+
+// @description Adjustable boost converter module MT3608: raises 2 to 24 V
+// @description (one Li-ion cell, say) to 5 to 28 V, set by its trimmer, up to
+// @description 2 A: 5 V for a servo or a board from a battery.
+// @spec converter: MT3608 boost (step-up), 1.2 MHz, not isolated
+// @spec input: 2 to 24 V (VIN+)
+// @spec output: up to 28 V, set by the trimmer, above the input (5 V assumed here)
+// @spec current: 4 A switch limit (MT3608); 2 A out at most, 1 A for long (module)
+// @spec efficiency: up to 92% (the module), 97% (the chip's datasheet)
+// @spec size: 37 x 17 x 14 mm with its trimmer
+// @spec mass: 3 g (estimated)
+// @source https://www.olimex.com/Products/Breadboarding/BB-PWR-3608/resources/MT3608.pdf MT3608 datasheet (Aerosemi)
+// @source https://components101.com/modules/mt3608-2a-dc-dc-step-up-power-module Components101, MT3608 module
+// @source https://protosupplies.com/product/mt3608-mini-adjustable-dc-dc-boost-module/ ProtoSupplies, MT3608 module
+
+// @pin VIN+  [1.6, 15.3, 1.6]  power_in 24V "input, 2 to 24 V"
+// @pin VIN-  [1.6, 1.7, 1.6]   ground "input ground"
+// @pin VOUT+ [35.4, 15.3, 1.6] power_out 5V "output, set by the trimmer (5 V assumed; up to 28 V)"
+// @pin VOUT- [35.4, 1.7, 1.6]  ground "output ground, the same as VIN-"
+
+module mt3608_boost() {
+    $fn = 16;
+    l = 37;
+    w = 17;
+    t = 1.6;
+    blue = [0.10, 0.30, 0.70];
+    tin = [0.82, 0.83, 0.85];
+    body = [0.10, 0.10, 0.11];
+    pads = [[1.6, 15.3], [1.6, 1.7], [35.4, 15.3], [35.4, 1.7]];
+
+    color(blue) difference() {
+        cube([l, w, t]);
+        for (p = pads) translate([p[0], p[1], -1]) cylinder(d = 1.2, h = t + 2);
+    }
+    color(tin) for (p = pads) translate([p[0], p[1], t]) difference() {
+        cylinder(d = 2.6, h = 0.02);
+        translate([0, 0, -1]) cylinder(d = 1.2, h = 2);
+    }
+
+    // The trimmer (a 3296W multi-turn), its brass screw on top.
+    color([0.15, 0.35, 0.85]) translate([5, 6, t]) cube([9.5, 4.8, 10]);
+    color([0.85, 0.68, 0.38]) translate([6.2, 8.4, t + 10]) cylinder(d = 2.2, h = 0.8);
+    // The inductor, the MT3608, the diode and the input and output
+    // capacitors.
+    color([0.20, 0.20, 0.22]) translate([16.5, 5.5, t]) cube([5.8, 5.2, 4.5]);
+    color(body) translate([24, 9.5, t]) cube([2.9, 1.6, 1.1]);
+    color(body) translate([24, 4, t]) cube([4.3, 2.6, 2.2]);
+    color([0.78, 0.66, 0.50]) for (x = [3, 30]) translate([x, 12.5, t]) cube([3.2, 1.6, 1.6]);
+
+    // The pads' names.
+    color([0.95, 0.95, 0.95]) translate([0, 0, t]) linear_extrude(0.02) let($fn = 6) {
+        for (n = [["VIN+", 3.4, 15.3, "left"], ["VIN-", 3.4, 1.7, "left"], ["VOUT+", 33.6, 15.3, "right"], ["VOUT-", 33.6, 1.7, "right"]])
+            translate([n[1], n[2]]) text(n[0], size = 1.0, halign = n[3], valign = "center");
+    }
+}
+
+mt3608_boost();

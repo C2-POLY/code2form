@@ -42,6 +42,9 @@
 // @source https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/index.html user guide
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf ESP32-S3-WROOM-1 datasheet
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf ESP32-S3 datasheet
+// @source https://docs.platformio.org/en/latest/boards/espressif32/esp32-s3-devkitc-1.html PlatformIO board
+// @board esp32-s3-devkitc-1 espressif32
+// @driver arduino builtin "Arduino.h"
 
 use <lib/pin_header.c2f>
 

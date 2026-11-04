@@ -35,6 +35,19 @@ they are. Written in Rust, it renders as you type.
   further from it at each level down, and a part that is the whole
   model stays. Only the view changes: the model, its exports and its
   sizes stay assembled, and an animated model plays apart.
+- **Joints**: a design whose parts say how they move
+  (`part("elbow", joint = "revolute", limits = [-90, 0])`, see URDF
+  below) gets a Joints button among the view's tools: a card with a
+  slider per joint that moves, between its limits (a full turn for one
+  that turns without them), turns or slides the part about its own axis
+  with every part written in it, at once, without rendering again. Zero
+  pose puts them back. Check the travel moves each joint alone over its
+  whole travel, both ways, and marks in red on its slider where a part
+  runs into the rest of the model, with the two parts named; a pin
+  turning in its hole, which touches at rest, is no collision.
+  `c2f sweep arm.c2f` prints the same and fails on a stop, and the
+  agent's `sweep` tool returns it. Only the view is posed: the exports
+  stay as the code writes them.
 - **Examples**: the Examples menu lists the designs and circuits that
   come with the app, by subject: a chest that opens, three gears that
   drive one another and a walking mannequin (Game), and the Grogu
@@ -246,6 +259,7 @@ values as `parameters`, such as `{"width": 30, "label": "A"}`.
 | `parameters` | The customizer parameters: name, group, description, default and widget |
 | `image` | A PNG picture of the model from `view` (`diagonal` or `isometric`, `front`, `back`, `left`, `right`, `top`, `bottom`), `width` by `height` pixels (800 by 600, at most 1600), with the `render` report; or with `view` `sheet` the sheet of views: diagonal, front, right and top at one scale with the size in millimeters and a scale bar, and with `section` the model cut through its middle |
 | `electrify` | Makes an approved design (`path`) ready for its electronics: its circuit file beside it, `// @circuit`, its drawing moved unchanged into `design()`, and empty `electronics_cuts()` and `electronics_mounts()`; reports the volume before and after |
+| `sweep` | Moves each `part(joint = …)` alone over its travel (`step` degrees, `step_mm` millimeters), both ways from rest, and gives per joint its range and the first position each way where it or a part it holds runs into the rest of the model, with the two parts and the volume shared, or that its travel is free |
 | `section` | Where a plane across `axis` (x, y or z) at `at` cuts the solid: its outlines at their real size, with area and bounds. To measure a mesh before writing it again as a design: a cut through the axis of a turned part is its profile |
 | `export` | Writes a solid as STL, 3MF, glTF (`.glb`, with `scale` in meters per unit), OBJ (and its `.mtl`), STEP, URDF (and its meshes, with `density`) or its parts as JSON, a 2D model as SVG or DXF, or a 3D model's outline seen from `view` as DXF, to `output`, in the `format` its extension gives |
 
@@ -266,11 +280,12 @@ resolving from `working_dir`, then the library folders) or a file as
 | Tool | What it returns |
 |---|---|
 | `library_parts` | The parts in the `electronics/` folders of the library paths: the name a circuit gives as `part`, the file, and the file's first comment line |
-| `part_pins` | A part's pins (name, label, type, voltage, reserved, position, direction), mount holes and ports, and its badly written annotations, from `code` or `path` (as is, from `working_dir`, or from the library) |
+| `part_pins` | A part's pins (name, label, type, voltage, reserved, position, direction), mount holes and ports, its board, drivers and set-up code for a firmware (`@board`, `@driver`, `@init`), and its badly written annotations, from `code` or `path` (as is, from `working_dir`, or from the library) |
 | `check_circuit` | Whether the circuit is fit to solder (`ok`): its errors and warnings with their file, line and column, from reading it, evaluating its parts and checking its wiring |
 | `circuit_image` | A PNG picture of the circuit, its parts placed and its wires as tubes in their colors, inside its enclosure drawn see-through (unless `enclosure` is false), from `view`, `width` by `height` pixels, or its sheet of views (`view` `sheet`, with `section` to cut it open); `net` (a pin, as `xiao.GND`) highlights the wires of its net and greys the others |
 | `circuit_wires` | The wiring list in the order to lay the wires: step, each pin and its label, color, label, length in millimeters |
 | `circuit_bom` | The bill of materials: each part file and set of params, its quantity and its instances |
+| `firmware` | Writes a PlatformIO project (`output`, firmware/ beside the circuit `path` by default) for the board its parts are wired to: `include/pins.h` (a constant per pin wired to a GPIO, rewritten each time), `platformio.ini` (the board, the parts' libraries) and `src/main.cpp` (each part set up and tried in turn), the last two written once; refused on an error or a wired reserved pin; the set-up lines whose pins reach no GPIO left out, in `notes` |
 | `fit` | How each part fits in the enclosure: its least clearance, its gaps to the enclosure and the nearest part with where, the ports no cutout opens and the mount holes no standoff holds, and the wires that run into the enclosure; `clearance` sets the room wanted (0.5 mm) |
 | `mass_properties` | What a design or a circuit weighs printed in `material` (PLA, PETG, ABS, ASA, TPU, nylon or a density) with `infill` and `wall`, per part (`parts`): each part's volume, mass and center, the circuit's parts by their sheet's `mass`, the `extra` masses, the total and center of gravity, and the stability: whether it stands, and the least angle it tips at, toward which side |
 | `loads` | For a shaft a motor turns (its `axis`, `loads`, `supports`, `motor`, `shaft`, `ratio`): the torque it needs, each support's radial and axial reaction and moment, the shaft's deflection, the margins against the motor's and bearings' figures (given or read from their parts' `@spec`), a `suggested_ratio` when the torque falls short, warnings (an overhung motor, a margin under `target_margin`) and a `summary`; see the [guide](docs/electronics.md#loads-on-a-shaft) |

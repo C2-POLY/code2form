@@ -36,6 +36,9 @@
 // @source https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/ getting started (Seeed Studio wiki)
 // @source https://www.seeedstudio.com/XIAO-ESP32S3-p-5627.html product page
 // @source https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf ESP32-S3 datasheet
+// @source https://docs.platformio.org/en/latest/boards/espressif32/seeed_xiao_esp32s3.html PlatformIO board
+// @board seeed_xiao_esp32s3 espressif32
+// @driver arduino builtin "Arduino.h"
 
 use <lib/pin_header.c2f>
 

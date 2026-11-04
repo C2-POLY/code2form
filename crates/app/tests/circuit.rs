@@ -304,3 +304,23 @@ fn the_night_light_checks_and_fits_clean() {
         assert!(out.contains(piece), "{piece}: {out}");
     }
 }
+
+#[test]
+fn firmware() {
+    let dir = std::env::temp_dir().join(format!("c2f-firmware-grogu-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let out = dir.to_str().unwrap();
+    let output = grogu(&["firmware", "-o", out, "grogu.c2fc"]);
+    assert_eq!(text(&output.stdout).lines().filter(|l| l.starts_with("wrote: ")).count(), 3);
+    let file = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+    golden("firmware/pins.h", &file("include/pins.h"));
+    golden("firmware/platformio.ini", &file("platformio.ini"));
+    golden("firmware/main.cpp", &file("src/main.cpp"));
+    golden("firmware/notes.txt", &text(&output.stderr));
+    // Again: the pins are rewritten, the rest is the user's.
+    std::fs::write(dir.join("src/main.cpp"), "// mine\n").unwrap();
+    let again = grogu(&["firmware", "-o", out, "grogu.c2fc"]);
+    assert!(text(&again.stdout).contains("kept, yours: "), "{}", text(&again.stdout));
+    assert_eq!(file("src/main.cpp"), "// mine\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}

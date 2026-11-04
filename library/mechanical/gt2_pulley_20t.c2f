@@ -1,0 +1,67 @@
+// GT2 timing pulley, 20 teeth, 5 mm bore, for a 6 mm belt, in aluminium:
+// the hub with its two set screws 90° apart, the two flanges and the
+// toothed part between them. Its axis along z, the hub's end at z = 0,
+// the teeth from z = 8 to 15, the far flange's face at z = 16.
+// https://www.adafruit.com/product/1251
+//
+// From Adafruit's page (product 1251): 16 mm across the flanges, 16 mm
+// long, 12.2 mm over the teeth, a 5 mm bore, two set screws, 6 g. From
+// the GT2 belt: a 2 mm pitch, so a pitch circle of 20 x 2/π = 12.73 mm,
+// 40 mm of belt a turn. Estimated, from the common drawing of these
+// pulleys: the hub 7 mm long and as wide as the flanges, the flanges 1 mm
+// thick, the teeth 7 mm wide, the set screws M3. The teeth's profile is
+// approximate (see `lib/gt2.c2f`). `teeth` changes the pulley's size, the
+// rest kept; the sheet's figures are the 20-tooth's.
+
+// @description GT2 timing pulley, 20 teeth, 5 mm bore, for a 6 mm belt, with
+// @description two set screws: drives a GT2 belt from a stepper's shaft, 40 mm
+// @description of belt a turn.
+// @spec pulley: GT2 (2 mm pitch), 20 teeth, aluminium
+// @spec pitch diameter: 12.73 mm (40 mm of belt a turn)
+// @spec outside diameter: 12.2 mm over the teeth, 16 mm over the flanges
+// @spec bore: 5 mm (a parameter)
+// @spec belt: GT2, 6 mm wide
+// @spec length: 16 mm, the hub 7 mm with two set screws
+// @spec mass: 6 g
+// @source https://www.adafruit.com/product/1251 Adafruit, GT2 timing pulley, 20 teeth, 5 mm bore
+// @source https://www.adafruit.com/product/1184 Adafruit, GT2 timing belt (2 mm pitch, 6 mm wide)
+
+use <lib/gt2.c2f>
+
+/* [Pulley] */
+// The number of teeth.
+teeth = 20; // [12:1:60]
+// The bore's diameter.
+bore = 5; // [2:0.5:12]
+
+// A GT2 pulley of `teeth` teeth with a `bore`, its hub, flanges and set
+// screws: see the file's opening comment.
+module gt2_pulley_20t(teeth = 20, bore = 5) {
+    $fn = 48;
+    tip = gt2_tip_diameter(teeth);
+    flange = tip + 3.8;
+    assert(bore < tip - 2.5, "gt2_pulley_20t: the bore is wider than the teeth allow");
+    echo(str("gt2_pulley_20t: ", teeth, " teeth, pitch diameter ", round(gt2_pitch_diameter(teeth) * 100) / 100,
+             " mm, ", teeth * gt2_pitch(), " mm of belt a turn"));
+    aluminium = [0.78, 0.79, 0.81];
+
+    color(aluminium) difference() {
+        union() {
+            cylinder(d = flange, h = 7);
+            translate([0, 0, 7]) cylinder(d = flange, h = 1);
+            translate([0, 0, 8]) linear_extrude(7) gt2_outline(teeth);
+            translate([0, 0, 15]) cylinder(d = flange, h = 1);
+        }
+        translate([0, 0, -1]) cylinder(d = bore, h = 18, $fn = 32);
+        // The set screws' tapped holes.
+        for (a = [0, 90]) rotate(a) translate([0, 0, 3.5]) rotate([0, 90, 0]) cylinder(d = 2.5, h = flange, $fn = 12);
+    }
+    // The set screws, a little below the hub's surface.
+    color([0.12, 0.12, 0.13]) for (a = [0, 90]) rotate(a) translate([bore / 2, 0, 3.5]) rotate([0, 90, 0])
+        difference() {
+            cylinder(d = 2.5, h = flange / 2 - bore / 2 - 0.5, $fn = 12);
+            translate([0, 0, flange / 2 - bore / 2 - 1.5]) cylinder(d = 1.5, h = 2, $fn = 6);
+        }
+}
+
+gt2_pulley_20t(teeth, bore);

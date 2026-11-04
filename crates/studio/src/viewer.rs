@@ -2,6 +2,7 @@
 //! overlays drawn on top (hints, status badges, the axis gizmo, the
 //! labels of the print's pauses, the layer slider, the section's outline).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{
@@ -158,6 +159,10 @@ pub struct Viewer {
     exploded: Option<Arc<c2f_geom::Exploded>>,
     explode: f32,
     explode_how: c2f_geom::Explode,
+    /// The joints that move, and where each one is set, by its part's
+    /// name, so that a pose survives a render that keeps the part.
+    joints: Vec<c2f_geom::JointControl>,
+    pose: HashMap<String, f64>,
     assembled: RenderMesh,
     /// A design's solid without parts, for picking a face.
     design_positions: Vec<[f32; 3]>,
@@ -308,6 +313,8 @@ impl Viewer {
             exploded: None,
             explode: 0.0,
             explode_how: c2f_geom::Explode::default(),
+            joints: Vec::new(),
+            pose: HashMap::new(),
             assembled: RenderMesh::default(),
             design_positions: Vec::new(),
             exploded_bounds: None,
@@ -353,6 +360,16 @@ impl Viewer {
         };
         let old_source = std::mem::replace(&mut self.scene_source, scene.source.clone());
         self.exploded = scene.exploded.clone();
+        self.joints = self.exploded.as_ref().map(|e| e.joints()).unwrap_or_default();
+        // A joint gone or narrowed keeps what is left of its position.
+        let joints = &self.joints;
+        self.pose.retain(|name, at| match joints.iter().find(|j| &j.name == name) {
+            Some(joint) => {
+                *at = at.clamp(joint.range[0], joint.range[1]);
+                true
+            }
+            None => false,
+        });
         self.assembled = if self.exploded.is_some() { scene.solid.clone() } else { RenderMesh::default() };
         // Framed either way the parts come apart.
         self.exploded_bounds = self.exploded.as_ref().and_then(|e| {
@@ -430,7 +447,7 @@ impl Viewer {
         }
         // The new solid comes in its own colors.
         self.recolor();
-        if self.explode > 0.0 {
+        if self.explode > 0.0 || self.posed() {
             self.show_exploded();
         }
         self.send_highlight(true);
@@ -461,9 +478,64 @@ impl Viewer {
         }
     }
 
+    /// The joints of the design's parts that move, in the order the model
+    /// writes them.
+    pub fn joints(&self) -> &[c2f_geom::JointControl] {
+        &self.joints
+    }
+
+    /// Where the joint of part `name` is set: degrees or millimeters; at
+    /// rest, 0, or the nearest of its limits when 0 is outside them.
+    pub fn joint_position(&self, name: &str) -> f64 {
+        let rest = self.joints.iter().find(|j| j.name == name).map_or(0.0, |j| 0f64.clamp(j.range[0], j.range[1]));
+        self.pose.get(name).copied().unwrap_or(rest)
+    }
+
+    /// Sets the joint of part `name`, within its range, and draws the
+    /// parts there at once: nothing renders again.
+    pub fn set_joint(&mut self, name: &str, position: f64) {
+        let Some(joint) = self.joints.iter().find(|j| j.name == name) else { return };
+        let position = position.clamp(joint.range[0], joint.range[1]);
+        if position != self.joint_position(name) {
+            self.pose.insert(name.to_string(), position);
+            self.show_exploded();
+        }
+    }
+
+    /// Every joint back to rest.
+    pub fn reset_pose(&mut self) {
+        if !self.pose.is_empty() {
+            self.pose.clear();
+            self.show_exploded();
+        }
+    }
+
+    /// Whether a joint was moved from its rest.
+    pub fn moved(&self) -> bool {
+        !self.pose.is_empty()
+    }
+
+    /// Whether a part is drawn away from where the code puts it.
+    pub fn posed(&self) -> bool {
+        self.joints.iter().any(|j| self.joint_position(&j.name) != 0.0)
+    }
+
+    /// One position per part, in the order the model writes them.
+    fn pose_vector(&self) -> Vec<f64> {
+        let mut pose = vec![0.0; self.joints.iter().map(|j| j.part + 1).max().unwrap_or(0)];
+        for joint in &self.joints {
+            pose[joint.part] = self.joint_position(&joint.name);
+        }
+        pose
+    }
+
     fn show_exploded(&mut self) {
         let Some(exploded) = &self.exploded else { return };
-        let solid = if self.explode > 0.0 { exploded.at(self.explode, self.explode_how) } else { self.assembled.clone() };
+        let solid = if self.explode > 0.0 || self.posed() {
+            exploded.posed(&self.pose_vector(), self.explode, self.explode_how)
+        } else {
+            self.assembled.clone()
+        };
         if let Ok(renderer) = &self.renderer {
             if let Ok(mut r) = renderer.lock() {
                 r.set_solid(solid);
@@ -764,7 +836,7 @@ impl Viewer {
     /// marked `%`, with its size: `None` when no section is shown, the
     /// parts are drawn apart, or it is a circuit's.
     pub fn section_outline(&mut self) -> Option<&Outline> {
-        let section = self.shown_section().filter(|_| !self.section_soup.is_empty() && self.explode == 0.0)?;
+        let section = self.shown_section().filter(|_| !self.section_soup.is_empty() && self.explode == 0.0 && !self.posed())?;
         if self.section_outline.as_ref().is_none_or(|(cut, _)| *cut != section) {
             self.section_outline = Some((section, outline::outline(&self.section_soup, section.axis, section.at)));
         }
@@ -866,7 +938,7 @@ impl Viewer {
         let moved;
         let positions: &[[f32; 3]] = match &self.exploded {
             Some(exploded) => {
-                moved = exploded.at(self.explode, self.explode_how).positions;
+                moved = exploded.posed(&self.pose_vector(), self.explode, self.explode_how).positions;
                 &moved
             }
             None => &self.design_positions,
@@ -876,12 +948,16 @@ impl Viewer {
             .filter_map(|t| ray.triangle(corners(t)).map(|along| (along, t)))
             .min_by(|a, b| a.0.total_cmp(&b.0))?;
         let [a, b, c] = corners(triangle);
-        let normal = (b - a).cross(c - a).normalize_or_zero();
+        let mut normal = (b - a).cross(c - a).normalize_or_zero();
         let mut point = ray.origin + ray.direction * along;
         let mut part = None;
         if let Some(exploded) = &self.exploded {
-            // Back where the model puts it.
-            point -= a - Vec3::from(exploded.mesh.positions[triangle * 3]);
+            // Back where the model puts it, posed and apart as it is drawn.
+            let pose = self.pose_vector();
+            let back = |p: Vec3| Vec3::from(exploded.to_model(triangle * 3, p.to_array(), &pose, self.explode, self.explode_how));
+            let tip = back(point + normal);
+            point = back(point);
+            normal = (tip - point).normalize_or_zero();
             part = exploded.part_at(triangle * 3).map(String::from);
         }
         Some(FaceHit { point: point.to_array(), normal: normal.to_array(), part })

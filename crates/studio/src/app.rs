@@ -363,6 +363,11 @@ struct Tab {
     explode_shown: f32,
     /// Radially, or along each part's axis.
     explode_how: c2f_geom::Explode,
+    /// Whether the card of the joints' sliders is open.
+    joints_shown: bool,
+    /// The joints' travel as last checked, and the text it was checked
+    /// on; `Some(None)` while it is being checked.
+    travel: Option<Option<(String, Vec<c2f_geom::JointSweep>)>>,
     /// The sketch mode, when on, and the sketch it left unfinished.
     sketch: sketch::SketchState,
     /// The lines (from 0, the end excluded) the agent's last edit changed.
@@ -417,6 +422,8 @@ impl Tab {
             explode_amount: EXPLODE_START,
             explode_shown: 0.0,
             explode_how: c2f_geom::Explode::default(),
+            joints_shown: false,
+            travel: None,
             sketch: sketch::SketchState::default(),
             agent_marks: Vec::new(),
             agent_highlight: None,
@@ -890,6 +897,20 @@ impl StudioApp {
                     }
                     continue;
                 }
+                Reply::Swept { tab, source, result } => {
+                    // For the tab that asked, which may no longer be the active one.
+                    let Some(index) = self.tab_index(*tab) else { continue };
+                    let (source, result) = (source.clone(), result.clone());
+                    self.in_tab(index, |app| match result {
+                        Ok(joints) => app.doc.travel = Some(Some((source, joints))),
+                        Err(error) => {
+                            app.doc.travel = None;
+                            let message = tr!("Checking the joints failed: {error}", "Échec de la vérification des articulations : {error}");
+                            app.doc.console.log(Level::Error, message);
+                        }
+                    });
+                    continue;
+                }
             };
             let owner = self.owners.owner(generation);
             if let Reply::Rendered(outcome) = &reply {
@@ -937,6 +958,7 @@ impl StudioApp {
                     self.doc.animation.play();
                 }
                 let explode = asks("exploded") && shown && !self.doc.exploded;
+                let check_travel = asks("travel");
                 let along_axis = asks("axis");
                 let (cut, opacity) = self.screenshot.as_ref().and_then(|s| s.select.as_deref()).map_or((None, None), section_asked);
                 match outcome.result {
@@ -991,6 +1013,18 @@ impl StudioApp {
                             }
                             self.doc.viewer.set_explode(1.0);
                             self.doc.viewer.view_all();
+                        }
+                        // The joints' card, posed as `joints:shoulder=90;elbow=-60` asks.
+                        let pose = self.screenshot.as_ref().and_then(|s| s.select.as_deref()).filter(|_| shown && on_screen);
+                        if let Some(pose) = pose.and_then(|s| s.split(',').find_map(|w| w.strip_prefix("joints"))) {
+                            self.doc.joints_shown = true;
+                            for (name, at) in pose.trim_start_matches(':').split(';').filter_map(|p| p.split_once('=')) {
+                                self.doc.viewer.set_joint(name, at.parse().unwrap_or(0.0));
+                            }
+                            if check_travel {
+                                self.doc.travel = Some(None);
+                                self.worker.sweep(self.doc.id);
+                            }
                         }
                         // The new solid comes in its own colors.
                         self.update_overlay();
@@ -1058,7 +1092,7 @@ impl StudioApp {
                 }
             }
             // Handled by `receive`.
-            Reply::Exported { .. } => {}
+            Reply::Exported { .. } | Reply::Swept { .. } => {}
         }
     }
 
@@ -2759,12 +2793,62 @@ impl StudioApp {
                 self.save_as();
                 ui.close();
             }
+            if self.doc.is_circuit() {
+                ui.separator();
+                let hint = tr(
+                    "A PlatformIO project in firmware/ beside the circuit, for its board: the pins its wires reach (include/pins.h, rewritten each time), and a first program that sets each part up and tries it (written once, then yours)",
+                    "Un projet PlatformIO dans firmware/ à côté du circuit, pour sa carte : les broches que ses fils atteignent (include/pins.h, réécrit à chaque fois), et un premier programme qui initialise chaque composant et l'essaie (écrit une fois, puis à vous)",
+                );
+                let button = ui.add_enabled(self.doc.wiring.is_some() && self.doc.path.is_some(), Button::new(tr("Generate the Firmware", "Générer le firmware")));
+                if button.on_hover_text(hint).on_disabled_hover_text(tr("Save the circuit first", "Enregistrez d'abord le circuit")).clicked() {
+                    self.generate_firmware();
+                    ui.close();
+                }
+            }
             ui.separator();
             if item(ui, tr("Settings…", "Réglages…"), Action::Settings).clicked() {
                 self.settings_open = true;
                 ui.close();
             }
         });
+    }
+
+    /// Writes the circuit's first firmware into `firmware/` beside it, and
+    /// says in the console what each file became and what was left out.
+    fn generate_firmware(&mut self) {
+        let (Some(wiring), Some(path)) = (&self.doc.wiring, self.doc.path.clone()) else { return };
+        let name = path.file_name().map_or_else(|| "circuit.c2fc".into(), |n| n.to_string_lossy().into_owned());
+        let dir = path.parent().unwrap_or(Path::new("")).join("firmware");
+        let firmware = match c2f_circuit::firmware::firmware(&wiring.circuit, &name) {
+            Ok(firmware) => firmware,
+            Err(errors) => {
+                for error in errors {
+                    self.doc.console.log(Level::Error, tr!("No firmware: {error}", "Pas de firmware : {error}"));
+                }
+                self.console_open = true;
+                return;
+            }
+        };
+        match c2f_circuit::firmware::write(&firmware, &dir) {
+            Ok(written) => {
+                for file in &written {
+                    let message = if file.written {
+                        tr!("Wrote {}", "Écrit : {}", file.path.display())
+                    } else {
+                        tr!("Kept {}, which is yours", "Gardé : {}, qui est à vous", file.path.display())
+                    };
+                    self.doc.console.log(Level::Info, message);
+                }
+                for note in firmware.notes {
+                    self.doc.console.log(Level::Warning, note);
+                }
+                if self.settings.reveal_export {
+                    let _ = reveal(&dir.join(c2f_circuit::firmware::PINS_H));
+                }
+            }
+            Err(error) => self.doc.console.log(Level::Error, error),
+        }
+        self.console_open = true;
     }
 
     /// The formats the model can be exported in: solids, then drawings.
@@ -3299,6 +3383,8 @@ impl StudioApp {
     /// exploded view, how far apart and how: radially or along each axis.
     fn view_tools(&mut self, ctx: &egui::Context, rect: egui::Rect) {
         let explodable = self.doc.viewer.can_explode() && !self.doc.is_circuit();
+        let jointed = explodable && !self.doc.viewer.joints().is_empty();
+        let mut toggle_joints = false;
         let circuit = self.doc.is_circuit();
         let on = self.doc.exploded;
         let mut amount = self.doc.explode_amount;
@@ -3363,6 +3449,13 @@ impl StudioApp {
                             let hint = tr("Exploded view: draw the model's part()s apart, to see how they fit together", "Vue éclatée : écarter les part() du modèle, pour voir comment elles s'assemblent");
                             explode = icons::button(ui, Icon::Explode, on, hint).clicked();
                         }
+                        if jointed {
+                            let hint = tr(
+                                "Joints: move each part(joint = …) by hand, to see the mechanism play",
+                                "Articulations : bouger chaque part(joint = …) à la main, pour voir le mécanisme jouer",
+                            );
+                            toggle_joints = icons::button(ui, Icon::Joints, self.doc.joints_shown, hint).clicked();
+                        }
                         if viewer.can_section() {
                             tool_separator(ui);
                             let hint = if circuit {
@@ -3380,11 +3473,13 @@ impl StudioApp {
                     });
                 });
             });
-        // How far apart and how, on a card of its own under the tools, so
-        // that they keep clear of the parameters.
+        // The cards under the tools, one under the other, so that they
+        // keep clear of the parameters.
+        let mut below = rect.top() + 12.0 + VIEW_TOOLS_HEIGHT;
+        // How far apart and how.
         if explodable && on {
-            egui::Area::new(Id::new(("explode-tools", self.doc.id)))
-                .fixed_pos(rect.left_top() + Vec2::new(12.0, 12.0 + VIEW_TOOLS_HEIGHT))
+            let card = egui::Area::new(Id::new(("explode-tools", self.doc.id)))
+                .fixed_pos(egui::pos2(rect.left() + 12.0, below))
                 .order(egui::Order::Middle)
                 .show(ctx, |ui| {
                     card_frame().inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
@@ -3409,10 +3504,16 @@ impl StudioApp {
                         });
                     });
                 });
+            below = card.response.rect.bottom() + 8.0;
+        }
+        if jointed && self.doc.joints_shown {
+            below = self.joints_card(ctx, egui::pos2(rect.left() + 12.0, below)) + 8.0;
         }
         if self.doc.viewer.section_view && self.doc.viewer.can_section() {
-            let below = if explodable && on { 2.0 } else { 1.0 };
-            self.section_card(ctx, rect.left_top() + Vec2::new(12.0, 12.0 + below * VIEW_TOOLS_HEIGHT));
+            self.section_card(ctx, egui::pos2(rect.left() + 12.0, below));
+        }
+        if toggle_joints {
+            self.doc.joints_shown = !self.doc.joints_shown;
         }
         if how != self.doc.explode_how {
             self.doc.explode_how = how;
@@ -3431,6 +3532,122 @@ impl StudioApp {
                 self.doc.viewer.view_all();
             }
         }
+    }
+
+    /// The joints' card, at `at`: a slider per joint that moves, between
+    /// its limits, a button that puts them all back to 0, and one that
+    /// moves each over its travel to find where its parts hit, marked in
+    /// red on its slider. Only the drawn parts move: nothing renders
+    /// again, and nothing is exported posed. Returns the card's bottom.
+    fn joints_card(&mut self, ctx: &egui::Context, at: egui::Pos2) -> f32 {
+        let viewer = &mut self.doc.viewer;
+        let joints = viewer.joints().to_vec();
+        // A check of another text says nothing of this one.
+        let travel = match &self.doc.travel {
+            Some(Some((source, swept))) if *source == self.doc.text => Some(Some(swept.clone())),
+            Some(None) => Some(None),
+            _ => None,
+        };
+        let mut moved: Vec<(String, f64)> = Vec::new();
+        let (mut reset, mut check) = (false, false);
+        let stop_color = theme::palette().error;
+        let mut stopped: Vec<String> = Vec::new();
+        let card = egui::Area::new(Id::new(("joints-tools", self.doc.id))).fixed_pos(at).order(egui::Order::Middle).show(ctx, |ui| {
+            card_frame().inner_margin(Margin::symmetric(8, 6)).show(ui, |ui| {
+                ui.spacing_mut().slider_width = 140.0;
+                egui::Grid::new(("joints-grid", self.doc.id)).num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
+                    for joint in &joints {
+                        ui.label(&joint.name);
+                        let mut at = viewer.joint_position(&joint.name);
+                        let slides = joint.kind == c2f_eval::node::JointKind::Prismatic;
+                        let unit = if slides { " mm" } else { "°" };
+                        let hint = if slides {
+                            tr("Slide the part along its axis", "Faire glisser la pièce le long de son axe")
+                        } else {
+                            tr("Turn the part about its axis, with what it holds", "Tourner la pièce autour de son axe, avec ce qu'elle porte")
+                        };
+                        let range = joint.range[0]..=joint.range[1];
+                        let slider = egui::Slider::new(&mut at, range.clone()).show_value(false).clamping(egui::SliderClamping::Always);
+                        let rail = ui.add(slider).on_hover_text(hint);
+                        let mut changed = rail.changed();
+                        let decimals = if slides { 1 } else { 0 };
+                        let value = egui::DragValue::new(&mut at).range(range).suffix(unit).fixed_decimals(decimals);
+                        changed |= ui.add(value).changed();
+                        if changed {
+                            moved.push((joint.name.clone(), at));
+                        }
+                        // Where the travel stops, on the rail, as egui lays it out.
+                        let swept = travel.as_ref().and_then(|t| t.as_ref()?.iter().find(|j| j.name == joint.name).cloned());
+                        if let Some(swept) = &swept {
+                            let rect = rail.rect;
+                            let span = rect.x_range().shrink(rect.height() / 2.5);
+                            let width = joint.range[1] - joint.range[0];
+                            for stop in [&swept.down, &swept.up].into_iter().flatten() {
+                                let t = if width > 0.0 { ((stop.position - joint.range[0]) / width) as f32 } else { 0.5 };
+                                let x = span.min + t.clamp(0.0, 1.0) * (span.max - span.min);
+                                ui.painter().line_segment(
+                                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                                    egui::Stroke::new(2.5, stop_color),
+                                );
+                            }
+                        }
+                        ui.end_row();
+                        if let Some(swept) = swept.filter(|s| !s.free()) {
+                            stopped.extend([&swept.down, &swept.up].into_iter().flatten().map(|s| {
+                                let at = format!("{:.prec$}{unit}", s.position, prec = decimals);
+                                tr!("{} hits {} at {}", "{} touche {} à {}", s.moving, s.hit, at)
+                            }));
+                        }
+                    }
+                });
+                // Under the sliders, not beside them: a line as wide as
+                // it needs.
+                for line in &stopped {
+                    ui.colored_label(stop_color, line);
+                }
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    let hint = tr(
+                        "Every joint back to 0, the pose the code is written in, or to its nearest limit when 0 is outside them",
+                        "Toutes les articulations à 0, la pose écrite dans le code, ou à leur limite la plus proche quand 0 est hors limites",
+                    );
+                    if ui.add_enabled(viewer.moved(), egui::Button::new(tr("Zero pose", "Pose zéro"))).on_hover_text(hint).clicked() {
+                        reset = true;
+                    }
+                    let hint = tr(
+                        "Move each joint over its whole travel, the others at rest, and mark in red where its parts hit the rest of the model",
+                        "Faire parcourir à chaque articulation toute sa course, les autres au repos, et marquer en rouge où ses pièces touchent le reste du modèle",
+                    );
+                    match &travel {
+                        Some(None) => {
+                            ui.add(egui::Spinner::new());
+                            ui.label(tr("Checking…", "Vérification…"));
+                        }
+                        _ => {
+                            if ui.button(tr("Check the travel", "Vérifier la course")).on_hover_text(hint).clicked() {
+                                check = true;
+                            }
+                        }
+                    }
+                    if let Some(Some(swept)) = &travel {
+                        if swept.iter().all(c2f_geom::JointSweep::free) {
+                            ui.label(tr("Free travel", "Course libre"));
+                        }
+                    }
+                });
+            });
+        });
+        for (name, at) in moved {
+            viewer.set_joint(&name, at);
+        }
+        if reset {
+            viewer.reset_pose();
+        }
+        if check {
+            self.doc.travel = Some(None);
+            self.worker.sweep(self.doc.id);
+        }
+        card.response.rect.bottom()
     }
 
     /// The section's card, at `at`: the axis it cuts across, where along
@@ -4048,7 +4265,8 @@ impl eframe::App for StudioApp {
         self.update_title(ctx);
         self.save_session();
 
-        let ready = self.doc.finished > 0 && !self.doc.busy() && self.live.review.as_ref().is_none_or(|r| r.settled());
+        let checking = matches!(self.doc.travel, Some(None));
+        let ready = self.doc.finished > 0 && !self.doc.busy() && !checking && self.live.review.as_ref().is_none_or(|r| r.settled());
         if let Some(result) = self.screenshot.as_mut().and_then(|s| s.update(ctx, ready)) {
             match result {
                 Ok(message) => self.doc.console.log(Level::Info, message),

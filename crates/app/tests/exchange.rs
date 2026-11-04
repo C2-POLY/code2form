@@ -1,5 +1,6 @@
 //! `c2f obj`, `step`, `urdf`, `json` and `dxf --view`: the model for
-//! other programs; and `png`, pictures of it for people.
+//! other programs; `png`, pictures of it for people; and `sweep`, whether
+//! its joints move freely.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -94,5 +95,24 @@ fn dxf_of_a_solid_is_its_outline_from_a_view() {
     assert!(text.contains("\n30.0\n"), "{text}");
     let angles = c2f(&dir, &["dxf", "--view", "-90,90"], "cube([10, 20, 30]);");
     assert!(String::from_utf8_lossy(&angles.stdout).contains("\n20.0\n"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An arm turning about Z at the origin, and a post in its way at 45°.
+const SWING: &str = "rotate([0, 0, 45]) translate([14, -1, 0]) cube([2, 2, 5]);
+    part(\"arm\", joint = \"revolute\", limits = [-90, 90]) translate([0, -1, 0]) cube([20, 2, 2]);";
+
+#[test]
+fn sweep_says_where_a_joint_stops_and_fails_then() {
+    let dir = dir("sweep");
+    let free = c2f(&dir, &["sweep"], ARM);
+    assert!(free.status.success(), "{}", String::from_utf8_lossy(&free.stderr));
+    assert_eq!(String::from_utf8_lossy(&free.stdout), "elbow: free over its travel, -90° to 90°\n");
+    let stopped = c2f(&dir, &["sweep", "--step", "1"], SWING);
+    assert_eq!(stopped.status.code(), Some(1));
+    let out = String::from_utf8_lossy(&stopped.stdout);
+    assert!(out.starts_with("arm (-90° to 90°, from 0°): going down, free; going up, arm hits base at "), "{out}");
+    assert!(c2f(&dir, &["sweep"], "cube(1);").status.success());
+    assert_eq!(c2f(&dir, &["sweep", "--step", "0"], ARM).status.code(), Some(2));
     let _ = std::fs::remove_dir_all(&dir);
 }

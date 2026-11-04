@@ -25,6 +25,9 @@
 // @spec wiring: one wire to a touch GPIO, kept short
 // @spec mass: 1.1 g for the default 20 mm square (computed)
 // @source https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/cap_touch_sens.html touch sensor guide (Espressif)
+// @source https://docs.espressif.com/projects/arduino-esp32/en/latest/api/touch.html Arduino ESP32 touch
+// @driver arduino builtin "Arduino.h"
+// @init test: Serial.printf("{part}: touch %lu\n", (unsigned long)touchRead({pin:PAD}));
 
 /* [Size] */
 // Side of the square.

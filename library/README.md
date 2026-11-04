@@ -33,6 +33,11 @@ file's name taking the same parameters as its customizer.
 | `stepper_28byj48.c2f` | 28BYJ-48 5 V geared stepper, with its 5-pin plug for a ULN2003 board |
 | `touch_plate.c2f` | Copper plate for a capacitive touch pad |
 | `neopixel_ring_12.c2f` | Adafruit NeoPixel Ring 12 (12 RGB LEDs) |
+| `sg90_servo.c2f` | TowerPro SG90 micro servo, 1.8 kgf·cm at 4.8 V (horn as a parameter) |
+| `limit_switch_kw12.c2f` | KW12 micro switch, roller or plain lever: COM, NO, NC |
+| `tp4056_usbc.c2f` | TP4056 1 A Li-ion charger with USB-C and DW01A protection |
+| `battery_18650_holder.c2f` | Single 18650 cell holder (Keystone 1043), the cell drawn or not |
+| `mt3608_boost.c2f` | MT3608 boost converter module, 2 to 24 V in, up to 28 V out |
 
 Each file starts with a link to the manufacturer's documentation and says
 which dimensions come from it and which are estimated: check those
@@ -44,6 +49,12 @@ where the file's default parameters put them. Every part's sheet gives
 its mass (`// @spec mass: 17 g`), and the motors their torque and speed,
 which the mechanical checks read as quantities; the opening comment says
 which come from the maker and which are estimated.
+
+The boards say what PlatformIO calls them (`// @board`), and the parts a
+board talks to say which library drives them and the code that sets them
+up and tries them (`// @driver`, `// @init`), for the first firmware
+`c2f circuit firmware` writes: see the
+[guide](../docs/electronics.md#add-what-its-firmware-needs).
 
 ## Mechanical
 
@@ -72,12 +83,17 @@ gear_pair(ratio = 3, mod = 1, thickness = 6);
 | `rigid_coupling.c2f` | Rigid shaft coupling | bores 3 to 12 mm (5 to 8 mm by default), 20 x 25 mm |
 | `spur_gear.c2f` | Involute spur gear | module, teeth, thickness, bore, pressure angle 20° |
 | `bearing_seat.c2f` | Helper: a bearing's seat | `bearing_seat(bearing, fit, depth)`: press (+0.1 mm) or slide (+0.3 mm) fit for FDM printing |
+| `gt2_pulley_20t.c2f` | GT2 timing pulley | 20 teeth (as a parameter), 5 mm bore, 6 mm belt, two set screws, 6 g (Adafruit) |
+| `gt2_idler.c2f` | GT2 idler | 20 teeth or smooth, on two MR105 bearings, 5 mm bore (estimated) |
+| `gt2_belt.c2f` | Closed GT2 belt | between two pulleys: from its teeth, the center distance; from a center distance, the belt; `gt2_belt_length()` and `gt2_center_distance()` for a design |
+| `lm8uu.c2f` | Linear ball bearing LM8UU | 8 x 15 x 24 mm, its retaining-ring grooves, 15 g |
 | `gear_pair.c2f` | Helper: a gear reduction | `gear_pair(ratio, mod, teeth, thickness, center)`: two gears at m·(z1 + z2)/2, the actual ratio echoed |
 
 `mod` is the gears' module: the language keeps the word `module` for
 itself. The screws, nuts and inserts echo their mass for the parameters
 set, as the shaft and the coupling do; `lib/` holds the
-bearings' sizes and drawing, which the bearings and `bearing_seat` share.
+bearings' sizes and drawing, which the bearings and `bearing_seat` share,
+and the GT2 tooth profile the pulleys and idler share.
 
 ## Shapes
 

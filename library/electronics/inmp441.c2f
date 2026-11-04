@@ -30,6 +30,12 @@
 // @spec mass: 2 g without headers (estimated)
 // @source https://invensense.tdk.com/products/digital/inmp441/ product page
 // @source https://invensense.tdk.com/wp-content/uploads/2015/02/INMP441.pdf datasheet
+// @source https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/peripherals/i2s.html I2S driver (the API both Arduino cores have)
+// @driver arduino builtin "driver/i2s.h"
+// @init setup: i2s_config_t {part}_i2s = { .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX), .sample_rate = 16000, .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 4, .dma_buf_len = 256 };
+// @init setup: i2s_pin_config_t {part}_pins = { .mck_io_num = I2S_PIN_NO_CHANGE, .bck_io_num = {pin:SCK}, .ws_io_num = {pin:WS}, .data_out_num = I2S_PIN_NO_CHANGE, .data_in_num = {pin:SD} };
+// @init setup: i2s_driver_install(I2S_NUM_1, &{part}_i2s, 0, NULL); i2s_set_pin(I2S_NUM_1, &{part}_pins);
+// @init test: { static int32_t samples[256]; size_t got = 0; i2s_read(I2S_NUM_1, samples, sizeof(samples), &got, 100); long peak = 0; for (size_t i = 0; i < got / 4; i++) peak = max(peak, labs((long)(samples[i] >> 14))); Serial.printf("{part}: level %ld\n", peak); }
 
 use <lib/pin_header.c2f>
 

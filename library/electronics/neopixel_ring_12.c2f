@@ -28,6 +28,11 @@
 // @spec mass: 3.3 g
 // @source https://www.adafruit.com/product/1643 product page
 // @source https://learn.adafruit.com/adafruit-neopixel-uberguide/best-practices "NeoPixel wiring guide"
+// @source https://github.com/adafruit/Adafruit_NeoPixel Adafruit NeoPixel library
+// @driver arduino "adafruit/Adafruit NeoPixel@^1.12.3" "Adafruit_NeoPixel.h"
+// @init global: Adafruit_NeoPixel {part}(12, {pin:DIN}, NEO_GRB + NEO_KHZ800);
+// @init setup: {part}.begin(); {part}.setBrightness(30);
+// @init test: {part}.fill({part}.Color(0, 0, 60)); {part}.show(); delay(300); {part}.clear(); {part}.show();
 
 // @pin GND  [-3.81, -15.4, 0] down ground
 // @pin 5V   [-1.27, -15.4, 0] down power_in 5V "power, 5 V"

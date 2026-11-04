@@ -1,0 +1,38 @@
+// GT2 timing belts and pulleys (2 mm pitch) for the parts of the
+// mechanical library, which `use` this file: the pulleys' diameters and
+// their teeth's outline.
+//
+// A pulley of z teeth has a pitch circle z·2/π across, on the belt's
+// pitch line; its teeth's tips are 2 x 0.254 mm (the pitch line
+// differential) inside it: 12.22 mm for 20 teeth, as Adafruit gives
+// 12.2. The grooves are drawn as round-bottomed slots 0.75 mm deep and
+// 1.1 mm wide, the belt's tooth: an approximate profile, close enough to
+// see and to print a pulley that a belt sits on, not Gates' exact curve.
+
+// The belt's pitch, in millimeters.
+function gt2_pitch() = 2;
+
+// The pitch circle's diameter of a pulley of `teeth` teeth.
+function gt2_pitch_diameter(teeth) = teeth * gt2_pitch() / PI;
+
+// The diameter over the teeth's tips.
+function gt2_tip_diameter(teeth) = gt2_pitch_diameter(teeth) - 2 * 0.254;
+
+// The belt's tooth height and its back's thickness (1.38 mm in all).
+function gt2_tooth_height() = 0.75;
+function gt2_back_thickness() = 0.63;
+
+// The outline of a GT2 pulley of `teeth` teeth, in the xy plane.
+module gt2_outline(teeth) {
+    r = gt2_tip_diameter(teeth) / 2;
+    depth = gt2_tooth_height();
+    slot = 0.555;
+    difference() {
+        circle(r = r, $fn = 4 * teeth);
+        for (i = [0 : teeth - 1]) rotate(360 * i / teeth)
+            hull() {
+                translate([r - depth + slot, 0]) circle(r = slot, $fn = 12);
+                translate([r + slot, 0]) circle(r = slot, $fn = 12);
+            }
+    }
+}

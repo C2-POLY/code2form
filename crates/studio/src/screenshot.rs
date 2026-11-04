@@ -10,7 +10,9 @@
 //! settings (`general`, `appearance`, `editor`, `model`, `export`,
 //! `libraries`, `shortcuts`); `play` plays a design that reads `$t`, and
 //! `exploded` draws its part()s apart (`play,exploded` does both;
-//! `exploded,axis` along each part's axis); `agent` opens the chat over
+//! `exploded,axis` along each part's axis); `joints:shoulder=90;elbow=-60`
+//! opens the joints' card with those joints set (`,travel` checks their
+//! travel too); `agent` opens the chat over
 //! the view alone, a short conversation in it whose edit lands and shows
 //! as a diff card; `agent-empty` opens it empty, with its suggestions;
 //! `agent-code` shows the code beside the view, the chat folded over it
