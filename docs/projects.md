@@ -123,3 +123,29 @@ folder of projects (Code2Form › Projects in iCloud Drive, which the
 studio on the Mac sees too), to pick one among them (with one only, the
 scan goes in it), or a folder without any, to create one in. The scan goes
 into the project's `scans/`, named in its file.
+
+## A scan set straight
+
+A scan keeps the angle the object had while it was photographed. The
+iPhone sets each new scan straight, and the studio does the same to a
+scan saved before (Insert › Set a Scan Straight…, or a right click on a
+scan in the panel), as does `c2f scan level <scan> [-o <out.stl>]`:
+
+- the floating bits (the stand, noise), each under 5 % of the object's
+  area, are taken off;
+- the scan stands on the flat face it rests on: the largest one facing
+  down within 25° of down that lies at the bottom, on the plane the scan
+  would rest on (a flank sloping down higher up is not one). The iPhone
+  knows where down is, so a part is never tipped over on its side, and
+  an object without such a face (a ball, a figurine, a shell open
+  below) keeps the down it was scanned with;
+- it turns about Z until the smallest rectangle around its footprint
+  runs along X and Y, its long side along X;
+- it is centred, standing on z = 0, in mm.
+
+The studio rewrites the scan in place, so the designs that import it
+move with it: it asks first, and keeps the original in `originals/`
+beside it, which the project does not take in.
+
+On iPhone the reconstruction has one level of detail; it is run with its
+highest feature sensitivity, to keep the small reliefs.

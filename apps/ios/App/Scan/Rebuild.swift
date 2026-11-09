@@ -20,6 +20,10 @@ enum Rebuild {
     static func run(_ folder: ScanFolder, progress: @escaping @MainActor (Double) -> Void) async throws -> Scan {
         var configuration = PhotogrammetrySession.Configuration()
         configuration.checkpointDirectory = folder.checkpoint
+        // On iOS the only detail is .reduced: these keep what it can of
+        // the small reliefs. Object Capture's photos follow each other.
+        configuration.featureSensitivity = .high
+        configuration.sampleOrdering = .sequential
         let session = try PhotogrammetrySession(input: folder.images, configuration: configuration)
         try await withTaskCancellationHandler {
             try session.process(requests: [.modelFile(url: folder.model)])
@@ -44,6 +48,9 @@ enum Rebuild {
         let file = try scansFolder().appendingPathComponent("scan-\(stamp()).stl")
         try await Task.detached {
             try STL.write(try Triangles(usdz: folder.model).standing(), to: file)
+            // Set straight as the studio does: floating bits off, on its
+            // base, its footprint along X and Y.
+            _ = try levelScan(file: file.path)
         }.value
         let rendering = try await Task.detached {
             // The engine reads the STL as the studio will: through import().

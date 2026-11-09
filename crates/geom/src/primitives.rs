@@ -5,6 +5,7 @@
 use std::f64::consts::PI;
 
 /// A triangle mesh: corner positions and counter-clockwise triangles.
+#[derive(Debug, Clone)]
 pub struct TriMesh {
     pub positions: Vec<[f64; 3]>,
     pub triangles: Vec<[u32; 3]>,

@@ -72,6 +72,8 @@ mod agent_edits;
 
 mod firmware_tab;
 
+mod level;
+
 mod project_panel;
 /// The review of the agent's changes before they apply.
 pub mod review;
@@ -553,6 +555,8 @@ pub struct StudioApp {
     /// The zoom of the last frame, which the window was measured with.
     measured_zoom: f32,
     confirm: Option<Pending>,
+    /// A scan waiting for its confirmation to be set straight.
+    level_asked: Option<PathBuf>,
     allow_close: bool,
     title: String,
     screenshot: Option<Screenshot>,
@@ -672,6 +676,7 @@ impl StudioApp {
             window: None,
             measured_zoom: ctx.zoom_factor(),
             confirm: None,
+            level_asked: None,
             allow_close: false,
             title: String::new(),
             screenshot: Screenshot::from_env(),
@@ -2196,6 +2201,15 @@ impl StudioApp {
                 if whole.clicked() {
                     ui.close();
                     self.insert_design_dialog(ctx, true);
+                }
+                ui.separator();
+                let level = ui.button(tr("Set a Scan Straight…", "Remettre un scan d'aplomb…")).on_hover_text(tr(
+                    "Take off a scan's floating bits, stand it on its base and turn it along X and Y; the original is kept",
+                    "Retirer les morceaux flottants d'un scan, le poser sur sa face d'appui et l'aligner sur X et Y ; l'original est gardé",
+                ));
+                if level.clicked() {
+                    ui.close();
+                    self.level_scan_dialog();
                 }
             })
         });
@@ -4386,6 +4400,7 @@ impl StudioApp {
         self.start_screen(ctx);
         self.settings_dialog(ctx);
         self.confirm_dialog(ctx);
+        self.level_dialog(ctx);
         self.board_dialogs(ctx);
         self.review_window(ctx);
         self.drop_unseen_focus(ctx);

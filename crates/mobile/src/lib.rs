@@ -22,7 +22,9 @@ use c2f_eval::customizer::{HIDDEN_GROUP, parse_typed};
 uniffi::setup_scaffolding!();
 
 mod project;
+mod scan;
 pub use project::{ProjectError, ProjectSummary, add_scan, create_project, project_at, projects_in};
+pub use scan::{LevelReport, ScanError, level_scan};
 
 /// The stack of an engine's thread, reserved rather than committed: about
 /// 12 KiB a nesting level, so some twenty thousand levels. The evaluator

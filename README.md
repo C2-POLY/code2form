@@ -605,7 +605,7 @@ to GitHub Pages from `main` and on each release.
 | `crates/agent` (`c2f-agent`) | The agent's tools and prompts, the MCP server, the app agent's engines and the link to the open studio |
 | `crates/app` (`c2f-cli`) | The `c2f` command and its MCP server |
 | `crates/studio` (`code2form`) | The desktop app (egui) |
-| `crates/mobile` (`c2f-mobile`) | The engine of the iPad app, called from Swift: parameters, renders, errors at their line, STL and 3MF exports |
+| `crates/mobile` (`c2f-mobile`) | The engine of the iPad app, called from Swift: parameters, renders, errors at their line, STL and 3MF exports, projects, and scans set straight |
 
 `apps/ios/Code2FormCore` is the Swift package of the iPad app's engine.
 `scripts/ios-xcframework.sh` builds it: `crates/mobile` for iOS and its

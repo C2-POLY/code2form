@@ -167,6 +167,8 @@ enum PanelAction {
     Reveal(PathBuf),
     NewDesign,
     ImportScan,
+    /// A scan to set straight, once confirmed.
+    LevelScan(PathBuf),
     NewCircuit,
     View(PanelView),
     Close,
@@ -429,14 +431,17 @@ impl StudioApp {
             let project = &open.project;
             egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                 let current = self.doc.path.clone();
-                let entry = |ui: &mut egui::Ui, path: &Path, label: String| -> bool {
+                // A file's line: whether it was clicked, and the line.
+                let row = |ui: &mut egui::Ui, path: &Path, label: String| -> (bool, egui::Response) {
                     let exists = path.exists();
                     let on = current.as_deref() == Some(path);
                     let text = RichText::new(if exists { label } else { format!("{label} ({})", tr("missing", "manquant")) }).size(12.5);
                     let text = if on { text.strong().color(palette.accent_strong) } else if exists { text.color(palette.text) } else { text.color(palette.text_faint) };
                     let response = ui.add(egui::Label::new(text).truncate().sense(Sense::click())).on_hover_text(path.display().to_string());
-                    exists && response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+                    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    (exists && response.clicked(), response)
                 };
+                let entry = |ui: &mut egui::Ui, path: &Path, label: String| -> bool { row(ui, path, label).0 };
                 let name = |path: &Path| path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
                 // A section's title, and its + when `add` says what it adds:
                 // whether it was clicked.
@@ -472,8 +477,17 @@ impl StudioApp {
                     action = Some(PanelAction::ImportScan);
                 }
                 for scan in project.scan_paths() {
-                    if entry(ui, &scan, name(&scan)) {
+                    let (clicked, response) = row(ui, &scan, name(&scan));
+                    if clicked {
                         action = Some(PanelAction::Open(scan.clone()));
+                    }
+                    if scan.exists() {
+                        response.context_menu(|ui| {
+                            if ui.button(tr("Set Straight…", "Remettre d'aplomb…")).clicked() {
+                                action = Some(PanelAction::LevelScan(scan.clone()));
+                                ui.close();
+                            }
+                        });
                     }
                 }
                 let new_circuit = project.circuit.is_none().then_some(tr("Write the circuit", "Créer le circuit"));
@@ -539,6 +553,7 @@ impl StudioApp {
             PanelAction::NewDesign => self.add_to_project(ctx, Kind::Design),
             PanelAction::NewCircuit => self.add_to_project(ctx, Kind::Circuit),
             PanelAction::ImportScan => self.import_scan(ctx),
+            PanelAction::LevelScan(scan) => self.level_asked = Some(scan),
         }
     }
 

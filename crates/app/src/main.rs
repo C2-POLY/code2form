@@ -8,6 +8,7 @@ mod circuit;
 mod mass;
 mod loads;
 mod project;
+mod scan;
 
 const USAGE: &str = "\
 usage: c2f <command> [options] <file.c2f>
@@ -15,6 +16,7 @@ usage: c2f <command> [options] <file.c2f>
        c2f mass [--material <name>] [--infill <%>] [--wall <mm>] [-D name=value]... <file>
        c2f loads [--json] <scenario.json>
        c2f project <new | info | adopt> [--name <name>] <folder>
+       c2f scan level [-o <out.stl>] <scan>
        c2f mcp [--studio]
 
 commands:
@@ -299,6 +301,9 @@ fn run() -> ExitCode {
     }
     if args.first().is_some_and(|arg| arg == "project") {
         return project::run(&args[1..]);
+    }
+    if args.first().is_some_and(|arg| arg == "scan") {
+        return scan::run(&args[1..]);
     }
     let Some(options) = Options::parse(&args) else {
         eprintln!("{USAGE}");
