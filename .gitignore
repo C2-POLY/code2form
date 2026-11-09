@@ -1,5 +1,7 @@
 target/
-.claude/
+.claude/*
+# The project's skills, shared with the team (/topic).
+!.claude/skills/
 .omc/
 demo/
 # Built by scripts/ios-xcframework.sh.
