@@ -10,3 +10,7 @@ apps/ios/Code2FormCore/Sources/Code2FormCore/Code2FormCore.swift
 apps/ios/Code2FormCore/.build/
 apps/ios/Code2FormCore/.swiftpm/
 apps/ios/Code2Form.xcodeproj/
+# Drawn by apps/ios/AppStore/render.sh, and the review's screen recording.
+apps/ios/AppStore/en*/
+apps/ios/AppStore/hero/
+apps/ios/AppStore/review/
