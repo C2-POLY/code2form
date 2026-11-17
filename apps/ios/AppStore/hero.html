@@ -1,0 +1,78 @@
+<!doctype html>
+<!-- The wide App Store assets, drawn by render.sh with ?kind=…:
+     header  5244 × 2950: the top of the product page. iPhone and iPad crop
+             it differently, so everything that matters sits in the middle.
+     search  3840 × 2560: the picture in the App Store's search results.
+     Both use the captures in raw/ and raw-ipad/. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; overflow: hidden; }
+  body {
+    font-family: 'Ubuntu', sans-serif; color: #eceef2;
+    background:
+      radial-gradient(60% 70% at 50% 110%, rgba(76,141,255,.32), transparent 70%),
+      radial-gradient(40% 50% at 15% 0%, rgba(198,138,245,.10), transparent 70%),
+      linear-gradient(180deg, #23262e 0%, #16181d 55%, #121419 100%);
+    position: relative;
+  }
+  h1 { font-weight: 700; margin: 0; letter-spacing: -2px; line-height: 1.05; text-align: center; }
+  h1 em { font-style: normal; color: #6aa2ff; }
+  p { font-weight: 400; color: #a9b1c0; margin: 0; text-align: center; }
+  .icon { display: block; margin: 0 auto; border-radius: 22.5%; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .phone, .tablet {
+    position: absolute; box-sizing: border-box;
+    background: linear-gradient(145deg, #4a505c, #2a2e36 40%, #1b1e24);
+    box-shadow: 0 60px 160px rgba(0,0,0,.65), inset 0 0 0 5px #5c6473;
+  }
+  .phone > div, .tablet > div {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #000 center top / cover no-repeat;
+  }
+
+  /* Header: 5244 × 2950. Title in the middle, an iPad flanked by two iPhones. */
+  body.header { width: 5244px; height: 2950px; }
+  .header .title { position: absolute; top: 300px; left: 0; right: 0; }
+  .header .icon { width: 260px; height: 260px; margin-bottom: 70px; }
+  .header h1 { font-size: 200px; }
+  .header p { font-size: 84px; margin-top: 50px; }
+  .header .tablet { width: 1900px; height: 2533px; left: 1672px; top: 1290px; padding: 36px; border-radius: 110px; }
+  .header .tablet > div { border-radius: 76px; }
+  .header .phone { width: 900px; height: 1956px; top: 1500px; padding: 24px; border-radius: 150px; }
+  .header .phone > div { border-radius: 128px; }
+  .header .left { left: 900px; transform: rotate(-6deg); }
+  .header .right { left: 3444px; transform: rotate(6deg); }
+
+  /* Search: 3840 × 2560. Title on top, three iPhones side by side. */
+  body.search { width: 3840px; height: 2560px; }
+  .search .title { position: absolute; top: 210px; left: 0; right: 0; }
+  .search h1 { font-size: 190px; }
+  .search p { font-size: 80px; margin-top: 44px; }
+  .search .phone { width: 1000px; height: 2173px; top: 860px; padding: 26px; border-radius: 166px; }
+  .search .phone > div { border-radius: 142px; }
+  .search .p1 { left: 260px; top: 960px; }
+  .search .p2 { left: 1420px; }
+  .search .p3 { left: 2580px; top: 960px; }
+</style>
+</head>
+<body>
+<script>
+  const q = new URLSearchParams(location.search);
+  const kind = q.get('kind') || 'header';
+  const t = JSON.parse(q.get('text') || '{}');
+  document.body.className = kind;
+  const shot = (cls, src) => `<div class="${cls}"><div style="background-image:url('${src}')"></div></div>`;
+  document.body.innerHTML = kind === 'header'
+    ? `<div class="title"><img class="icon" src="../App/Assets.xcassets/AppIcon.appiconset/AppIcon.png">
+         <h1>${t.title}</h1><p>${t.sub}</p></div>
+       ${shot('phone left', 'raw/gears.png')}
+       ${shot('phone right', 'raw/chest.png')}
+       ${shot('tablet', 'raw-ipad/winder.png')}`
+    : `<div class="title"><h1>${t.title}</h1><p>${t.sub}</p></div>
+       ${shot('phone p1', 'raw/gears.png')}
+       ${shot('phone p2', 'raw/winder.png')}
+       ${shot('phone p3', 'raw/nightlight.png')}`;
+</script>
+</body>
+</html>
