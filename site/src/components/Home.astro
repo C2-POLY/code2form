@@ -1,6 +1,7 @@
 ---
 import Story from './Story.astro';
-import { type Lang, t, pagePath, asset, repo } from '../i18n';
+import PhoneShots from './PhoneShots.astro';
+import { type Lang, t, pagePath, asset, repo, appStore } from '../i18n';
 import type { Release } from '../lib/release';
 
 interface Props {
@@ -20,17 +21,18 @@ const examples = [
 const hero = (w: number) => asset(`images/hero-${lang}-${w}.webp`);
 ---
 
-<section class="hero wrap" aria-labelledby="hero-title">
+<section class="hero wrap" aria-labelledby="hero-title" data-intro>
   <span class="tag"><span class="dot"></span>{release ? `v${release.version} · ` : ''}{s.hero.badge}</span>
   <h1 id="hero-title">{s.hero.titleStart} <span class="accent">{s.hero.titleAccent}</span></h1>
   <p class="lead">{s.hero.lead}</p>
   <div class="ctas">
     <a class="btn btn-primary" href={download}>{s.hero.downloadMac}</a>
+    <a class="btn btn-secondary" href={appStore}>{s.hero.appStore}</a>
     <a class="btn btn-secondary" href="#examples">{s.hero.printExample}</a>
   </div>
 </section>
 
-<div class="wrap shot-wrap">
+<div class="wrap shot-wrap" data-intro>
   <figure class="shot">
     <img
       src={hero(1600)}
@@ -47,8 +49,8 @@ const hero = (w: number) => asset(`images/hero-${lang}-${w}.webp`);
 
 <section class="band" aria-labelledby="ways-title">
   <div class="wrap section ways">
-    <h2 id="ways-title" class="h2">{s.ways.title}</h2>
-    <div class="ways-grid">
+    <h2 id="ways-title" class="h2" data-reveal>{s.ways.title}</h2>
+    <div class="ways-grid" data-reveal-stagger>
       <article class="card">
         <div class="card-head"><span>{s.ways.code.label}</span><span class="mono">lamp.c2f</span></div>
         <pre class="code"><span class="c-comment">// Height of the shade, in mm.</span>
@@ -91,7 +93,7 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
 <Story lang={lang} />
 
 <section class="wrap section split" aria-labelledby="checked-title">
-  <div class="split-text">
+  <div class="split-text" data-reveal>
     <h2 id="checked-title" class="h2">{s.checked.title}</h2>
     <p class="lead">{s.checked.text}</p>
     <div class="card brief">
@@ -111,17 +113,17 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
     </div>
     <p class="small">{s.checked.how}</p>
   </div>
-  <figure class="shot split-img">
+  <figure class="shot split-img" data-reveal>
     <img src={asset('images/sheet-winder.webp')} width="1200" height="662" alt={s.checked.sheetAlt} loading="lazy" decoding="async" />
   </figure>
 </section>
 
 <section class="band" aria-labelledby="review-title">
   <div class="wrap section split reverse">
-    <figure class="shot split-img">
+    <figure class="shot split-img" data-reveal>
       <img src={asset('images/review.webp')} width="1000" height="437" alt={s.review.alt} loading="lazy" decoding="async" />
     </figure>
-    <div class="split-text">
+    <div class="split-text" data-reveal>
       <h2 id="review-title" class="h2">{s.review.title}</h2>
       <p class="lead">{s.review.text}</p>
     </div>
@@ -129,11 +131,11 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
 </section>
 
 <section id="examples" class="wrap section" aria-labelledby="examples-title">
-  <div class="examples-head">
+  <div class="examples-head" data-reveal>
     <h2 id="examples-title" class="h2">{s.examples.title}</h2>
     <a href={examplesUrl}>{s.examples.all} →</a>
   </div>
-  <ul class="examples">
+  <ul class="examples" data-reveal-stagger>
     {
       examples.map((ex) => (
         <li>
@@ -157,14 +159,30 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
   </ul>
 </section>
 
+<section class="band" aria-labelledby="ios-title">
+  <div class="wrap section split">
+    <div class="split-text" data-reveal>
+      <h2 id="ios-title" class="h2">{s.ios.title}</h2>
+      <p class="lead">{s.ios.text}</p>
+      <p><a class="btn btn-primary" href={appStore}>{s.download.iosButton}</a></p>
+    </div>
+    <div class="phones-wrap">
+      <PhoneShots lang={lang} />
+    </div>
+  </div>
+</section>
+
 <section class="wrap cta-wrap" aria-labelledby="cta-title">
-  <div class="cta">
+  <div class="cta" data-reveal>
     <div class="cta-text">
       <p class="your-turn">{s.cta.yourTurn}</p>
       <h2 id="cta-title" class="h2">{s.cta.title}</h2>
       <p class="dim">{s.cta.text}</p>
     </div>
-    <a class="btn btn-primary" href={download}>{s.cta.button}{release && ` v${release.version}`}</a>
+    <div class="ctas">
+      <a class="btn btn-primary" href={download}>{s.cta.button}{release && ` v${release.version}`}</a>
+      <a class="btn btn-secondary" href={appStore}>{s.cta.appStore}</a>
+    </div>
   </div>
 </section>
 
@@ -316,6 +334,11 @@ height = <span class="c-number">40</span>; <span class="c-comment">// [20:80]</s
     flex: 1 1 520px;
     min-width: 0;
     border-color: var(--border);
+  }
+
+  .phones-wrap {
+    flex: 1 1 480px;
+    min-width: 0;
   }
 
   .reverse .split-text {

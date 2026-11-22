@@ -1,5 +1,6 @@
 ---
-import { type Lang, t, repo } from '../i18n';
+import { type Lang, t, repo, appStore } from '../i18n';
+import PhoneShots from './PhoneShots.astro';
 import { type Release, type ReleaseFile, RELEASES, formatDate, formatSize } from '../lib/release';
 
 interface Props {
@@ -19,12 +20,12 @@ const cliName = release?.cli?.name ?? 'c2f-<version>-macos-universal.zip';
 ---
 
 <div class="wrap page">
-  <section class="intro" aria-labelledby="dl-title">
+  <section class="intro" aria-labelledby="dl-title" data-intro>
     <h1 id="dl-title">{s.title}</h1>
     <p class="lead">{s.lead}</p>
   </section>
 
-  <section class="card release" aria-labelledby="release-title">
+  <section class="card release" aria-labelledby="release-title" data-reveal>
     <div class="card-head">
       <h2 id="release-title" class="head-title">
         {release ? <>Code2Form {release.version}</> : s.latest}
@@ -84,7 +85,17 @@ const cliName = release?.cli?.name ?? 'c2f-<version>-macos-universal.zip';
     }
   </section>
 
-  <section class="step" aria-labelledby="first-title">
+  <section class="step" data-reveal aria-labelledby="ios-title">
+    <h2 id="ios-title" class="h2">{s.iosTitle}</h2>
+    <p class="lead">{s.iosLead}</p>
+    <PhoneShots lang={lang} />
+    <p class="dim">{s.iosNote}</p>
+    <p>
+      <a class="btn btn-primary" href={appStore}>{s.iosButton}</a>
+    </p>
+  </section>
+
+  <section class="step" data-reveal aria-labelledby="first-title">
     <h2 id="first-title" class="h2">{s.firstTitle}</h2>
     <p class="lead">{s.firstLead}</p>
     <ol class="steps">
@@ -92,7 +103,7 @@ const cliName = release?.cli?.name ?? 'c2f-<version>-macos-universal.zip';
     </ol>
   </section>
 
-  <section class="step" aria-labelledby="mcp-title">
+  <section class="step" data-reveal aria-labelledby="mcp-title">
     <h2 id="mcp-title" class="h2">{s.mcpTitle}</h2>
     <p class="lead">{s.mcpLead}</p>
     <ol class="steps">
@@ -110,7 +121,7 @@ mkdir -p ~/.local/bin && mv c2f-cli/c2f ~/.local/bin/`}</code></pre>
     <p><a href={`${repo}#ai-agents-mcp`}>{s.mcpMore} →</a></p>
   </section>
 
-  <section class="step" aria-labelledby="source-title">
+  <section class="step" data-reveal aria-labelledby="source-title">
     <h2 id="source-title" class="h2">{s.sourceTitle}</h2>
     <p class="lead">{s.sourceLead}</p>
     <pre class="term"><code>{`git clone https://github.com/C2-POLY/code2form.git
