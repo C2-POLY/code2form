@@ -1,0 +1,51 @@
+---
+// Three screens of the iPhone app, drawn from apps/ios/AppStore/raw/.
+import { type Lang, t, asset } from '../i18n';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const alts = t(lang).ios.alts;
+const shots = ['winder', 'gears', 'nightlight'] as const;
+---
+
+<ul class="phones" data-reveal-stagger>
+  {
+    shots.map((key, i) => (
+      <li>
+        <img
+          data-parallax={i === 1 ? '18' : undefined}
+          src={asset(`images/ios-${key}.webp`)}
+          width="600"
+          height="1304"
+          alt={alts[key]}
+          loading="lazy"
+          decoding="async"
+        />
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .phones {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(10px, 2vw, 20px);
+    max-width: 720px;
+  }
+
+  .phones img {
+    display: block;
+    width: 100%;
+    height: auto;
+    /* The screen's own rounded corners, at any width. */
+    border-radius: 12% / 5.5%;
+    border: 1px solid var(--border);
+  }
+</style>

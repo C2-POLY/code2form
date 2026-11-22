@@ -21,3 +21,6 @@ export function asset(path: string): string {
 }
 
 export const repo = 'https://github.com/C2-POLY/code2form';
+
+/** The iPhone and iPad app on the App Store; Apple opens it in the visitor's own storefront. */
+export const appStore = 'https://apps.apple.com/app/id6828989392';

@@ -359,6 +359,11 @@ kbd {
   color: var(--number);
 }
 
+/* Hidden until motion.ts animates it in (see Base.astro). */
+html.motion:not(.motion-ready) [data-intro] > * {
+  visibility: hidden;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

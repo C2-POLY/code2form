@@ -5,10 +5,10 @@ const fr: Strings = {
   meta: {
     title: 'Code2Form : la conception 3D paramétrique en code, pour votre imprimante 3D',
     description:
-      'Libre et gratuit. Décrivez une pièce en quelques lignes, voyez-la se calculer pendant que vous tapez, vérifiez-la et exportez-la en STL ou 3MF pour votre trancheur. Ouvre vos fichiers .scad tels quels.',
+      'Libre et gratuit. Décrivez une pièce en quelques lignes, voyez-la se calculer pendant que vous tapez, vérifiez-la et exportez-la en STL ou 3MF pour votre trancheur. Ouvre vos fichiers .scad tels quels. Sur Mac, et sur iPhone et iPad depuis l’App Store.',
     downloadTitle: 'Télécharger Code2Form',
     downloadDescription:
-      'Téléchargez Code2Form pour macOS (Apple silicon et Intel), installez son serveur MCP pour Claude Code, ou compilez-le depuis les sources sous Windows et Linux.',
+      'Téléchargez Code2Form pour macOS (Apple silicon et Intel), installez-le sur iPhone et iPad depuis l’App Store, installez son serveur MCP pour Claude Code, ou compilez-le depuis les sources sous Windows et Linux.',
     privacyTitle: 'Confidentialité : Code2Form',
     privacyDescription:
       'Code2Form ne collecte aucune donnée personnelle : ni compte, ni statistiques, ni pistage. Ce que font de vos fichiers les apps iPhone, iPad et Mac, et ce site.',
@@ -34,6 +34,7 @@ const fr: Strings = {
     lead:
       'Code2Form calcule le modèle pendant que vous tapez, pèse la pièce, vérifie ses engrenages et son câblage avant la première couche, puis l’exporte en STL et 3MF pour votre trancheur. Vos fichiers .scad s’ouvrent tels quels.',
     downloadMac: 'Télécharger pour macOS',
+    appStore: 'Sur iPhone et iPad',
     printExample: 'Imprimer un exemple',
     shotAlt:
       'La fenêtre de Code2Form : une veilleuse dans la vue 3D, et la discussion avec l’agent qui flotte par-dessus, avec la ligne de code qu’il a modifiée',
@@ -136,10 +137,21 @@ const fr: Strings = {
       },
     },
   },
+  ios: {
+    title: 'Dans votre poche',
+    text:
+      'L’app iPhone et iPad ouvre vos designs depuis Fichiers ou iCloud Drive, les calcule sur l’appareil avec le même moteur que sur Mac, et donne leurs cotes au dixième de millimètre. Avec le LiDAR, elle scanne un objet en STL.',
+    alts: {
+      winder: 'Le remontoir de montre dans l’app iPhone, 112,0 × 154,3 × 161,8 mm et 16 042 triangles',
+      gears: 'Trois engrenages rouge, jaune et vert dans l’app iPhone, 94,0 × 80,3 × 13,0 mm',
+      nightlight: 'La veilleuse dans l’app iPhone, 80,0 × 80,0 × 56,0 mm',
+    },
+  },
   cta: {
     title: 'Libre et gratuit',
-    text: 'MIT ou Apache-2.0 · tous les Mac, Apple silicon et Intel · Windows et Linux depuis les sources',
+    text: 'MIT ou Apache-2.0 · tous les Mac, Apple silicon et Intel · iPhone et iPad · Windows et Linux depuis les sources',
     button: 'Télécharger',
+    appStore: 'App Store',
     yourTurn: 'À vous.',
   },
   footer: {
@@ -151,7 +163,7 @@ const fr: Strings = {
   },
   download: {
     title: 'Télécharger Code2Form',
-    lead: 'Une seule app pour tous les Mac, Apple silicon et Intel, sous macOS 11 ou plus récent. Libre et gratuite.',
+    lead: 'Une seule app pour tous les Mac, Apple silicon et Intel, sous macOS 11 ou plus récent, et une pour iPhone et iPad sur l’App Store. Libres et gratuites.',
     released: 'Publiée le',
     latest: 'Dernière version',
     offline:
@@ -165,6 +177,11 @@ const fr: Strings = {
     sums: 'Sommes de contrôle',
     sumsNote: 'pour vérifier un téléchargement avec shasum -a 256',
     sha: 'SHA-256',
+    iosTitle: 'Sur iPhone et iPad',
+    iosLead:
+      'Ouvrez vos designs .c2f et .scad depuis Fichiers ou iCloud Drive, faites-les tourner en 3D et lisez leurs cotes au dixième de millimètre avant d’imprimer. Le modèle est calculé sur l’appareil, avec le même moteur que l’app Mac. Sur un iPhone ou un iPad avec LiDAR, scannez un objet : il est enregistré en STL au millimètre, prêt pour le studio sur Mac.',
+    iosNote: 'iOS et iPadOS 18 ou plus récent. Gratuite, sans compte, sans publicité ni pistage.',
+    iosButton: 'Télécharger dans l’App Store',
     firstTitle: 'Le premier lancement sur Mac',
     firstLead:
       'Code2Form est signé et notarié par Apple : macOS le vérifie et l’ouvre comme n’importe quelle app.',

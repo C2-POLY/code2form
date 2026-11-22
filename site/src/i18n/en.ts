@@ -3,10 +3,10 @@ const en = {
   meta: {
     title: 'Code2Form: parametric 3D design as code, for your 3D printer',
     description:
-      'Free and open source. Write a part in a few lines, watch it render as you type, check it and export STL or 3MF for your slicer. Opens your .scad files as they are.',
+      'Free and open source. Write a part in a few lines, watch it render as you type, check it and export STL or 3MF for your slicer. Opens your .scad files as they are. On the Mac, and on iPhone and iPad from the App Store.',
     downloadTitle: 'Download Code2Form',
     downloadDescription:
-      'Download Code2Form for macOS (Apple silicon and Intel), install its MCP server for Claude Code, or build it from source on Windows and Linux.',
+      'Download Code2Form for macOS (Apple silicon and Intel), get it on iPhone and iPad from the App Store, install its MCP server for Claude Code, or build it from source on Windows and Linux.',
     privacyTitle: 'Privacy: Code2Form',
     privacyDescription:
       'Code2Form collects no personal data: no account, no analytics, no tracking. What the iPhone, iPad and Mac apps and this website do with your files.',
@@ -32,6 +32,7 @@ const en = {
     lead:
       'Code2Form renders as you type, weighs the part and checks its gears and wiring before the first layer, then exports STL and 3MF for your slicer. Your .scad files open as they are.',
     downloadMac: 'Download for macOS',
+    appStore: 'On iPhone and iPad',
     printExample: 'Print an example',
     shotAlt:
       'The Code2Form window: a night light in the 3D view, and the agent’s chat floating over it, showing the line of code it changed',
@@ -134,10 +135,21 @@ const en = {
       },
     },
   },
+  ios: {
+    title: 'In your pocket',
+    text:
+      'The iPhone and iPad app opens your designs from Files or iCloud Drive, computes them on the device with the same engine as the Mac, and gives their size to a tenth of a millimetre. With LiDAR, it scans an object into an STL.',
+    alts: {
+      winder: 'The watch winder in the iPhone app, 112.0 × 154.3 × 161.8 mm and 16 042 triangles',
+      gears: 'Three gears in red, yellow and green in the iPhone app, 94.0 × 80.3 × 13.0 mm',
+      nightlight: 'The night light in the iPhone app, 80.0 × 80.0 × 56.0 mm',
+    },
+  },
   cta: {
     title: 'Free and open source',
-    text: 'MIT or Apache-2.0 · every Mac, Apple silicon and Intel · Windows and Linux from source',
+    text: 'MIT or Apache-2.0 · every Mac, Apple silicon and Intel · iPhone and iPad · Windows and Linux from source',
     button: 'Download',
+    appStore: 'App Store',
     yourTurn: 'Your turn.',
   },
   footer: {
@@ -149,7 +161,7 @@ const en = {
   },
   download: {
     title: 'Download Code2Form',
-    lead: 'One app for every Mac, Apple silicon and Intel, on macOS 11 or later. Free and open source.',
+    lead: 'One app for every Mac, Apple silicon and Intel, on macOS 11 or later, and one for iPhone and iPad on the App Store. Free and open source.',
     released: 'Released',
     latest: 'Latest release',
     offline:
@@ -163,6 +175,11 @@ const en = {
     sums: 'Checksums',
     sumsNote: 'to check a download with shasum -a 256',
     sha: 'SHA-256',
+    iosTitle: 'On iPhone and iPad',
+    iosLead:
+      'Open your .c2f and .scad designs from Files or iCloud Drive, spin them in 3D and read their sizes to a tenth of a millimetre before you print. The model is computed on the device, with the same engine as the Mac app. On an iPhone or iPad with LiDAR, scan an object: it is saved as an STL in millimetres, ready for the studio on the Mac.',
+    iosNote: 'iOS and iPadOS 18 or later. Free, with no account, no ads and no tracking.',
+    iosButton: 'Download on the App Store',
     firstTitle: 'The first launch on a Mac',
     firstLead:
       'Code2Form is signed and notarized by Apple: macOS checks it and opens it like any other app.',
