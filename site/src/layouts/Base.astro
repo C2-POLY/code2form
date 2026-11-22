@@ -61,6 +61,14 @@ const alternates = (['en', 'fr'] as Lang[]).map((l) => ({ lang: l, href: new URL
       (function () {
         var d = document.documentElement;
         d.classList.add('js');
+        // The intro waits for motion.ts to animate it in, or 2.5 s if it
+        // never runs.
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          d.classList.add('motion');
+          setTimeout(function () {
+            if (!d.classList.contains('motion-ready')) d.classList.remove('motion');
+          }, 2500);
+        }
         try {
           var t = localStorage.getItem('c2f-theme');
           if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t);
@@ -76,5 +84,9 @@ const alternates = (['en', 'fr'] as Lang[]).map((l) => ({ lang: l, href: new URL
       <slot />
     </main>
     <Footer lang={lang} page={page} release={release} />
+    <script>
+      import { startMotion } from '../scripts/motion';
+      startMotion();
+    </script>
   </body>
 </html>
